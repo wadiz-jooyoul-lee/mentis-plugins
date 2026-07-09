@@ -1,0 +1,22 @@
+{
+  "name": "work-dobby",
+  "owner": {
+    "name": "이주열"
+  },
+  "metadata": {
+    "description": "이슈 생명주기 + 멀티 에이전트 오케스트레이션(work-dobby) 스킬 마켓플레이스",
+    "version": "1.0.0",
+    "pluginRoot": "./plugins"
+  },
+  "plugins": [
+    {
+      "name": "work-dobby",
+      "source": "./plugins/work-dobby",
+      "description": "이슈 착수·테스트·종료 + 멀티 에이전트 병렬 구현(work-dobby) 스킬 모음",
+      "version": "0.1.0",
+      "author": { "name": "이주열" },
+      "category": "workflow",
+      "tags": ["issue", "multi-agent", "orchestration", "work-dobby", "jira"]
+    }
+  ]
+}
