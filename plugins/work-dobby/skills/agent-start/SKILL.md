@@ -106,7 +106,7 @@ $DOBBY_META/.agent-start/{에픽키}/
 ├── reviews/
 │   └── round-{n}/
 │       └── {에이전트슬러그}.md # 라운드별 리뷰 피드백
-└── agent-logs.json            # {슬러그}→에이전트 대화 로그 경로(work-dobby가 수집)
+└── agent-logs.json            # {슬러그}→에이전트 대화 로그 경로(i-order-you-to-develop가 수집)
 ```
 
 - 계약 파일은 **불변 컨트랙트**, `status.md`는 **진행 상태**, `orchestration.md`는 **메인의 관제탑**으로 역할을 분리한다.
