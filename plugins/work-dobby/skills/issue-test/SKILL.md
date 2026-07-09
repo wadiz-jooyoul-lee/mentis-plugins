@@ -1,6 +1,6 @@
 ---
 name: issue-test
-description: 구현한 내용이 실제 환경에서 정상 동작하는지 chrome-devtools로 검증하는 스킬. issue-test {브랜치명?} 형태로 **issue-start가 미리 만든 테스트 목록이 있으면 재사용하고 없으면** 현재 브랜치(또는 입력한 브랜치)의 변경 내용을 분석해 어떤 페이지에서 무엇을 테스트할지 도출한 **테스트 목록(test plan)** 을 ~/work/subtree/.issue-test/{이슈키}/test-plan/ 에 독립 파일로 저장하고, 국내/글로벌 국가 전환·로그인을 포함해 테스트한 뒤 **결과**를 ~/work/subtree/.issue-test/{이슈키}/results/{시각}/ 에 시간별로 덮어쓰지 않게 저장하고 화면에도 출력한다. 사용법 /issue-test 또는 /issue-test feature/FE-1234.
+description: 구현한 내용이 실제 환경에서 정상 동작하는지 chrome-devtools로 검증하는 스킬. issue-test {브랜치명?} 형태로 **issue-start가 미리 만든 테스트 목록이 있으면 재사용하고 없으면** 현재 브랜치(또는 입력한 브랜치)의 변경 내용을 분석해 어떤 페이지에서 무엇을 테스트할지 도출한 **테스트 목록(test plan)** 을 $DOBBY_WORKSPACE/meta/.issue-test/{이슈키}/test-plan/ 에 독립 파일로 저장하고, 국내/글로벌 국가 전환·로그인을 포함해 테스트한 뒤 **결과**를 $DOBBY_WORKSPACE/meta/.issue-test/{이슈키}/results/{시각}/ 에 시간별로 덮어쓰지 않게 저장하고 화면에도 출력한다. 사용법 /issue-test 또는 /issue-test feature/FE-1234.
 ---
 
 # issue-test
@@ -9,9 +9,29 @@ description: 구현한 내용이 실제 환경에서 정상 동작하는지 chro
 
 > chrome-devtools: 브라우저를 열어 페이지 이동·클릭·입력·스크린샷·네트워크 확인을 자동으로 하는 도구(MCP). `mcp__chrome-devtools__*` 도구들을 사용한다.
 
+## 설정 (첫 실행 시 확인)
+
+작업을 시작하기 전에 `~/.config/work-dobby/config.env`를 읽어 환경 변수를 불러온다(`[ -f ~/.config/work-dobby/config.env ] && source ~/.config/work-dobby/config.env`). **이미 값이 있는 변수는 묻지 않는다.** 빠진 변수만 아래 규칙으로 채운다.
+
+- **기본값이 있는 변수**: 현재 기본값을 보여주고 그대로 쓸지 바꿀지 물어본다.
+- **선택 변수**(생략 가능): 생략 시 어떤 영향이 있는지 설명하고 생략을 허용한다.
+- 사용자가 정한 값은 설정 파일에 저장하고(`mkdir -p ~/.config/work-dobby` 후 기록) `export` 한다.
+
+| 변수 | 뜻 | 기본값 |
+|------|-----|--------|
+| `JIRA_BASE_URL` | Jira 사이트 주소 | `https://wadiz.atlassian.net` |
+| `DOBBY_WORKSPACE` | 작업 루트(하위에 `subtree/`·`meta/`) | `$HOME/work/dobby-workspace` |
+| `DOBBY_DEFAULT_BASE` | 기본 베이스 브랜치 | `master` |
+| `DOBBY_REPOS_ROOT` | 원본 소스 저장소들이 있는 루트 | `$HOME/work` |
+| `DOBBY_ENV_MAP` | 테스트 환경→호스트 매핑 | `dev=dev.wadiz.io,rc=rc.wadiz.kr,rc2=rc2.wadiz.kr,rc4=rc4.wadiz.io` |
+| `DOBBY_DOCS_ROOT` | 참고 문서 루트(선택) | (없음 → 참고 문서 없이 진행) |
+| `TEST_LOGIN_ID` / `TEST_LOGIN_PW` | 테스트 계정(선택) | (없음 → 로그인 필요 테스트는 건너뜀) |
+
+워크트리(작업 폴더)는 `$DOBBY_WORKSPACE/subtree/`, 메타 파일은 `$DOBBY_WORKSPACE/meta/`에 둔다.
+
 ## 산출물 폴더 구조 (중요)
 
-이슈별 루트: `~/work/subtree/.issue-test/{이슈키}/`
+이슈별 루트: `$DOBBY_WORKSPACE/meta/.issue-test/{이슈키}/`
 
 - `status.md` — **진행 상태 파일**. 이슈 루트에 하나. 현재/최근 실행의 진행 상태·진행률·성공/실패/skip·발생 이슈·몇 회째 실행인지 등 메타를 기록한다. 테스트 진행 중 실시간으로 갱신한다(아래 "진행 상태 파일" 참조).
 - `test-plan/{이슈키}-test-plan.md` — **테스트 목록(test plan)**. 분석 단계에서 생성. **다른 에이전트가 이 파일만 보고 그대로 테스트를 재현할 수 있도록 self-contained** 해야 한다(아래 "테스트 목록의 독립성" 참조). 재실행 시 최신 분석으로 덮어쓴다(목록은 diff에서 결정되므로 덮어쓰기 무방).
@@ -36,7 +56,7 @@ description: 구현한 내용이 실제 환경에서 정상 동작하는지 chro
 
 **먼저 테스트 목록이 이미 있는지 확인한다.** `/issue-start`가 분석·수정 설계를 바탕으로 목록을 미리 만들어 두는 경우가 많다.
 
-- 경로: `~/work/subtree/.issue-test/{이슈키}/test-plan/{이슈키}-test-plan.md`
+- 경로: `$DOBBY_WORKSPACE/meta/.issue-test/{이슈키}/test-plan/{이슈키}-test-plan.md`
 - **있으면(대개 `작성 출처: issue-start`)**: 그것을 **기본으로 재사용**한다. 처음부터 다시 만들지 않는다.
   - 실제 변경(diff)과 대조해 시나리오가 최신인지 확인하고, 빠졌거나 달라진 부분만 보강한다.
   - issue-start가 `미정`으로 남긴 **테스트 환경(env·base URL)** 은 아래 3단계에서 확정한 값으로 채운다.
@@ -44,16 +64,16 @@ description: 구현한 내용이 실제 환경에서 정상 동작하는지 chro
 
 #### 목록이 없을 때: 변경 내용 분석으로 생성
 
-- 베이스(보통 `origin/master`) 대비 변경 파일을 확인한다: `git diff --name-only origin/master...{branch}`
+- 베이스(보통 `origin/$DOBBY_DEFAULT_BASE`) 대비 변경 파일을 확인한다: `git diff --name-only origin/$DOBBY_DEFAULT_BASE...{branch}`
 - 변경 파일을 **사용자에게 보이는 페이지/기능**으로 매핑한다.
   - `static/entries/{entry}/...` → 해당 엔트리가 로드되는 JSP 페이지 URL
   - `apps/global/src/**/routes/*` → 글로벌 라우트 경로, `**/korea-routes/*` → 국내(/web/...) 경로
   - `packages/*` → 이 패키지를 소비하는 페이지(역추적)
-  - `com.wadiz.web`(JSP/컨트롤러/urlrewrite) → 매핑되는 URL과 redirect 동작
+  - `{repo2}`(JSP/컨트롤러/urlrewrite 등 레거시) → 매핑되는 URL과 redirect 동작
 - 각 페이지별로 **구체적 테스트 시나리오**(무엇을 확인해야 정상인지)를 목록화한다. 예: "URL 진입 시 302로 X로 이동", "버튼 클릭 시 Y 노출", "삭제한 페이지가 404/정상 처리".
 - 추측하지 말고 코드·라우트·매핑을 직접 확인해 시나리오를 만든다.
 - 도출한 시나리오를 **테스트 목록 파일**로 저장한다.
-  - 경로: `~/work/subtree/.issue-test/{이슈키}/test-plan/` (없으면 `mkdir -p`)
+  - 경로: `$DOBBY_WORKSPACE/meta/.issue-test/{이슈키}/test-plan/` (없으면 `mkdir -p`)
   - 파일명: `{이슈키}-test-plan.md`. 메타에 `작성 출처: issue-test`와 작성 일시를 기록한다.
   - 재실행 시 최신 분석으로 덮어쓴다(목록은 diff에서 결정되므로 덮어쓰기 무방).
 
@@ -66,21 +86,23 @@ description: 구현한 내용이 실제 환경에서 정상 동작하는지 chro
 - 로그인 필요 여부와 절차 요약(계정은 자격증명 섹션 참조, 순서 명시)
 - 국가 전환 필요 여부(국내=한국 / 글로벌=Global) 및 전환 방법
 - 시나리오별 항목(번호 부여): **대상 페이지/URL · 사전조건 · 조작 단계 · 기대 결과 · 검증 방법**(스냅샷/네트워크/스크린샷 중 무엇으로 확인하는지)
-- **테스트 데이터**: 시나리오가 특정 데이터(프로젝트 ID·유저·주문 상태 등)를 요구하면 실재하는 값을 적고, **다시 뽑을 수 있도록 사용한 SQL도 함께** 남긴다(`dev-db-query`로 조회). 값이 없으면 issue-test 실행 시 `dev-db-query`로 찾아 채운다.
+- **테스트 데이터**: 시나리오가 특정 데이터(프로젝트 ID·유저·주문 상태 등)를 요구하면 실재하는 값을 적고, **다시 뽑을 수 있도록 사용한 SQL도 함께** 남긴다(DB 조회 도구가 있으면 그것으로 조회). 값이 없으면 issue-test 실행 시 DB 조회 도구로 찾아 채우고, 도구가 없으면 사용자에게 묻는다.
 - 각 시나리오는 결과값을 비워 두어(기대만 기술) 실행 단계에서 실제값을 채우도록 한다. **결과는 이 파일에 적지 않는다**(결과는 results 폴더).
 
 ### 3. 테스트 환경 결정 (중요)
 
 - 테스트는 브랜치가 **머지된 환경**에서 한다. GitHub에서 이 브랜치의 PR이 **어느 브랜치로 머지됐는지** 확인한다.
   - `gh pr list --head {branch} --state all --json number,baseRefName,mergedAt,state` 등으로 확인한다.
-  - 머지 대상 브랜치(base)로 환경을 판단한다. 예: `dev`→dev, `rc`/`rc2`/`rc3`→각 RC, `stage`→stage, `master`→live.
-- 환경 → 접속 URL 매핑으로 테스트 base URL을 정한다. **매핑이 불확실하면 사용자에게 물어본다.**
+  - 머지 대상 브랜치(base)로 **대상 환경(env)**을 판단한다.
+- 판단한 env를 **`DOBBY_ENV_MAP`(테스트 환경→호스트 매핑)** 으로 접속 호스트에 대응시켜 테스트 base URL을 정한다.
+  - 기본 매핑: `dev`=dev.wadiz.io, `rc`=rc.wadiz.kr, `rc2`=rc2.wadiz.kr, `rc4`=rc4.wadiz.io.
+  - **매핑에 없는 환경이면 추측하지 않는다.** 사용자에게 "이 환경은 직접 테스트가 필요합니다"라고 알리고 사용자에게 테스트를 부탁한다.
 - PR이 아직 없거나 머지되지 않았거나 환경 판단이 어려우면 **중단하고 사용자에게 어느 환경에서 테스트할지** 물어본다.
 
 ### 4. 국내/글로벌 판별 및 국가 전환
 
 - 변경 내용이 **국내**인지 **글로벌**인지 2단계에서 판별한다.
-  - `static/*`, `com.wadiz.web`(JSP) → 국내(레거시)
+  - `static/*`, `{repo2}`(JSP 등 레거시) → 국내(레거시)
   - `apps/global`의 `korea-routes/`(/web/...) → 국내, `routes/` → 글로벌
 - 두 영역 모두 해당하면 **각각** 테스트한다.
 - 페이지 진입 후 헤더(GNB)의 **국가 변경 버튼**을 눌러 테스트 대상 국가(국내=한국, 글로벌=Global)로 전환한 뒤 테스트한다.
@@ -89,9 +111,8 @@ description: 구현한 내용이 실제 환경에서 정상 동작하는지 chro
 ### 5. 로그인 (필요 시)
 
 - 로그인이 필요한 페이지는 로그인 후 테스트한다.
-- 자격증명(환경 변수/기본값):
-  - ID: `jooyoul.lee@wadiz.kr`
-  - PW: `test1234!`
+- 자격증명은 환경 변수 `TEST_LOGIN_ID` / `TEST_LOGIN_PW`에서 가져온다.
+  - **둘 중 하나라도 없으면** 로그인이 필요한 시나리오는 건너뛰고(SKIP), 사유("테스트 계정 미설정 — 사용자 확인 필요")를 남긴다. 로그인 없이 볼 수 있는 것만 테스트한다.
 - **로그인 진입은 URL 직접 접근이 아니라 UI의 로그인 버튼을 통해** 한다.
 - **로그인 입력 순서(중요, 동시 입력 금지)**:
   1. 아이디(이메일) 입력
@@ -106,8 +127,8 @@ description: 구현한 내용이 실제 환경에서 정상 동작하는지 chro
 
 테스트 조작을 시작하기 **전에** 저장 위치와 상태 파일을 먼저 만든다. 이걸 나중으로 미루지 않는다 — 뒤로 미루면 시나리오별 갱신이 통째로 누락된다.
 
-1. **결과 시각 폴더 생성**: 실행 시각을 `date '+%Y%m%d-%H%M%S'`로 얻어 `~/work/subtree/.issue-test/{이슈키}/results/{YYYYMMDD-HHMMSS}/`를 `mkdir -p`. (기존 폴더는 덮지 않는다.) 이 폴더에 스크린샷·result md를 저장한다.
-2. **진행 상태 파일 초기화**: `~/work/subtree/.issue-test/{이슈키}/status.md`를 생성/갱신. 회차(run #)=**기존 `results/` 시각 폴더 수 + 1**, 상태 `테스트중`, 진행률 `0/N`(N=시나리오 수), 결과 폴더 경로 기록. 규격은 아래 "진행 상태 파일".
+1. **결과 시각 폴더 생성**: 실행 시각을 `date '+%Y%m%d-%H%M%S'`로 얻어 `$DOBBY_WORKSPACE/meta/.issue-test/{이슈키}/results/{YYYYMMDD-HHMMSS}/`를 `mkdir -p`. (기존 폴더는 덮지 않는다.) 이 폴더에 스크린샷·result md를 저장한다.
+2. **진행 상태 파일 초기화**: `$DOBBY_WORKSPACE/meta/.issue-test/{이슈키}/status.md`를 생성/갱신. 회차(run #)=**기존 `results/` 시각 폴더 수 + 1**, 상태 `테스트중`, 진행률 `0/N`(N=시나리오 수), 결과 폴더 경로 기록. 규격은 아래 "진행 상태 파일".
 3. **결과 md 골격 생성**: 위 폴더에 `{이슈키}-test-result.md`를 만들고, 시나리오 표의 **행을 미리 다 깔아둔다(결과·판정 칸은 빈칸)**. 아래 "결과 md 구조" 참고.
 
 #### 6-1. 시나리오 루프 (각 시나리오마다 아래 4스텝을 한 세트로)
@@ -123,7 +144,7 @@ description: 구현한 내용이 실제 환경에서 정상 동작하는지 chro
 
 ### 7. 로그아웃 (필요 시)
 
-- 국가 전환·계정 전환 등으로 로그아웃이 필요하면, 국내 마이와디즈 `/web/mywadiz/supporter` 페이지 하단의 **로그아웃 버튼**으로 로그아웃한다.
+- 국가 전환·계정 전환 등으로 로그아웃이 필요하면, **대상 서비스의 로그아웃 UI**(예: 마이페이지 하단 로그아웃 버튼)로 로그아웃한다.
 
 ### 8. 결과 마감 (md 완성 + 화면 출력)
 
@@ -132,7 +153,7 @@ description: 구현한 내용이 실제 환경에서 정상 동작하는지 chro
 - **결과 md 완성**: 6-1에서 채운 시나리오 표 위에 "한눈 요약 → 실패 상세"를 얹어 아래 "결과 md 구조"를 완성한다. **어떤 테스트 목록으로 실행했는지**(test-plan 경로+작성 일시)를 명시해 목록↔결과가 서로를 참조하게 한다.
 - **진행 상태 파일 마감**: `status.md`의 상태를 `완료`(실패 존재 시 `완료(이슈 있음)`, 중단 시 `중단`)로 바꾸고, 최종 진행률·집계·발생 이슈 요약과 결과 폴더 경로를 확정한다. 실행 이력 표에 이번 회차 행을 추가한다.
 - **실패 0 · 중단 0이면 issue-start 메타 상태를 "해결됨"으로 갱신**한다. skip(⏭️, 해당성 낮음 등)이 있어도 실패·중단만 없으면 해결됨으로 본다. (Jira 등 실제 이슈 상태는 건드리지 않는다 — **메타 파일만** 갱신)
-  - 대상: `~/work/subtree/.issue-start/{이슈키}/status.md` (있을 때만. 없으면 건너뛴다 — issue-test 단독 실행일 수 있음).
+  - 대상: `$DOBBY_WORKSPACE/meta/.issue-start/{이슈키}/status.md` (있을 때만. 없으면 건너뛴다 — issue-test 단독 실행일 수 있음).
   - 그 파일의 상태를 `해결됨`으로 바꾸고, 해결 근거로 **이번 결과 폴더 경로**(`.issue-test/{이슈키}/results/{시각}/`)와 집계(성공/실패/skip), 갱신 일시를 남긴다.
   - 하나라도 FAIL 또는 중단이 있으면 갱신하지 않는다(해결됨으로 올리지 않는다).
 - 같은 내용을 **화면(응답)에도 요약 출력**한다(맨 위 한눈 요약 + 실패 항목 우선).
@@ -180,7 +201,7 @@ description: 구현한 내용이 실제 환경에서 정상 동작하는지 chro
 
 ## 진행 상태 파일 (status.md)
 
-- 경로: `~/work/subtree/.issue-test/{이슈키}/status.md` (이슈 루트에 하나)
+- 경로: `$DOBBY_WORKSPACE/meta/.issue-test/{이슈키}/status.md` (이슈 루트에 하나)
 - 목적: 사용자·다른 에이전트가 **파일 하나로 현재 진행 상황을 즉시 파악**. 실행 시작 시 초기화하고, 시나리오 완료마다 갱신하며, 종료 시 마감한다. 중단되어도 마지막 상태가 남는다.
 - 회차(run #)는 실행 시작 시 정한다: **기존 `results/` 하위 시각 폴더 수 + 1**.
 - 최근 실행 상태를 위에, 과거 실행 이력을 표로 아래에 둔다.
@@ -213,9 +234,8 @@ description: 구현한 내용이 실제 환경에서 정상 동작하는지 chro
 
 ## 자격증명·환경
 
-- 로그인 계정: ID `jooyoul.lee@wadiz.kr` / PW `test1234!`
-  - 가능하면 환경 변수(`WADIZ_TEST_ID`, `WADIZ_TEST_PW`)로 관리하고, 없으면 위 기본값을 쓴다.
-- 로그아웃: `/web/mywadiz/supporter` 하단 로그아웃 버튼.
+- 로그인 계정: 환경 변수 `TEST_LOGIN_ID` / `TEST_LOGIN_PW`. **미설정이면** 로그인 필요 시나리오는 SKIP(사유: 테스트 계정 미설정 — 사용자 확인 필요)로 남기고, 로그인 없이 볼 수 있는 것만 테스트한다.
+- 로그아웃: 대상 서비스의 로그아웃 UI(마이페이지 하단 로그아웃 버튼 등).
 
 ## 주의
 

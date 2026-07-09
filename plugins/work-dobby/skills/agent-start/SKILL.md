@@ -1,6 +1,6 @@
 ---
 name: agent-start
-description: issue-start를 확장한 멀티 에이전트 셋업+분석 스킬. Jira 이슈(번호 또는 URL)와 커스텀 베이스 브랜치(base={브랜치})를 받아 이슈 조회·진행 중 전환 후, 지정한 베이스 브랜치 위에 전용 워크트리·이슈 브랜치를 생성하고 코드 위치까지 분석해 status.md·테스트 목록을 남긴다. 베이스 미지정 시 issue-start 규칙(master, 클라우드는 cloud_live)을 따른다. 여러 하위이슈를 하나의 상위(에픽) 브랜치 위에 올려 서브 에이전트로 병렬/순차 구현할 때 각 하위이슈의 착수·분석 단계를 담당하며, 상위 에픽 단위 오케스트레이션 메타(계약·보드)의 규격도 이 문서에 정의한다. 사용법 /agent-start {이슈키|URL} base={브랜치}.
+description: issue-start를 확장한 멀티 에이전트 셋업+분석 스킬. Jira 이슈(번호 또는 URL)와 커스텀 베이스 브랜치(base={브랜치})를 받아 이슈 조회·진행 중 전환 후, 지정한 베이스 브랜치 위에 전용 워크트리·이슈 브랜치를 생성하고 코드 위치까지 분석해 status.md·테스트 목록을 남긴다. 베이스 미지정 시 설정된 기본 베이스 브랜치(DOBBY_DEFAULT_BASE)를 따른다. 여러 하위이슈를 하나의 상위(에픽) 브랜치 위에 올려 서브 에이전트로 병렬/순차 구현할 때 각 하위이슈의 착수·분석 단계를 담당하며, 상위 에픽 단위 오케스트레이션 메타(계약·보드)의 규격도 이 문서에 정의한다. 사용법 /agent-start {이슈키|URL} base={브랜치}.
 ---
 
 # agent-start
@@ -11,11 +11,31 @@ description: issue-start를 확장한 멀티 에이전트 셋업+분석 스킬. 
 
 `issue-start`와의 차이는 **① 커스텀 베이스 브랜치 지원**, **② 상위 에픽 단위 오케스트레이션 메타 규격 정의**뿐이다. 나머지 절차(Jira 전환·분석·테스트 목록)는 `issue-start`와 동일하다.
 
+## 설정 (첫 실행 시 확인)
+
+작업을 시작하기 전에 `~/.config/work-dobby/config.env`를 읽어 환경 변수를 불러온다(`[ -f ~/.config/work-dobby/config.env ] && source ~/.config/work-dobby/config.env`). **이미 값이 있는 변수는 묻지 않는다.** 빠진 변수만 아래 규칙으로 채운다.
+
+- **기본값이 있는 변수**: 현재 기본값을 보여주고 그대로 쓸지 바꿀지 물어본다.
+- **선택 변수**(생략 가능): 생략 시 어떤 영향이 있는지 설명하고 생략을 허용한다.
+- 사용자가 정한 값은 설정 파일에 저장하고(`mkdir -p ~/.config/work-dobby` 후 기록) `export` 한다.
+
+| 변수 | 뜻 | 기본값 |
+|------|-----|--------|
+| `JIRA_BASE_URL` | Jira 사이트 주소 | `https://wadiz.atlassian.net` |
+| `DOBBY_WORKSPACE` | 작업 루트(하위에 `subtree/`·`meta/`) | `$HOME/work/dobby-workspace` |
+| `DOBBY_DEFAULT_BASE` | 기본 베이스 브랜치 | `master` |
+| `DOBBY_REPOS_ROOT` | 원본 소스 저장소들이 있는 루트 | `$HOME/work` |
+| `DOBBY_ENV_MAP` | 테스트 환경→호스트 매핑 | `dev=dev.wadiz.io,rc=rc.wadiz.kr,rc2=rc2.wadiz.kr,rc4=rc4.wadiz.io` |
+| `DOBBY_DOCS_ROOT` | 참고 문서 루트(선택) | (없음 → 참고 문서 없이 진행) |
+| `TEST_LOGIN_ID` / `TEST_LOGIN_PW` | 테스트 계정(선택) | (없음 → 로그인 필요 테스트는 건너뜀) |
+
+워크트리(작업 폴더)는 `$DOBBY_WORKSPACE/subtree/`, 메타 파일은 `$DOBBY_WORKSPACE/meta/`에 둔다.
+
 ## 입력
 
 - `args`: `{이슈키|URL} [base={브랜치}]`
-  - 이슈 키(`FE1-1187`) 또는 Jira URL(`https://wadiz.atlassian.net/browse/FE1-1187`). URL이면 `/browse/{KEY}`에서 키 추출. 없으면 물어본다.
-  - `base={브랜치}`: 워크트리를 만들 베이스 브랜치. 예: `base=feature/FE1-1186`. **미지정 시** issue-start 규칙(기본 `master`, wadiz.io·클라우드 이슈면 `cloud_live`).
+  - 이슈 키(`FE1-1187`) 또는 Jira URL(`$JIRA_BASE_URL/browse/FE1-1187`). URL이면 `/browse/{KEY}`에서 키 추출. 없으면 물어본다.
+  - `base={브랜치}`: 워크트리를 만들 베이스 브랜치. 예: `base=feature/FE1-1186`. **미지정 시** 기본 `$DOBBY_DEFAULT_BASE`(기본값 master).
 
 ## 절차
 
@@ -27,10 +47,10 @@ description: issue-start를 확장한 멀티 에이전트 셋업+분석 스킬. 
 
 ### 2. 베이스 브랜치 결정
 
-- **`base=` 인자가 있으면 그 값을 그대로 `{base}`로 쓴다.** 이 경우 issue-start의 master/cloud_live 판정은 건너뛴다.
+- **`base=` 인자가 있으면 그 값을 그대로 `{base}`로 쓴다.**
   - 어느 베이스로 잡았는지 사용자에게 밝힌다.
-- `base=` 인자가 없으면 issue-start 2단계 규칙을 따른다(기본 `master`, wadiz.io·클라우드 이슈면 `cloud_live`, 애매하면 사용자 확인).
-- `{base}`는 **로컬 브랜치**(예: `feature/FE1-1186`) 또는 **원격 참조**(예: `master` → `origin/master`)일 수 있다. 4단계에서 존재 여부로 갈라 처리한다.
+- `base=` 인자가 없으면 기본 베이스 `$DOBBY_DEFAULT_BASE`(기본값 master)를 쓴다. 애매하면 임의로 정하지 말고 사용자에게 확인한다.
+- `{base}`는 **로컬 브랜치**(예: `feature/FE1-1186`) 또는 **원격 참조**(예: `$DOBBY_DEFAULT_BASE` → `origin/$DOBBY_DEFAULT_BASE`)일 수 있다. 4단계에서 존재 여부로 갈라 처리한다.
 
 ### 3. 브랜치 prefix 결정 (이슈 타입)
 
@@ -38,23 +58,23 @@ description: issue-start를 확장한 멀티 에이전트 셋업+분석 스킬. 
 
 ### 4. 워크트리 + 이슈 브랜치 생성 (커스텀 베이스)
 
-- **소스 저장소 루트 결정**: `wadiz-frontend` → `~/work/wadiz-frontend`, `com.wadiz.web` → `~/work/com.wadiz.web`. 그 외는 `git rev-parse --show-toplevel`로 확인. 이후 모든 git 명령은 소스 루트에서(`cd {sourceRoot}`) 실행한다.
-- 워크트리는 `~/work/subtree/{repoName}-{이슈키}`에 만든다(없으면 `mkdir -p ~/work/subtree`).
+- **소스 저장소 루트 결정**: 소스 루트는 `$DOBBY_REPOS_ROOT/{repo}`(기본 `$HOME/work`)로 잡는다. 거기에 없으면 `git rev-parse --show-toplevel`로 확인한다. 이후 모든 git 명령은 소스 루트에서(`cd {sourceRoot}`) 실행한다.
+- 워크트리는 `$DOBBY_WORKSPACE/subtree/{repo}-{이슈키}`에 만든다(없으면 `mkdir -p $DOBBY_WORKSPACE/subtree`).
 - **중복 확인**: 소스 루트에서 `git worktree list`·`git branch --list {prefix}/{이슈키}`로 확인. 이미 있으면 `issue-start`의 "메타 backfill" 규칙을 그대로 적용한다(메타 있으면 사용자 확인 후 중단, 메타 없으면 기존 워크트리 재사용 + 분석/메타만 채움, fetch/worktree add는 건너뜀).
 - **베이스 준비 및 워크트리 생성** — `{base}`의 형태로 갈라 처리:
   - `{base}`가 **로컬 브랜치로 존재**하면(예: 방금 만든 `feature/FE1-1186`): 원격 최신화가 필요하면 안내만 하고, 로컬 브랜치에서 바로 만든다.
-    `git worktree add -b {prefix}/{이슈키} ~/work/subtree/{repoName}-{이슈키} {base}`
-  - `{base}`가 **원격 기준 브랜치**(master, cloud_live 등)면: `git fetch origin {base}` 후
-    `git worktree add -b {prefix}/{이슈키} ~/work/subtree/{repoName}-{이슈키} origin/{base}`
+    `git worktree add -b {prefix}/{이슈키} $DOBBY_WORKSPACE/subtree/{repo}-{이슈키} {base}`
+  - `{base}`가 **원격 기준 브랜치**(`$DOBBY_DEFAULT_BASE` 등)면: `git fetch origin {base}` 후
+    `git worktree add -b {prefix}/{이슈키} $DOBBY_WORKSPACE/subtree/{repo}-{이슈키} origin/{base}`
   - 로컬·원격 어디에도 `{base}`가 없으면 **중단하고 사용자에게 알린다**(베이스가 아직 안 만들어졌을 수 있음).
 - **의존성 안내**: 새 워크트리는 `node_modules`가 비어 있을 수 있다. 필요 시 `yarn install`을 안내만 하고 자동 실행하지 않는다.
 - 커밋·푸시는 하지 않는다.
-- **status.md 초기화**: `~/work/subtree/.issue-start/{이슈키}/status.md`(없으면 `mkdir -p`). 이슈 메타·상태 `착수`·Jira 전환 결과·워크트리/브랜치·**베이스**(`{base}` 값 그대로)·시작 일시를 기록한다. 규격은 아래 "status.md" 참조.
+- **status.md 초기화**: `$DOBBY_WORKSPACE/meta/.issue-start/{이슈키}/status.md`(없으면 `mkdir -p`). 이슈 메타·상태 `착수`·Jira 전환 결과·워크트리/브랜치·**베이스**(`{base}` 값 그대로)·시작 일시를 기록한다. 규격은 아래 "status.md" 참조.
 
 ### 5. 분석 (코드 위치까지)
 
 `issue-start` 5단계와 동일하다.
-- 탐색·분석은 새 워크트리 폴더 기준. 대상 repo가 `wadiz-frontend`가 아니면 `~/work/repos/docs/{repoName}` 문서를 먼저 읽는다.
+- 탐색·분석은 새 워크트리 폴더 기준. `DOBBY_DOCS_ROOT`가 설정돼 있으면 코드 분석 전에 `{DOBBY_DOCS_ROOT}/{repo}` 문서를 먼저 읽는다(미설정이면 참고 문서 없이 진행).
 - 이슈 내용 기준으로 관련 코드·컴포넌트를 Grep/Glob으로 찾아 **`파일:라인`까지 특정**. 추측하지 않고 코드로 확인한다.
 
 ### 6. 결과 정리 + 수정 설계 제시
@@ -66,7 +86,7 @@ description: issue-start를 확장한 멀티 에이전트 셋업+분석 스킬. 
 ### 7. 테스트 목록 초안 작성
 
 `issue-start` 7단계와 동일하다.
-- `~/work/subtree/.issue-test/{이슈키}/test-plan/{이슈키}-test-plan.md`에 시나리오(S1, S2 …)를 self-contained하게 작성. 테스트 데이터는 `dev-db-query`로 실제 값을 찾아 채운다(조회만). 환경은 `미정`으로 둔다. 상단 메타에 `작성 출처: agent-start` 기록.
+- `$DOBBY_WORKSPACE/meta/.issue-test/{이슈키}/test-plan/{이슈키}-test-plan.md`에 시나리오(S1, S2 …)를 self-contained하게 작성. 테스트 데이터는 DB 조회 도구가 있으면 실제 값을 찾아 채운다(조회만; 도구가 없으면 사용자에게 묻고, 그래도 없으면 가용 범위만). 환경은 `미정`으로 둔다. 상단 메타에 `작성 출처: agent-start` 기록.
 
 ## 오케스트레이션 메타 (상위 에픽 단위)
 
@@ -75,7 +95,7 @@ description: issue-start를 확장한 멀티 에이전트 셋업+분석 스킬. 
 ### 디렉터리 레이아웃
 
 ```
-~/work/subtree/.agent-start/{에픽키}/
+$DOBBY_WORKSPACE/meta/.agent-start/{에픽키}/
 ├── orchestration.md          # 메인 에이전트의 관제탑(보드)
 ├── agents/
 │   ├── {에이전트슬러그}.md    # 서브/리뷰 에이전트별 계약(불변 컨트랙트)
@@ -101,9 +121,9 @@ description: issue-start를 확장한 멀티 에이전트 셋업+분석 스킬. 
 - 담당 이슈: {이슈키} (상위 {에픽키})
 
 ## 작업 환경
-- 워크트리: ~/work/subtree/{repoName}-{이슈키}
+- 워크트리: $DOBBY_WORKSPACE/subtree/{repo}-{이슈키}
 - 브랜치: {prefix}/{이슈키} (base: {상위 브랜치})
-- status: ~/work/subtree/.issue-start/{이슈키}/status.md
+- status: $DOBBY_WORKSPACE/meta/.issue-start/{이슈키}/status.md
 
 ## 수정 허용 범위 (충돌 방지 핵심)
 - 허용: {파일/디렉터리 화이트리스트}

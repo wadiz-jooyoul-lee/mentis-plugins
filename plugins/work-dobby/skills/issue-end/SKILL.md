@@ -1,31 +1,51 @@
 ---
 name: issue-end
-description: ~/work/subtree/ 에 모여 있는 이슈 워크트리 폴더들을 스캔해, 각 폴더의 Jira 이슈 상태를 조회하고 종료된 이슈의 워크트리만 안전하게 제거합니다. 종료 처리한 이슈는 issue-start 메타를 이어받아 ~/work/subtree/.issue-end/{이슈키}/summary.md 에 종료 서머리를 남깁니다. issue-start의 정리 짝꿍. 사용법 /issue-end (특정 이슈만 정리하려면 /issue-end QA-22370).
+description: $DOBBY_WORKSPACE/subtree/ 에 모여 있는 이슈 워크트리 폴더들을 스캔해, 각 폴더의 Jira 이슈 상태를 조회하고 종료된 이슈의 워크트리만 안전하게 제거합니다. 종료 처리한 이슈는 issue-start 메타를 이어받아 $DOBBY_WORKSPACE/meta/.issue-end/{이슈키}/summary.md 에 종료 서머리를 남깁니다. issue-start의 정리 짝꿍. 사용법 /issue-end (특정 이슈만 정리하려면 /issue-end QA-22370).
 ---
 
 # issue-end
 
-`/issue-start`로 만든 이슈 워크트리(`~/work/subtree/` 안의 폴더들)를 정리하는 스킬. **종료된 Jira 이슈**의 워크트리만 찾아 안전하게 제거한다. 진행 중인 이슈와 미커밋·미푸시 변경이 있는 폴더는 건드리지 않는다.
+`/issue-start`로 만든 이슈 워크트리(`$DOBBY_WORKSPACE/subtree/` 안의 폴더들)를 정리하는 스킬. **종료된 Jira 이슈**의 워크트리만 찾아 안전하게 제거한다. 진행 중인 이슈와 미커밋·미푸시 변경이 있는 폴더는 건드리지 않는다.
 
 > 워크트리(worktree): 하나의 git 저장소에서 여러 작업 폴더를 동시에 두는 기능. `git worktree remove`로 제거해도 **브랜치는 그대로 보존**되며, 필요하면 같은 브랜치로 워크트리를 다시 만들 수 있다.
+
+## 설정 (첫 실행 시 확인)
+
+작업을 시작하기 전에 `~/.config/work-dobby/config.env`를 읽어 환경 변수를 불러온다(`[ -f ~/.config/work-dobby/config.env ] && source ~/.config/work-dobby/config.env`). **이미 값이 있는 변수는 묻지 않는다.** 빠진 변수만 아래 규칙으로 채운다.
+
+- **기본값이 있는 변수**: 현재 기본값을 보여주고 그대로 쓸지 바꿀지 물어본다.
+- **선택 변수**(생략 가능): 생략 시 어떤 영향이 있는지 설명하고 생략을 허용한다.
+- 사용자가 정한 값은 설정 파일에 저장하고(`mkdir -p ~/.config/work-dobby` 후 기록) `export` 한다.
+
+| 변수 | 뜻 | 기본값 |
+|------|-----|--------|
+| `JIRA_BASE_URL` | Jira 사이트 주소 | `https://wadiz.atlassian.net` |
+| `DOBBY_WORKSPACE` | 작업 루트(하위에 `subtree/`·`meta/`) | `$HOME/work/dobby-workspace` |
+| `DOBBY_DEFAULT_BASE` | 기본 베이스 브랜치 | `master` |
+| `DOBBY_REPOS_ROOT` | 원본 소스 저장소들이 있는 루트 | `$HOME/work` |
+| `DOBBY_ENV_MAP` | 테스트 환경→호스트 매핑 | `dev=dev.wadiz.io,rc=rc.wadiz.kr,rc2=rc2.wadiz.kr,rc4=rc4.wadiz.io` |
+| `DOBBY_DOCS_ROOT` | 참고 문서 루트(선택) | (없음 → 참고 문서 없이 진행) |
+| `TEST_LOGIN_ID` / `TEST_LOGIN_PW` | 테스트 계정(선택) | (없음 → 로그인 필요 테스트는 건너뜀) |
+
+워크트리(작업 폴더)는 `$DOBBY_WORKSPACE/subtree/`, 메타 파일은 `$DOBBY_WORKSPACE/meta/`에 둔다.
 
 ## 입력
 
 - `args`(선택): 이슈 키(`QA-22370`). 주면 **그 이슈 폴더만** 대상으로 한다.
-- 없으면 `~/work/subtree/` 안의 **모든** 이슈 워크트리를 대상으로 한다.
+- 없으면 `$DOBBY_WORKSPACE/subtree/` 안의 **모든** 이슈 워크트리를 대상으로 한다.
 
 ## 처리 범위 (안전 경계)
 
-- **오직 `~/work/subtree/` 하위 폴더만** 다룬다. 메인 repo(`~/work/wadiz-frontend` 등)나 그 밖의 폴더는 절대 건드리지 않는다.
+- **오직 `$DOBBY_WORKSPACE/subtree/` 하위 폴더만** 다룬다. 원본 소스 repo(`$DOBBY_REPOS_ROOT/{repo}` 등)나 그 밖의 폴더는 절대 건드리지 않는다.
 - 종료(완료) 상태가 **아닌** 이슈, 그리고 미커밋·미푸시 변경이 있는 폴더는 삭제하지 않는다.
 
 ## 절차
 
 ### 1. subtree 폴더 스캔
 
-- `~/work/subtree/`가 없으면 "정리할 워크트리가 없다"고 알리고 종료한다.
+- `$DOBBY_WORKSPACE/subtree/`가 없으면 "정리할 워크트리가 없다"고 알리고 종료한다.
 - 하위 폴더 목록을 읽는다. 각 폴더에 대해:
-  - 폴더명에서 **이슈키**를 추출한다. 폴더명 규칙은 `{repoName}-{이슈키}`이며 이슈키는 `대문자+숫자` 형태다(정규식 예: `[A-Z]+-[0-9]+` 의 마지막 매치). 예: `wadiz-frontend-QA-22370` → `QA-22370`, `com.wadiz.web-QA-22413` → `QA-22413`.
+  - 폴더명에서 **이슈키**를 추출한다. 폴더명 규칙은 `{repo}-{이슈키}`이며 이슈키는 `대문자+숫자` 형태다(정규식 예: `[A-Z]+-[0-9]+` 의 마지막 매치). 예: `{repo}-QA-22370` → `QA-22370`, `{repo2}-QA-22413` → `QA-22413`.
   - 이슈키를 못 뽑는 폴더는 건너뛰고 목록에 "판단 불가"로 보고한다(자동 삭제 금지).
   - `args`가 주어졌으면 그 이슈키와 일치하는 폴더만 남긴다.
 
@@ -42,7 +62,7 @@ description: ~/work/subtree/ 에 모여 있는 이슈 워크트리 폴더들을 
 
 - 추출한 이슈키들의 현재 상태를 조회한다. 특정 에픽에 묶지 말고 **각 이슈 자기 상태**를 본다(QA·FE1 등 프로젝트 무관).
 - JQL: `key in (KEY1, KEY2, ...)`. 응답이 크면 파일로 저장될 수 있으니 `jq`로 필요한 필드만 뽑는다:
-  - `mcp__claude_ai_Atlassian__searchJiraIssuesUsingJql` (cloudId: `wadiz.atlassian.net`, fields: `["key","status"]`)
+  - `mcp__claude_ai_Atlassian__searchJiraIssuesUsingJql` (cloudId: `$JIRA_BASE_URL`의 호스트, fields: `["key","status"]`)
   - 종료 판정 기준: **`status.statusCategory.key == "done"`** (상태명 "종료" 등). "진행 중"(`indeterminate`)·"할 일"(`new`)은 유지.
 - 폴더는 있는데 Jira에서 이슈를 못 찾으면 "조회 불가"로 보고하고 자동 삭제하지 않는다.
 
@@ -63,8 +83,8 @@ description: ~/work/subtree/ 에 모여 있는 이슈 워크트리 폴더들을 
 ### 6. 종료 서머리 저장
 
 - **종료(Jira `done`)로 판정된 이슈마다** 종료 서머리를 남긴다(워크트리 실제 제거 여부와 무관 — 종료됐지만 미커밋·미푸시로 유지된 경우도 서머리는 남기고 "유지" 사유를 기록).
-  - 경로: `~/work/subtree/.issue-end/{이슈키}/summary.md` (없으면 `mkdir -p`)
-- **issue-start 메타 이어받기**: `~/work/subtree/.issue-start/{이슈키}/status.md`가 있으면 읽어 이슈 메타(제목·타입)와 작업 요약(원인 위치·수정 설계)을 서머리로 옮긴다.
+  - 경로: `$DOBBY_WORKSPACE/meta/.issue-end/{이슈키}/summary.md` (없으면 `mkdir -p`)
+- **issue-start 메타 이어받기**: `$DOBBY_WORKSPACE/meta/.issue-start/{이슈키}/status.md`가 있으면 읽어 이슈 메타(제목·타입)와 작업 요약(원인 위치·수정 설계)을 서머리로 옮긴다.
   - 없으면(예전 이슈 등) 이어받지 못했다고 표시하고, issue-end가 아는 정보(Jira 상태·워크트리)만 채운다.
 - 종료 시점 정보(최종 상태명, 종료 처리 일시, 제거/유지 결과)를 덧붙인다. 규격은 아래 "종료 서머리 (summary.md)" 참조.
 - `.issue-start/{이슈키}/`는 **삭제하지 않는다**(생명주기 원본 기록). 워크트리 폴더만 제거 대상이다.
@@ -72,11 +92,11 @@ description: ~/work/subtree/ 에 모여 있는 이슈 워크트리 폴더들을 
 ### 7. 결과 정리
 
 - 삭제한 폴더, 유지한 폴더(사유 포함), 저장한 종료 서머리 경로를 표로 요약한다.
-- 남은 `~/work/subtree/` 목록을 보여준다.
+- 남은 `$DOBBY_WORKSPACE/subtree/` 목록을 보여준다.
 
 ## 종료 서머리 (summary.md)
 
-- 경로: `~/work/subtree/.issue-end/{이슈키}/summary.md` (종료 이슈당 하나)
+- 경로: `$DOBBY_WORKSPACE/meta/.issue-end/{이슈키}/summary.md` (종료 이슈당 하나)
 - 목적: 워크트리(코드 폴더)는 지워도 **"이 이슈로 무엇을 했고 어떻게 끝났는지"는 히스토리로 보존**. issue-start의 메타를 이어받아 종료 정보를 더한다.
 
 ```markdown
@@ -84,7 +104,7 @@ description: ~/work/subtree/ 에 모여 있는 이슈 워크트리 폴더들을 
 
 ## 이슈
 - **키**: {이슈키} · **타입**: {버그|작업|…} · **제목**: {제목}
-- **Jira**: https://wadiz.atlassian.net/browse/{이슈키}
+- **Jira**: $JIRA_BASE_URL/browse/{이슈키}
 - **최종 상태**: {상태명} (statusCategory: done)
 
 ## 종료 처리
@@ -93,7 +113,7 @@ description: ~/work/subtree/ 에 모여 있는 이슈 워크트리 폴더들을 
 
 | repo | 브랜치(보존) | 경로 | 처리 |
 |------|-------------|------|------|
-| {repoName} | {prefix}/{이슈키} | ~/work/subtree/{repoName}-{이슈키} | 제거 |
+| {repo} | {prefix}/{이슈키} | $DOBBY_WORKSPACE/subtree/{repo}-{이슈키} | 제거 |
 
 ## 작업 요약 (issue-start에서 이어받음)
 - **원인 위치**: `파일:라인`
@@ -106,7 +126,7 @@ description: ~/work/subtree/ 에 모여 있는 이슈 워크트리 폴더들을 
 
 ## 주의
 
-- **`~/work/subtree/` 밖은 절대 건드리지 않는다.** 메인 repo·기타 폴더 보호.
+- **`$DOBBY_WORKSPACE/subtree/` 밖은 절대 건드리지 않는다.** 원본 소스 repo·기타 폴더 보호.
 - **종료 서머리(`.issue-end/`)와 생명주기 기록(`.issue-start/`)은 삭제하지 않는다.** 워크트리(코드 폴더)만 제거 대상이다.
 - 미커밋·미푸시 변경이 있는 폴더는 종료 이슈라도 자동 삭제하지 않는다. 반드시 보고만 한다.
 - `git worktree remove`는 브랜치를 지우지 않는다. 브랜치까지 정리하려면 사용자에게 따로 확인받는다.

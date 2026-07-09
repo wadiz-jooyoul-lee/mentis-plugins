@@ -1,17 +1,37 @@
 ---
 name: issue-start
-description: Jira 이슈 번호(또는 URL)를 받아 이슈를 조회·분석하고 이슈 상태를 진행 중으로 전환한 뒤, 베이스 브랜치(기본 master, 클라우드 환경 이슈면 cloud_live)에서 전용 워크트리와 이슈 브랜치를 생성하고 분석 결과와 수정 설계를 제시합니다. 진행 상태는 ~/work/subtree/.issue-start/{이슈키}/status.md 에 기록하고, 분석·수정 설계를 바탕으로 issue-test용 테스트 목록 초안을 미리 작성하며, 테스트에 필요한 데이터는 dev-db-query로 실제 값을 찾아 채웁니다. 버그 타입은 bugfix/{이슈키}, 그 외 타입은 feature/{이슈키}로 분기합니다. 사용법 /issue-start {이슈번호 또는 URL} (예 /issue-start QA-22370).
+description: Jira 이슈 번호(또는 URL)를 받아 이슈를 조회·분석하고 이슈 상태를 진행 중으로 전환한 뒤, 설정한 기본 베이스 브랜치(base= 인자로 변경 가능)에서 전용 워크트리와 이슈 브랜치를 생성하고 분석 결과와 수정 설계를 제시합니다. 진행 상태는 $DOBBY_WORKSPACE/meta/.issue-start/{이슈키}/status.md 에 기록하고, 분석·수정 설계를 바탕으로 issue-test용 테스트 목록 초안을 미리 작성하며, 테스트에 필요한 데이터는 DB 조회 도구가 있으면 실제 값을 찾아 채웁니다. 버그 타입은 bugfix/{이슈키}, 그 외 타입은 feature/{이슈키}로 분기합니다. 사용법 /issue-start {이슈번호 또는 URL} (예 /issue-start QA-22370).
 ---
 
 # issue-start
 
-Jira 이슈로 작업을 착수하는 스킬. 이슈 조회 → 베이스 브랜치(기본 `master`, 클라우드 환경 이슈면 `cloud_live`) 기준 전용 워크트리·이슈 브랜치 생성 → 코드 위치까지 분석 → 수정 설계 제시까지 수행한다. 실제 코드 수정·커밋·푸시는 하지 않고, 사용자 동의 후 별도로 진행한다.
+Jira 이슈로 작업을 착수하는 스킬. 이슈 조회 → 베이스 브랜치(기본 `$DOBBY_DEFAULT_BASE`, 기본값 `master`) 기준 전용 워크트리·이슈 브랜치 생성 → 코드 위치까지 분석 → 수정 설계 제시까지 수행한다. 실제 코드 수정·커밋·푸시는 하지 않고, 사용자 동의 후 별도로 진행한다.
 
 > 워크트리(worktree): 하나의 git 저장소에서 여러 작업 폴더를 동시에 두는 기능. 이슈마다 별도 폴더를 만들어 메인 폴더를 건드리지 않고 작업한다. 메인 폴더의 브랜치 전환·stash 충돌이 없다.
 
+## 설정 (첫 실행 시 확인)
+
+작업을 시작하기 전에 `~/.config/work-dobby/config.env`를 읽어 환경 변수를 불러온다(`[ -f ~/.config/work-dobby/config.env ] && source ~/.config/work-dobby/config.env`). **이미 값이 있는 변수는 묻지 않는다.** 빠진 변수만 아래 규칙으로 채운다.
+
+- **기본값이 있는 변수**: 현재 기본값을 보여주고 그대로 쓸지 바꿀지 물어본다.
+- **선택 변수**(생략 가능): 생략 시 어떤 영향이 있는지 설명하고 생략을 허용한다.
+- 사용자가 정한 값은 설정 파일에 저장하고(`mkdir -p ~/.config/work-dobby` 후 기록) `export` 한다.
+
+| 변수 | 뜻 | 기본값 |
+|------|-----|--------|
+| `JIRA_BASE_URL` | Jira 사이트 주소 | `https://wadiz.atlassian.net` |
+| `DOBBY_WORKSPACE` | 작업 루트(하위에 `subtree/`·`meta/`) | `$HOME/work/dobby-workspace` |
+| `DOBBY_DEFAULT_BASE` | 기본 베이스 브랜치 | `master` |
+| `DOBBY_REPOS_ROOT` | 원본 소스 저장소들이 있는 루트 | `$HOME/work` |
+| `DOBBY_ENV_MAP` | 테스트 환경→호스트 매핑 | `dev=dev.wadiz.io,rc=rc.wadiz.kr,rc2=rc2.wadiz.kr,rc4=rc4.wadiz.io` |
+| `DOBBY_DOCS_ROOT` | 참고 문서 루트(선택) | (없음 → 참고 문서 없이 진행) |
+| `TEST_LOGIN_ID` / `TEST_LOGIN_PW` | 테스트 계정(선택) | (없음 → 로그인 필요 테스트는 건너뜀) |
+
+워크트리(작업 폴더)는 `$DOBBY_WORKSPACE/subtree/`, 메타 파일은 `$DOBBY_WORKSPACE/meta/`에 둔다.
+
 ## 입력
 
-- `args`: 이슈 번호(`QA-22370`) 또는 Jira URL(`https://wadiz.atlassian.net/browse/QA-22370`)
+- `args`: 이슈 번호(`QA-22370`) 또는 Jira URL(`$JIRA_BASE_URL/browse/QA-22370`), 선택적으로 `base={브랜치}`.
 - URL이면 `/browse/{KEY}`에서 이슈 키를 추출한다. 입력이 없으면 이슈 번호를 물어본다.
 
 ## 절차
@@ -28,12 +48,10 @@ Jira 이슈로 작업을 착수하는 스킬. 이슈 조회 → 베이스 브랜
 
 ### 2. 베이스 브랜치 결정
 
-- 기본 베이스 브랜치는 **`master`**다.
-- **예외**: 이슈가 **클라우드(cloud) 환경** 관련임이 명시된 경우에만 베이스를 **`cloud_live`**로 한다.
-  - 판정 근거는 이슈의 제목·설명·라벨·컴포넌트 등에서 **클라우드 환경**임을 확인한 사실을 쓴다. (예: 제목/설명에 `cloud`, `클라우드`, `cloud_live` 등 클라우드 환경이 명시된 경우)
-  - 글로벌 서비스(wadiz.io)·일본/대만 등 **국가/글로벌 이슈라는 사실만으로는 `cloud_live`로 잡지 않는다**. 클라우드 환경 이슈임이 명시돼야 한다.
-  - 어느 베이스로 잡았는지와 **그 근거를 사용자에게 밝힌다**.
-  - `master`인지 `cloud_live`인지 **애매하면 임의로 정하지 말고 사용자에게 확인**한다.
+- 기본 베이스 브랜치는 **`$DOBBY_DEFAULT_BASE`**(기본값 `master`)다.
+- **특정 베이스**가 필요하면 `base={브랜치}` 인자로 지정한다.
+- 어느 베이스로 잡았는지와 **그 근거를 사용자에게 밝힌다**.
+- 베이스가 **애매하면 임의로 정하지 말고 사용자에게 확인**한다.
 - 결정한 값을 `{base}`로 두고 이후 단계(fetch·worktree add·status.md)에서 그대로 쓴다.
 
 ### 3. 브랜치 prefix 결정 (이슈 타입)
@@ -45,35 +63,32 @@ Jira 이슈로 작업을 착수하는 스킬. 이슈 조회 → 베이스 브랜
 
 워크트리를 쓰므로 메인 폴더는 건드리지 않는다. 따라서 메인 폴더의 커밋되지 않은 변경 확인(stash 등)은 불필요하다.
 
-- **소스 저장소 루트 결정**: 워크트리는 그 저장소의 로컬 원본(source)에서 만든다. 아래 알려진 저장소는 고정 경로를 사용한다.
-  - `wadiz-frontend` → `~/work/wadiz-frontend`
-  - `com.wadiz.web` → `~/work/com.wadiz.web`
-  - 그 외/불확실하면 현재 폴더에서 `git rev-parse --show-toplevel`로 루트를 확인하고, basename을 `{repoName}`으로 쓴다.
-  - 한 이슈가 여러 repo를 건드리면 각 repo마다 소스 루트를 따로 정해 **repo별로 워크트리를 각각 생성**한다(예: 프론트는 `wadiz-frontend`, JSP/백엔드는 `com.wadiz.web`).
+- **소스 저장소 루트 결정**: 워크트리는 그 저장소의 로컬 원본(source)에서 만든다. 소스 루트는 **`$DOBBY_REPOS_ROOT/{repo}`**(기본 `$HOME/work`)로 잡는다.
+  - 거기에 없으면 현재 폴더에서 `git rev-parse --show-toplevel`로 루트를 확인하고, basename을 `{repo}`로 쓴다.
+  - 한 이슈가 여러 repo를 건드리면 각 repo마다 소스 루트를 따로 정해 **repo별로 워크트리를 각각 생성**한다(예: 메인 repo `{repo}`, 백엔드 repo `{repo2}`).
   - 이후 모든 git 명령(`fetch`, `worktree add`)은 **그 소스 루트 폴더에서(`cd {sourceRoot}`)** 실행한다.
-- 모든 이슈 워크트리는 **`~/work/subtree/` 한 곳에 모은다**. 폴더 경로는 `~/work/subtree/{repoName}-{이슈키}` (예: `~/work/subtree/wadiz-frontend-QA-22370`, `~/work/subtree/com.wadiz.web-QA-22370`)
-  - 한 이슈가 여러 repo를 건드릴 수 있으므로 폴더명에 **repo명+이슈키**를 모두 담는다. 같은 이슈라도 repo가 다르면 별도 폴더가 된다(예: `com.wadiz.web-QA-22413`).
-  - `~/work/subtree`가 없으면 먼저 만든다: `mkdir -p ~/work/subtree`
+- 모든 이슈 워크트리는 **`$DOBBY_WORKSPACE/subtree/` 한 곳에 모은다**. 폴더 경로는 `$DOBBY_WORKSPACE/subtree/{repo}-{이슈키}` (예: `$DOBBY_WORKSPACE/subtree/{repo}-QA-22370`, `$DOBBY_WORKSPACE/subtree/{repo2}-QA-22370`)
+  - 한 이슈가 여러 repo를 건드릴 수 있으므로 폴더명에 **repo명+이슈키**를 모두 담는다. 같은 이슈라도 repo가 다르면 별도 폴더가 된다(예: `{repo2}-QA-22413`).
+  - `$DOBBY_WORKSPACE/subtree`가 없으면 먼저 만든다: `mkdir -p $DOBBY_WORKSPACE/subtree`
 - **중복 확인**: 소스 루트에서 `git worktree list`로 같은 경로가 있는지, `git branch --list {prefix}`로 같은 브랜치가 있는지 확인한다. 이미 있으면 **메타 파일 존재 여부로 갈라 처리**한다.
-  - **메타 파일이 있으면**(`~/work/subtree/.issue-start/{이슈키}/status.md` 존재) → 진짜 재실행/중복이므로 **중단하고 사용자에게** 기존 것을 재사용할지 다른 이름을 쓸지 물어본다.
+  - **메타 파일이 있으면**(`$DOBBY_WORKSPACE/meta/.issue-start/{이슈키}/status.md` 존재) → 진짜 재실행/중복이므로 **중단하고 사용자에게** 기존 것을 재사용할지 다른 이름을 쓸지 물어본다.
   - **메타 파일이 없으면**(워크트리·브랜치는 있는데 `.issue-start/{이슈키}/`가 없는 경우 — 메타 기능 이전에 만들었거나 수동 생성) → **워크트리를 새로 만들지 않고 기존 것을 그대로 재사용**한다. 이후 5·6·7단계 분석을 수행해 **현재 이슈를 바탕으로 메타 파일들을 새로 생성**한다(아래 "메타 backfill" 참조). 새로 만들지 않으므로 `fetch`/`worktree add`(다음 두 항목)는 건너뛴다.
 - 베이스 브랜치를 최신화한다(소스 루트에서): `git fetch origin {base}`
-- 워크트리와 이슈 브랜치를 한 번에 생성한다(소스 루트에서): `git worktree add -b {prefix} ~/work/subtree/{repoName}-{이슈키} origin/{base}`
+- 워크트리와 이슈 브랜치를 한 번에 생성한다(소스 루트에서): `git worktree add -b {prefix} $DOBBY_WORKSPACE/subtree/{repo}-{이슈키} origin/{base}`
 - 생성된 워크트리 폴더로 이동해 이후 작업을 진행한다.
-- **의존성 안내**(JS 저장소 한정): 새 워크트리는 `node_modules`가 비어 있을 수 있다. 필요 시 워크트리 폴더에서 `yarn install`을 실행하라고 **안내만** 하고, 설치 여부는 사용자 판단에 맡긴다(자동 실행하지 않는다). `com.wadiz.web`(Java/Spring)는 해당 없음.
+- **의존성 안내**(JS 저장소 한정): 새 워크트리는 `node_modules`가 비어 있을 수 있다. 필요 시 워크트리 폴더에서 `yarn install`을 실행하라고 **안내만** 하고, 설치 여부는 사용자 판단에 맡긴다(자동 실행하지 않는다). JS가 아닌 저장소(예: Java/Spring 백엔드)는 해당 없음.
 - 커밋·푸시는 하지 않는다(사용자 동의 후 별도 진행).
 - **상태 파일 생성**: 워크트리·브랜치를 만들고 나면 진행 상태 파일을 초기화한다.
-  - 경로: `~/work/subtree/.issue-start/{이슈키}/status.md` (없으면 `mkdir -p ~/work/subtree/.issue-start/{이슈키}`)
+  - 경로: `$DOBBY_WORKSPACE/meta/.issue-start/{이슈키}/status.md` (없으면 `mkdir -p $DOBBY_WORKSPACE/meta/.issue-start/{이슈키}`)
   - 이슈 메타(키·타입·제목·Jira URL), 상태 `착수`, Jira 상태 전환 결과(진행 중으로 변경/이미 진행 중/전환 안 함), 생성된 워크트리/브랜치 목록(repo별), 베이스 브랜치, 시작 일시를 기록한다. 규격은 아래 "작업 상태 파일" 참조.
   - 한 이슈가 여러 repo를 건드리면 워크트리 표에 **repo별로 행을 추가**한다(상태 파일은 이슈 키 기준 하나).
 
 ### 5. 분석 (코드 위치까지)
 
-- 이후 모든 탐색·분석은 새 워크트리 폴더(`~/work/subtree/{repoName}-{이슈키}`) 기준으로 한다.
-- **대상 repo가 `wadiz-frontend`가 아니면 먼저 그 repo의 문서를 읽고 분석에 활용한다.**
-  - `~/work/repos/docs/{repoName}.md`(단일 파일) 또는 `~/work/repos/docs/{repoName}/`(심층 분석 폴더)를 읽어 구조·스택·핵심 흐름을 파악한다. 어느 쪽인지 모르면 `~/work/repos/docs/`에서 해당 repo 이름으로 확인한다.
-  - repo 이름·역할·org 지도가 헷갈리면 인덱스 `~/work/repos/CLAUDE.md`를 먼저 본다(예: `co.wadiz.fep`는 FE가 아니라 결제 대외계 백엔드).
+- 이후 모든 탐색·분석은 새 워크트리 폴더(`$DOBBY_WORKSPACE/subtree/{repo}-{이슈키}`) 기준으로 한다.
+- **참고 문서 활용**: `DOBBY_DOCS_ROOT`가 설정돼 있으면, 코드 분석 전에 먼저 `{DOBBY_DOCS_ROOT}/{repo}`의 문서를 읽어 구조·스택·핵심 흐름을 파악한다.
   - 한 이슈가 여러 repo를 건드리면 **각 repo 문서를 모두** 읽는다.
+  - `DOBBY_DOCS_ROOT`가 설정돼 있지 않으면 참고 문서 없이 진행한다.
   - 문서는 배경 이해용 보조자료다. 최종 원인·위치는 **워크트리의 실제 코드로 확인**하고, 문서와 코드가 다르면 코드를 따른다(문서가 stale일 수 있음).
 - 이슈 내용을 기준으로 관련 코드·텍스트·컴포넌트를 Grep/Glob으로 찾아 **`파일:라인`까지 특정**한다.
 - 추측하지 않고 코드를 직접 확인해 원인 위치를 짚는다.
@@ -90,13 +105,14 @@ Jira 이슈로 작업을 착수하는 스킬. 이슈 조회 → 베이스 브랜
 
 이후 `/issue-test`가 검증에 쓸 **테스트 목록**을 지금의 분석·수정 설계를 바탕으로 미리 만들어 둔다. issue-test는 이 목록이 있으면 그대로 재사용하고, 없을 때만 스스로 만든다.
 
-- 경로(issue-test와 공유하는 canonical 위치): `~/work/subtree/.issue-test/{이슈키}/test-plan/{이슈키}-test-plan.md` (없으면 `mkdir -p`)
+- 경로(issue-test와 공유하는 canonical 위치): `$DOBBY_WORKSPACE/meta/.issue-test/{이슈키}/test-plan/{이슈키}-test-plan.md` (없으면 `mkdir -p`)
 - **수정 설계에서 "무엇이 어떻게 바뀌어야 정상인지"를 시나리오로 옮긴다**(번호 S1, S2 … 부여). 각 시나리오는 대상 페이지/URL·사전조건·조작 단계·기대 결과·검증 방법을 포함해 **self-contained** 하게 쓴다(issue-test SKILL의 "테스트 목록의 독립성" 규격을 따른다).
-- **테스트 데이터는 `dev-db-query`로 실제 값을 찾아 채운다**(추측/가짜 값 금지).
-  - 각 시나리오가 요구하는 조건(예: "오픈예정 상태 프로젝트", "특정 상태의 주문", "팔로워가 있는 메이커")을 DB에서 **조회(SELECT/SHOW만)** 해 **실재하는 ID·값**을 찾는다. `wadiz-shared:dev-db-query`(또는 `/dev-db-query`) 절차를 따른다(환경 선택 → 스키마 참조 → 조회).
-  - 찾은 데이터를 시나리오 사전조건에 **구체적으로** 적는다(예: `메이커 UserId 2008628, 오픈예정 프로젝트 27707`). **재현 가능하도록 사용한 SQL도 함께** 목록에 남긴다(다른 에이전트가 다시 뽑을 수 있게).
+- **테스트 데이터는 실재하는 값으로 채운다**(추측/가짜 값 금지).
+  - 각 시나리오가 요구하는 조건(예: "오픈예정 상태 프로젝트", "특정 상태의 주문", "팔로워가 있는 메이커")에 맞는 **실재하는 ID·값**을 찾아 사전조건에 **구체적으로** 적는다(예: `메이커 UserId 2008628, 오픈예정 프로젝트 27707`).
+  - **DB 조회 도구가 있으면** 그 도구로 **조회(SELECT/SHOW만)** 해 값을 찾는다(예: `dev-db-query`. 환경 선택 → 스키마 참조 → 조회). **재현 가능하도록 사용한 SQL도 함께** 목록에 남긴다(다른 에이전트가 다시 뽑을 수 있게).
+  - **DB 조회 도구가 없으면** 사용자에게 값을 물어본다. 그래도 구할 수 없으면 그 데이터가 필요 없는 시나리오만(가용 범위만) 남긴다.
   - 조회만 하고 **데이터를 만들거나 바꾸지 않는다**. 변경쿼리는 실행하지 않는다.
-  - env가 아직 `미정`이면 Dev 기준으로 후보를 찾되, **issue-test 실행 환경에서 같은 데이터가 있는지 재확인 필요**라고 표시한다(환경마다 데이터가 다를 수 있음).
+  - env가 아직 `미정`이면 dev 기준으로 후보를 찾되, **issue-test 실행 환경에서 같은 데이터가 있는지 재확인 필요**라고 표시한다(환경마다 데이터가 다를 수 있음).
 - **테스트 환경(머지 대상→env, base URL)은 이 시점에 확정 불가**하므로 `미정 (issue-test 실행 시 결정)`으로 남긴다. 국내/글로벌 구분·로그인 필요 여부는 아는 범위에서 채운다.
 - 목록 상단 메타에 `작성 출처: issue-start`와 작성 일시를 기록해 issue-test가 출처를 구분할 수 있게 한다.
 - 이미 목록 파일이 있으면 덮어쓰지 말고 시나리오만 보강하며, 환경 등 **이미 채워진 값은 보존**한다.
@@ -106,16 +122,16 @@ Jira 이슈로 작업을 착수하는 스킬. 이슈 조회 → 베이스 브랜
 기존 서브트리(워크트리)는 있는데 메타 파일이 없거나 일부만 있으면, **워크트리를 다시 만들지 않고** 현재 이슈를 바탕으로 없는 메타만 채워 넣는다.
 
 - **트리거**: 4단계 중복 확인에서 "워크트리·브랜치는 있으나 `.issue-start/{이슈키}/status.md` 없음"으로 판정된 경우.
-- **기존 워크트리 정보 수집**: 폴더 경로에서 `{repoName}`·`{이슈키}`를 파악하고, `git -C {폴더} rev-parse --abbrev-ref HEAD`로 브랜치를 확인한다. 이미 커밋된 변경이 있으면 `git -C {폴더} diff origin/{base}...HEAD`도 함께 보고 분석에 반영한다(`{base}`는 2단계 규칙으로 판정한 베이스).
+- **기존 워크트리 정보 수집**: 폴더 경로에서 `{repo}`·`{이슈키}`를 파악하고, `git -C {폴더} rev-parse --abbrev-ref HEAD`로 브랜치를 확인한다. 이미 커밋된 변경이 있으면 `git -C {폴더} diff origin/{base}...HEAD`도 함께 보고 분석에 반영한다(`{base}`는 2단계 규칙으로 판정한 베이스).
 - **채울 메타(없는 것만 생성, 이미 있는 파일은 보존)**:
-  - `~/work/subtree/.issue-start/{이슈키}/status.md` — 이슈 메타·워크트리/브랜치·**상세 분석**(아래 "분석 상세" 규격대로 자세히). 워크트리 생성 시각을 알 수 없으므로 `시작`은 `backfill {일시}`로 적고, 상태 항목에 `작성 출처: backfill`을 남긴다.
-  - `~/work/subtree/.issue-test/{이슈키}/test-plan/{이슈키}-test-plan.md` — 7단계와 동일하게 테스트 목록 초안(`작성 출처: issue-start`).
+  - `$DOBBY_WORKSPACE/meta/.issue-start/{이슈키}/status.md` — 이슈 메타·워크트리/브랜치·**상세 분석**(아래 "분석 상세" 규격대로 자세히). 워크트리 생성 시각을 알 수 없으므로 `시작`은 `backfill {일시}`로 적고, 상태 항목에 `작성 출처: backfill`을 남긴다.
+  - `$DOBBY_WORKSPACE/meta/.issue-test/{이슈키}/test-plan/{이슈키}-test-plan.md` — 7단계와 동일하게 테스트 목록 초안(`작성 출처: issue-start`).
 - **분석 기준**: 5·6단계를 그대로 수행하되, 새로 만든 워크트리가 아니라 **기존 워크트리의 현재 상태**를 분석 대상으로 삼는다.
 - backfill로 Jira 상태를 전환할지는 1단계 규칙을 그대로 적용한다(`new`면 진행 중으로, 이미 진행 중이면 그대로).
 
 ## 작업 상태 파일 (status.md)
 
-- 경로: `~/work/subtree/.issue-start/{이슈키}/status.md` (이슈당 하나)
+- 경로: `$DOBBY_WORKSPACE/meta/.issue-start/{이슈키}/status.md` (이슈당 하나)
 - 목적: 이 이슈로 무엇을 착수했는지 — 워크트리·브랜치 위치, 현재 단계, **상세 분석 맥락** — 를 파일 하나로 파악. 나중에 이 파일만 다시 읽어도 재분석 없이 이어서 작업할 수 있는 게 목표다. `.issue-test/{이슈키}/`(테스트 산출물)와 이슈 키가 짝을 이룬다.
 - 상태 값: `착수`(워크트리 생성 완료) → `분석완료`(원인·수정 설계 도출) → `해결됨`(`/issue-test`가 실패 0·중단 0으로 마감 시 갱신, skip은 허용). `해결됨`은 **메타 상태일 뿐 Jira 실제 이슈 상태와 무관**하다.
 
@@ -124,20 +140,20 @@ Jira 이슈로 작업을 착수하는 스킬. 이슈 조회 → 베이스 브랜
 
 ## 이슈
 - **키**: {이슈키} · **타입**: {버그|작업|…} · **제목**: {제목}
-- **Jira**: https://wadiz.atlassian.net/browse/{이슈키}
+- **Jira**: $JIRA_BASE_URL/browse/{이슈키}
 - **Jira 상태 전환**: 진행 중으로 변경 / 이미 진행 중 / 전환 안 함(사유)
 
 ## 상태
 - **상태**: 착수 / 분석완료 / 해결됨(issue-test 실패 0·중단 0 마감 시, skip 허용)
 - **작성 출처**: issue-start(신규) / backfill(기존 워크트리 메타 보강)
 - **시작** {YYYY-MM-DD HH:MM} (backfill이면 `backfill {일시}`) · **갱신** {YYYY-MM-DD HH:MM}
-- **베이스**: master 또는 cloud_live (클라우드 환경 이슈)
+- **베이스**: {base} (기본값 `$DOBBY_DEFAULT_BASE`)
 - **해결 근거**(해결됨일 때): `.issue-test/{이슈키}/results/{시각}/` (전체 PASS)
 
 ## 워크트리 / 브랜치
 | repo | 브랜치 | 경로 |
 |------|--------|------|
-| {repoName} | {prefix}/{이슈키} | ~/work/subtree/{repoName}-{이슈키} |
+| {repo} | {prefix}/{이슈키} | $DOBBY_WORKSPACE/subtree/{repo}-{이슈키} |
 
 ## 분석 상세 (분석완료 시)
 - **원인 위치**: `파일:라인` (관련된 곳이 여러 개면 모두)
@@ -160,4 +176,4 @@ Jira 이슈로 작업을 착수하는 스킬. 이슈 조회 → 베이스 브랜
 - 커밋과 푸시는 반드시 사용자 동의 후 진행한다. 워크트리에는 `node_modules`가 없어 pre-commit 훅이 실패할 수 있으므로, 커밋 시 `git commit --no-verify`로 훅을 건너뛴다.
 - 워크트리는 메인 폴더를 건드리지 않으므로 메인의 작업 내용은 안전하다. 단, 같은 이름의 워크트리·브랜치가 있으면 자동 생성하지 말고 사용자에게 확인한다.
 - 의존성(`yarn install`) 설치는 안내만 하고 자동 실행하지 않는다.
-- 작업이 끝나고 이슈가 종료되면 `/issue-end`로 `~/work/subtree/`의 워크트리를 정리한다. 이때 `/issue-end`가 이 상태 파일의 메타를 이어받아 `~/work/subtree/.issue-end/{이슈키}/summary.md`에 종료 서머리를 남긴다. **상태 파일 `.issue-start/{이슈키}/`는 삭제하지 않고 보존**한다(생명주기 원본 기록).
+- 작업이 끝나고 이슈가 종료되면 `/issue-end`로 `$DOBBY_WORKSPACE/subtree/`의 워크트리를 정리한다. 이때 `/issue-end`가 이 상태 파일의 메타를 이어받아 `$DOBBY_WORKSPACE/meta/.issue-end/{이슈키}/summary.md`에 종료 서머리를 남긴다. **상태 파일 `.issue-start/{이슈키}/`는 삭제하지 않고 보존**한다(생명주기 원본 기록).
