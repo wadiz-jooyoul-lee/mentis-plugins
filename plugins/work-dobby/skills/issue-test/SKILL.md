@@ -1,6 +1,6 @@
 ---
 name: issue-test
-description: 구현한 내용이 실제 환경에서 정상 동작하는지 chrome-devtools로 검증하는 스킬. issue-test {브랜치명?} 형태로 **issue-start가 미리 만든 테스트 목록이 있으면 재사용하고 없으면** 현재 브랜치(또는 입력한 브랜치)의 변경 내용을 분석해 어떤 페이지에서 무엇을 테스트할지 도출한 **테스트 목록(test plan)** 을 $DOBBY_WORKSPACE/meta/.issue-test/{이슈키}/test-plan/ 에 독립 파일로 저장하고, 국내/글로벌 국가 전환·로그인을 포함해 테스트한 뒤 **결과**를 $DOBBY_WORKSPACE/meta/.issue-test/{이슈키}/results/{시각}/ 에 시간별로 덮어쓰지 않게 저장하고 화면에도 출력한다. 사용법 /issue-test 또는 /issue-test feature/FE-1234.
+description: 구현한 내용이 실제 환경에서 정상 동작하는지 chrome-devtools로 검증하는 스킬. issue-test {브랜치명?} 형태로 **issue-start가 미리 만든 테스트 목록이 있으면 재사용하고 없으면** 현재 브랜치(또는 입력한 브랜치)의 변경 내용을 분석해 어떤 페이지에서 무엇을 테스트할지 도출한 **테스트 목록(test plan)** 을 $DOBBY_META/.issue-test/{이슈키}/test-plan/ 에 독립 파일로 저장하고, 국내/글로벌 국가 전환·로그인을 포함해 테스트한 뒤 **결과**를 $DOBBY_META/.issue-test/{이슈키}/results/{시각}/ 에 시간별로 덮어쓰지 않게 저장하고 화면에도 출력한다. 사용법 /issue-test 또는 /issue-test feature/FE-1234.
 ---
 
 # issue-test
@@ -17,21 +17,24 @@ description: 구현한 내용이 실제 환경에서 정상 동작하는지 chro
 - **선택 변수**(생략 가능): 생략 시 어떤 영향이 있는지 설명하고 생략을 허용한다.
 - 사용자가 정한 값은 설정 파일에 저장하고(`mkdir -p ~/.config/work-dobby` 후 기록) `export` 한다.
 
+- **메타 루트**: `DOBBY_META="${DOBBY_META_PATH:-$DOBBY_WORKSPACE/meta}"` — `DOBBY_META_PATH`가 설정돼 있으면 그 경로, 없으면 `$DOBBY_WORKSPACE/meta`. 이하 메타 경로는 `$DOBBY_META` 기준.
+
 | 변수 | 뜻 | 기본값 |
 |------|-----|--------|
 | `JIRA_BASE_URL` | Jira 사이트 주소 | `https://wadiz.atlassian.net` |
 | `DOBBY_WORKSPACE` | 작업 루트(하위에 `subtree/`·`meta/`) | `$HOME/work/dobby-workspace` |
+| `DOBBY_META_PATH` | 메타 경로 직접 지정(선택) | (없음 → `$DOBBY_WORKSPACE/meta`) |
 | `DOBBY_DEFAULT_BASE` | 기본 베이스 브랜치 | `master` |
 | `DOBBY_REPOS_ROOT` | 원본 소스 저장소들이 있는 루트 | `$HOME/work` |
 | `DOBBY_ENV_MAP` | 테스트 환경→호스트 매핑 | `dev=dev.wadiz.io,rc=rc.wadiz.kr,rc2=rc2.wadiz.kr,rc4=rc4.wadiz.io` |
 | `DOBBY_DOCS_ROOT` | 참고 문서 루트(선택) | (없음 → 참고 문서 없이 진행) |
 | `TEST_LOGIN_ID` / `TEST_LOGIN_PW` | 테스트 계정(선택) | (없음 → 로그인 필요 테스트는 건너뜀) |
 
-워크트리(작업 폴더)는 `$DOBBY_WORKSPACE/subtree/`, 메타 파일은 `$DOBBY_WORKSPACE/meta/`에 둔다.
+워크트리(작업 폴더)는 `$DOBBY_WORKSPACE/subtree/`, 메타 파일은 `$DOBBY_META/`에 둔다.
 
 ## 산출물 폴더 구조 (중요)
 
-이슈별 루트: `$DOBBY_WORKSPACE/meta/.issue-test/{이슈키}/`
+이슈별 루트: `$DOBBY_META/.issue-test/{이슈키}/`
 
 - `status.md` — **진행 상태 파일**. 이슈 루트에 하나. 현재/최근 실행의 진행 상태·진행률·성공/실패/skip·발생 이슈·몇 회째 실행인지 등 메타를 기록한다. 테스트 진행 중 실시간으로 갱신한다(아래 "진행 상태 파일" 참조).
 - `test-plan/{이슈키}-test-plan.md` — **테스트 목록(test plan)**. 분석 단계에서 생성. **다른 에이전트가 이 파일만 보고 그대로 테스트를 재현할 수 있도록 self-contained** 해야 한다(아래 "테스트 목록의 독립성" 참조). 재실행 시 최신 분석으로 덮어쓴다(목록은 diff에서 결정되므로 덮어쓰기 무방).
@@ -56,7 +59,7 @@ description: 구현한 내용이 실제 환경에서 정상 동작하는지 chro
 
 **먼저 테스트 목록이 이미 있는지 확인한다.** `/issue-start`가 분석·수정 설계를 바탕으로 목록을 미리 만들어 두는 경우가 많다.
 
-- 경로: `$DOBBY_WORKSPACE/meta/.issue-test/{이슈키}/test-plan/{이슈키}-test-plan.md`
+- 경로: `$DOBBY_META/.issue-test/{이슈키}/test-plan/{이슈키}-test-plan.md`
 - **있으면(대개 `작성 출처: issue-start`)**: 그것을 **기본으로 재사용**한다. 처음부터 다시 만들지 않는다.
   - 실제 변경(diff)과 대조해 시나리오가 최신인지 확인하고, 빠졌거나 달라진 부분만 보강한다.
   - issue-start가 `미정`으로 남긴 **테스트 환경(env·base URL)** 은 아래 3단계에서 확정한 값으로 채운다.
@@ -73,7 +76,7 @@ description: 구현한 내용이 실제 환경에서 정상 동작하는지 chro
 - 각 페이지별로 **구체적 테스트 시나리오**(무엇을 확인해야 정상인지)를 목록화한다. 예: "URL 진입 시 302로 X로 이동", "버튼 클릭 시 Y 노출", "삭제한 페이지가 404/정상 처리".
 - 추측하지 말고 코드·라우트·매핑을 직접 확인해 시나리오를 만든다.
 - 도출한 시나리오를 **테스트 목록 파일**로 저장한다.
-  - 경로: `$DOBBY_WORKSPACE/meta/.issue-test/{이슈키}/test-plan/` (없으면 `mkdir -p`)
+  - 경로: `$DOBBY_META/.issue-test/{이슈키}/test-plan/` (없으면 `mkdir -p`)
   - 파일명: `{이슈키}-test-plan.md`. 메타에 `작성 출처: issue-test`와 작성 일시를 기록한다.
   - 재실행 시 최신 분석으로 덮어쓴다(목록은 diff에서 결정되므로 덮어쓰기 무방).
 
@@ -127,8 +130,8 @@ description: 구현한 내용이 실제 환경에서 정상 동작하는지 chro
 
 테스트 조작을 시작하기 **전에** 저장 위치와 상태 파일을 먼저 만든다. 이걸 나중으로 미루지 않는다 — 뒤로 미루면 시나리오별 갱신이 통째로 누락된다.
 
-1. **결과 시각 폴더 생성**: 실행 시각을 `date '+%Y%m%d-%H%M%S'`로 얻어 `$DOBBY_WORKSPACE/meta/.issue-test/{이슈키}/results/{YYYYMMDD-HHMMSS}/`를 `mkdir -p`. (기존 폴더는 덮지 않는다.) 이 폴더에 스크린샷·result md를 저장한다.
-2. **진행 상태 파일 초기화**: `$DOBBY_WORKSPACE/meta/.issue-test/{이슈키}/status.md`를 생성/갱신. 회차(run #)=**기존 `results/` 시각 폴더 수 + 1**, 상태 `테스트중`, 진행률 `0/N`(N=시나리오 수), 결과 폴더 경로 기록. 규격은 아래 "진행 상태 파일".
+1. **결과 시각 폴더 생성**: 실행 시각을 `date '+%Y%m%d-%H%M%S'`로 얻어 `$DOBBY_META/.issue-test/{이슈키}/results/{YYYYMMDD-HHMMSS}/`를 `mkdir -p`. (기존 폴더는 덮지 않는다.) 이 폴더에 스크린샷·result md를 저장한다.
+2. **진행 상태 파일 초기화**: `$DOBBY_META/.issue-test/{이슈키}/status.md`를 생성/갱신. 회차(run #)=**기존 `results/` 시각 폴더 수 + 1**, 상태 `테스트중`, 진행률 `0/N`(N=시나리오 수), 결과 폴더 경로 기록. 규격은 아래 "진행 상태 파일".
 3. **결과 md 골격 생성**: 위 폴더에 `{이슈키}-test-result.md`를 만들고, 시나리오 표의 **행을 미리 다 깔아둔다(결과·판정 칸은 빈칸)**. 아래 "결과 md 구조" 참고.
 
 #### 6-1. 시나리오 루프 (각 시나리오마다 아래 4스텝을 한 세트로)
@@ -153,7 +156,7 @@ description: 구현한 내용이 실제 환경에서 정상 동작하는지 chro
 - **결과 md 완성**: 6-1에서 채운 시나리오 표 위에 "한눈 요약 → 실패 상세"를 얹어 아래 "결과 md 구조"를 완성한다. **어떤 테스트 목록으로 실행했는지**(test-plan 경로+작성 일시)를 명시해 목록↔결과가 서로를 참조하게 한다.
 - **진행 상태 파일 마감**: `status.md`의 상태를 `완료`(실패 존재 시 `완료(이슈 있음)`, 중단 시 `중단`)로 바꾸고, 최종 진행률·집계·발생 이슈 요약과 결과 폴더 경로를 확정한다. 실행 이력 표에 이번 회차 행을 추가한다.
 - **실패 0 · 중단 0이면 issue-start 메타 상태를 "해결됨"으로 갱신**한다. skip(⏭️, 해당성 낮음 등)이 있어도 실패·중단만 없으면 해결됨으로 본다. (Jira 등 실제 이슈 상태는 건드리지 않는다 — **메타 파일만** 갱신)
-  - 대상: `$DOBBY_WORKSPACE/meta/.issue-start/{이슈키}/status.md` (있을 때만. 없으면 건너뛴다 — issue-test 단독 실행일 수 있음).
+  - 대상: `$DOBBY_META/.issue-start/{이슈키}/status.md` (있을 때만. 없으면 건너뛴다 — issue-test 단독 실행일 수 있음).
   - 그 파일의 상태를 `해결됨`으로 바꾸고, 해결 근거로 **이번 결과 폴더 경로**(`.issue-test/{이슈키}/results/{시각}/`)와 집계(성공/실패/skip), 갱신 일시를 남긴다.
   - 하나라도 FAIL 또는 중단이 있으면 갱신하지 않는다(해결됨으로 올리지 않는다).
 - 같은 내용을 **화면(응답)에도 요약 출력**한다(맨 위 한눈 요약 + 실패 항목 우선).
@@ -201,7 +204,7 @@ description: 구현한 내용이 실제 환경에서 정상 동작하는지 chro
 
 ## 진행 상태 파일 (status.md)
 
-- 경로: `$DOBBY_WORKSPACE/meta/.issue-test/{이슈키}/status.md` (이슈 루트에 하나)
+- 경로: `$DOBBY_META/.issue-test/{이슈키}/status.md` (이슈 루트에 하나)
 - 목적: 사용자·다른 에이전트가 **파일 하나로 현재 진행 상황을 즉시 파악**. 실행 시작 시 초기화하고, 시나리오 완료마다 갱신하며, 종료 시 마감한다. 중단되어도 마지막 상태가 남는다.
 - 회차(run #)는 실행 시작 시 정한다: **기존 `results/` 하위 시각 폴더 수 + 1**.
 - 최근 실행 상태를 위에, 과거 실행 이력을 표로 아래에 둔다.

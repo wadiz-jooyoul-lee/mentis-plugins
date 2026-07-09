@@ -1,6 +1,6 @@
 ---
 name: issue-end
-description: $DOBBY_WORKSPACE/subtree/ 에 모여 있는 이슈 워크트리 폴더들을 스캔해, 각 폴더의 Jira 이슈 상태를 조회하고 종료된 이슈의 워크트리만 안전하게 제거합니다. 종료 처리한 이슈는 issue-start 메타를 이어받아 $DOBBY_WORKSPACE/meta/.issue-end/{이슈키}/summary.md 에 종료 서머리를 남깁니다. issue-start의 정리 짝꿍. 사용법 /issue-end (특정 이슈만 정리하려면 /issue-end QA-22370).
+description: $DOBBY_WORKSPACE/subtree/ 에 모여 있는 이슈 워크트리 폴더들을 스캔해, 각 폴더의 Jira 이슈 상태를 조회하고 종료된 이슈의 워크트리만 안전하게 제거합니다. 종료 처리한 이슈는 issue-start 메타를 이어받아 $DOBBY_META/.issue-end/{이슈키}/summary.md 에 종료 서머리를 남깁니다. issue-start의 정리 짝꿍. 사용법 /issue-end (특정 이슈만 정리하려면 /issue-end QA-22370).
 ---
 
 # issue-end
@@ -17,17 +17,20 @@ description: $DOBBY_WORKSPACE/subtree/ 에 모여 있는 이슈 워크트리 폴
 - **선택 변수**(생략 가능): 생략 시 어떤 영향이 있는지 설명하고 생략을 허용한다.
 - 사용자가 정한 값은 설정 파일에 저장하고(`mkdir -p ~/.config/work-dobby` 후 기록) `export` 한다.
 
+- **메타 루트**: `DOBBY_META="${DOBBY_META_PATH:-$DOBBY_WORKSPACE/meta}"` — `DOBBY_META_PATH`가 설정돼 있으면 그 경로, 없으면 `$DOBBY_WORKSPACE/meta`. 이하 메타 경로는 `$DOBBY_META` 기준.
+
 | 변수 | 뜻 | 기본값 |
 |------|-----|--------|
 | `JIRA_BASE_URL` | Jira 사이트 주소 | `https://wadiz.atlassian.net` |
 | `DOBBY_WORKSPACE` | 작업 루트(하위에 `subtree/`·`meta/`) | `$HOME/work/dobby-workspace` |
+| `DOBBY_META_PATH` | 메타 경로 직접 지정(선택) | (없음 → `$DOBBY_WORKSPACE/meta`) |
 | `DOBBY_DEFAULT_BASE` | 기본 베이스 브랜치 | `master` |
 | `DOBBY_REPOS_ROOT` | 원본 소스 저장소들이 있는 루트 | `$HOME/work` |
 | `DOBBY_ENV_MAP` | 테스트 환경→호스트 매핑 | `dev=dev.wadiz.io,rc=rc.wadiz.kr,rc2=rc2.wadiz.kr,rc4=rc4.wadiz.io` |
 | `DOBBY_DOCS_ROOT` | 참고 문서 루트(선택) | (없음 → 참고 문서 없이 진행) |
 | `TEST_LOGIN_ID` / `TEST_LOGIN_PW` | 테스트 계정(선택) | (없음 → 로그인 필요 테스트는 건너뜀) |
 
-워크트리(작업 폴더)는 `$DOBBY_WORKSPACE/subtree/`, 메타 파일은 `$DOBBY_WORKSPACE/meta/`에 둔다.
+워크트리(작업 폴더)는 `$DOBBY_WORKSPACE/subtree/`, 메타 파일은 `$DOBBY_META/`에 둔다.
 
 ## 입력
 
@@ -83,8 +86,8 @@ description: $DOBBY_WORKSPACE/subtree/ 에 모여 있는 이슈 워크트리 폴
 ### 6. 종료 서머리 저장
 
 - **종료(Jira `done`)로 판정된 이슈마다** 종료 서머리를 남긴다(워크트리 실제 제거 여부와 무관 — 종료됐지만 미커밋·미푸시로 유지된 경우도 서머리는 남기고 "유지" 사유를 기록).
-  - 경로: `$DOBBY_WORKSPACE/meta/.issue-end/{이슈키}/summary.md` (없으면 `mkdir -p`)
-- **issue-start 메타 이어받기**: `$DOBBY_WORKSPACE/meta/.issue-start/{이슈키}/status.md`가 있으면 읽어 이슈 메타(제목·타입)와 작업 요약(원인 위치·수정 설계)을 서머리로 옮긴다.
+  - 경로: `$DOBBY_META/.issue-end/{이슈키}/summary.md` (없으면 `mkdir -p`)
+- **issue-start 메타 이어받기**: `$DOBBY_META/.issue-start/{이슈키}/status.md`가 있으면 읽어 이슈 메타(제목·타입)와 작업 요약(원인 위치·수정 설계)을 서머리로 옮긴다.
   - 없으면(예전 이슈 등) 이어받지 못했다고 표시하고, issue-end가 아는 정보(Jira 상태·워크트리)만 채운다.
 - 종료 시점 정보(최종 상태명, 종료 처리 일시, 제거/유지 결과)를 덧붙인다. 규격은 아래 "종료 서머리 (summary.md)" 참조.
 - `.issue-start/{이슈키}/`는 **삭제하지 않는다**(생명주기 원본 기록). 워크트리 폴더만 제거 대상이다.
@@ -96,7 +99,7 @@ description: $DOBBY_WORKSPACE/subtree/ 에 모여 있는 이슈 워크트리 폴
 
 ## 종료 서머리 (summary.md)
 
-- 경로: `$DOBBY_WORKSPACE/meta/.issue-end/{이슈키}/summary.md` (종료 이슈당 하나)
+- 경로: `$DOBBY_META/.issue-end/{이슈키}/summary.md` (종료 이슈당 하나)
 - 목적: 워크트리(코드 폴더)는 지워도 **"이 이슈로 무엇을 했고 어떻게 끝났는지"는 히스토리로 보존**. issue-start의 메타를 이어받아 종료 정보를 더한다.
 
 ```markdown

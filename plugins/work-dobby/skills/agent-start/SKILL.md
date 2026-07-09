@@ -19,17 +19,20 @@ description: issue-start를 확장한 멀티 에이전트 셋업+분석 스킬. 
 - **선택 변수**(생략 가능): 생략 시 어떤 영향이 있는지 설명하고 생략을 허용한다.
 - 사용자가 정한 값은 설정 파일에 저장하고(`mkdir -p ~/.config/work-dobby` 후 기록) `export` 한다.
 
+- **메타 루트**: `DOBBY_META="${DOBBY_META_PATH:-$DOBBY_WORKSPACE/meta}"` — `DOBBY_META_PATH`가 설정돼 있으면 그 경로, 없으면 `$DOBBY_WORKSPACE/meta`. 이하 메타 경로는 `$DOBBY_META` 기준.
+
 | 변수 | 뜻 | 기본값 |
 |------|-----|--------|
 | `JIRA_BASE_URL` | Jira 사이트 주소 | `https://wadiz.atlassian.net` |
 | `DOBBY_WORKSPACE` | 작업 루트(하위에 `subtree/`·`meta/`) | `$HOME/work/dobby-workspace` |
+| `DOBBY_META_PATH` | 메타 경로 직접 지정(선택) | (없음 → `$DOBBY_WORKSPACE/meta`) |
 | `DOBBY_DEFAULT_BASE` | 기본 베이스 브랜치 | `master` |
 | `DOBBY_REPOS_ROOT` | 원본 소스 저장소들이 있는 루트 | `$HOME/work` |
 | `DOBBY_ENV_MAP` | 테스트 환경→호스트 매핑 | `dev=dev.wadiz.io,rc=rc.wadiz.kr,rc2=rc2.wadiz.kr,rc4=rc4.wadiz.io` |
 | `DOBBY_DOCS_ROOT` | 참고 문서 루트(선택) | (없음 → 참고 문서 없이 진행) |
 | `TEST_LOGIN_ID` / `TEST_LOGIN_PW` | 테스트 계정(선택) | (없음 → 로그인 필요 테스트는 건너뜀) |
 
-워크트리(작업 폴더)는 `$DOBBY_WORKSPACE/subtree/`, 메타 파일은 `$DOBBY_WORKSPACE/meta/`에 둔다.
+워크트리(작업 폴더)는 `$DOBBY_WORKSPACE/subtree/`, 메타 파일은 `$DOBBY_META/`에 둔다.
 
 ## 입력
 
@@ -69,7 +72,7 @@ description: issue-start를 확장한 멀티 에이전트 셋업+분석 스킬. 
   - 로컬·원격 어디에도 `{base}`가 없으면 **중단하고 사용자에게 알린다**(베이스가 아직 안 만들어졌을 수 있음).
 - **의존성 안내**: 새 워크트리는 `node_modules`가 비어 있을 수 있다. 필요 시 `yarn install`을 안내만 하고 자동 실행하지 않는다.
 - 커밋·푸시는 하지 않는다.
-- **status.md 초기화**: `$DOBBY_WORKSPACE/meta/.issue-start/{이슈키}/status.md`(없으면 `mkdir -p`). 이슈 메타·상태 `착수`·Jira 전환 결과·워크트리/브랜치·**베이스**(`{base}` 값 그대로)·시작 일시를 기록한다. 규격은 아래 "status.md" 참조.
+- **status.md 초기화**: `$DOBBY_META/.issue-start/{이슈키}/status.md`(없으면 `mkdir -p`). 이슈 메타·상태 `착수`·Jira 전환 결과·워크트리/브랜치·**베이스**(`{base}` 값 그대로)·시작 일시를 기록한다. 규격은 아래 "status.md" 참조.
 
 ### 5. 분석 (코드 위치까지)
 
@@ -86,7 +89,7 @@ description: issue-start를 확장한 멀티 에이전트 셋업+분석 스킬. 
 ### 7. 테스트 목록 초안 작성
 
 `issue-start` 7단계와 동일하다.
-- `$DOBBY_WORKSPACE/meta/.issue-test/{이슈키}/test-plan/{이슈키}-test-plan.md`에 시나리오(S1, S2 …)를 self-contained하게 작성. 테스트 데이터는 DB 조회 도구가 있으면 실제 값을 찾아 채운다(조회만; 도구가 없으면 사용자에게 묻고, 그래도 없으면 가용 범위만). 환경은 `미정`으로 둔다. 상단 메타에 `작성 출처: agent-start` 기록.
+- `$DOBBY_META/.issue-test/{이슈키}/test-plan/{이슈키}-test-plan.md`에 시나리오(S1, S2 …)를 self-contained하게 작성. 테스트 데이터는 DB 조회 도구가 있으면 실제 값을 찾아 채운다(조회만; 도구가 없으면 사용자에게 묻고, 그래도 없으면 가용 범위만). 환경은 `미정`으로 둔다. 상단 메타에 `작성 출처: agent-start` 기록.
 
 ## 오케스트레이션 메타 (상위 에픽 단위)
 
@@ -95,7 +98,7 @@ description: issue-start를 확장한 멀티 에이전트 셋업+분석 스킬. 
 ### 디렉터리 레이아웃
 
 ```
-$DOBBY_WORKSPACE/meta/.agent-start/{에픽키}/
+$DOBBY_META/.agent-start/{에픽키}/
 ├── orchestration.md          # 메인 에이전트의 관제탑(보드)
 ├── agents/
 │   ├── {에이전트슬러그}.md    # 서브/리뷰 에이전트별 계약(불변 컨트랙트)
@@ -123,7 +126,7 @@ $DOBBY_WORKSPACE/meta/.agent-start/{에픽키}/
 ## 작업 환경
 - 워크트리: $DOBBY_WORKSPACE/subtree/{repo}-{이슈키}
 - 브랜치: {prefix}/{이슈키} (base: {상위 브랜치})
-- status: $DOBBY_WORKSPACE/meta/.issue-start/{이슈키}/status.md
+- status: $DOBBY_META/.issue-start/{이슈키}/status.md
 
 ## 수정 허용 범위 (충돌 방지 핵심)
 - 허용: {파일/디렉터리 화이트리스트}
