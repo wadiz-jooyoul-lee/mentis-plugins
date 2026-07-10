@@ -1,7 +1,7 @@
 {
   "name": "work-dobby",
-  "description": "이슈 착수·테스트·종료 + 멀티 에이전트 병렬 구현(work-dobby) 스킬 모음",
-  "version": "0.3.0",
+  "description": "이슈 착수·구현·테스트·종료 + 멀티 에이전트 병렬 구현(work-dobby) 스킬 모음",
+  "version": "0.4.0",
   "author": {
     "name": "이주열"
   },
