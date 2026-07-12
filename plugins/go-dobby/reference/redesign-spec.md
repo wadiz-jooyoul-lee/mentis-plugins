@@ -1,0 +1,259 @@
+# work-dobby 재설계 스펙
+
+이 문서는 work-dobby 스킬 세트의 재설계 **단일 출처(SSOT)**다. 이후 각 스킬(SKILL.md)은 이 스펙을 기준으로 수정한다. 확정된 설계 결정과 규격을 담는다.
+
+> 상태: **설계 확정 / 구현 전.** 스킬 실제 수정은 이 스펙 승인 후 진행한다.
+
+---
+
+## 1. 목표와 핵심 원칙
+
+- **단일 진입점**: 모든 작업은 `dobby-order` 하나로 시작한다. 단독 이슈 해결 경로(구 issue-start 직접 실행)는 없앤다.
+- **항상 오케스트레이션, 팬아웃 K**: 진입 후 내부에서 필요한 에이전트 수 `K`를 판단한다. `K=1`은 "에이전트 1명짜리 오케스트레이션"이라는 특수 경우일 뿐, 별도 경로가 아니다.
+- **자율 기본 + 좁은 게이트**: 단계 전이는 객관적 조건으로 자동 진행하고, 사용자 확인은 좁은 게이트에서만 받는다.
+- **병합 정책 통일**: 어떤 경우에도 정식 배포 베이스(`$DOBBY_DEFAULT_BASE`)로 PR·머지하지 않는다. 최종 반영은 항상 사용자의 수동 PR.
+- **사실 기반**: 모든 분석·설계·판단은 확인된 사실(코드·문서·조회 결과)에만 근거한다. 추측 금지.
+
+---
+
+## 2. 스킬 세트 (6개 + 미래 훅)
+
+> **플러그인**: 이 재설계는 기존 `work-dobby`를 수정하지 않고 **새 플러그인 `go-dobby`**로 추가한다. 스킬명은 **`dobby-` 접두어**로 통일한다.
+
+| 스킬 | 역할 | 호출 주체 |
+|------|------|-----------|
+| `dobby-order` | 유일 진입점 — 진입 판단·팬아웃 K·착수·구현·리뷰·통합 오케스트레이션 (구 `i-order-you-to-develop`) | **사용자** |
+| `dobby-start` | 에이전트별 착수·분석·테스트목록 초안 (구 `issue-start`+`agent-start` 통합) | 내부(오케스트레이터) |
+| `dobby-impl` | 에이전트별 구현·자기 브랜치 푸시·리뷰 피드백 반영 (구 `issue-impl`+`agent-impl` 통합, **셀프리뷰 제거**) | 내부 |
+| `dobby-produce` | 에이전트별 **비소스 산출**(문서·리서치·분석 등). `work-type=비소스`면 dobby-impl 대신 호출. repo 산출은 브랜치 푸시, meta 산출은 `deliverables/` | 내부 |
+| `dobby-test` | 실브라우저 검증 (자동 해결 승격 제거) | **사용자** |
+| `dobby-resolve` | 해결 표시 — 상태만 `해결`, 폴더·워크트리 유지(비파괴) | **사용자** |
+| `dobby-end` | 워크트리 정리 — 제거 전 스냅샷 + `worktree remove`(브랜치 보존) | **사용자** |
+
+- **리뷰 소유권**: 코드리뷰는 **오케스트레이터(`dobby-order` P5)의 별도 리뷰 에이전트가 단독 수행**한다. `dobby-impl`은 셀프리뷰하지 않는다(오케스트레이터 리뷰와 중복이므로 제거). 리뷰어≠구현자 원칙은 P5 리뷰 에이전트가 충족하며, K=1도 동일(별도 리뷰 에이전트 1회). K≥2의 범위 준수 검증은 오케스트레이터 리뷰만 가능하다.
+- **비소스 산출**: `work-type = 비소스`(문서·리서치 등)는 `dobby-produce`가 담당한다(dobby-impl 대응물, 브라우저 테스트 없음·P5 내용 리뷰, §8). code/비소스는 한 오케스트레이션에 섞일 수 있다.
+
+### 통합으로 사라지는 것 (마이그레이션)
+
+| 기존 work-dobby(7) | 신규 go-dobby |
+|---------|------|
+| `issue-start` + `agent-start` | → `dobby-start` (베이스가 로컬/원격 모두 처리, 상태값 통합) |
+| `issue-impl` + `agent-impl` | → `dobby-impl` (자동 베이스 머지 제거로 동작 동일화) |
+| `issue-end`(해결승격+정리 혼재) | → `dobby-resolve`(해결) + `dobby-end`(정리) 분리 |
+| `i-order-you-to-develop` | → `dobby-order` (유일 진입점으로 확장) |
+| `issue-test` | → `dobby-test` (자동 해결 승격 제거) |
+
+---
+
+## 3. 진입 모드
+
+`dobby-order`가 받는 입력 형태:
+
+- (a) **이슈 키/URL**: 이슈 안의 기획·피그마·디자인을 확인해 진행.
+- (b) **이슈 + 기획서/피그마 입력**: 함께 받아 진행.
+- (c) **문서 전용(이슈 없음)**: 특정 문서만 주고 작업 요청. 이슈 키가 없으므로 **작업 키를 생성**한다.
+
+### 작업 키 생성 규칙 (문서 전용 모드)
+
+- 규칙: **`TASK-{slug}`** — `slug`는 문서 제목/주제에서 뽑은 짧은 영문 kebab. 충돌 시 `-YYYYMMDD` 부가.
+- 예: `TASK-login-refactor`
+- 이 키가 이슈 키 자리를 그대로 대체: 폴더 `$DOBBY_META/TASK-{slug}/`, 브랜치 `feature/TASK-{slug}`.
+- Jira 조회·상태 전환은 **건너뛴다.**
+- 생성한 작업 키는 **시작 계획 게이트(§7 gate #1)에서 사용자에게 1회 확인**한다(canonical 출처가 없으므로).
+
+이슈 키든 작업 키든 이후 오케스트레이션·폴더·상태 규격은 완전히 동일하다.
+
+---
+
+## 4. 팬아웃 K 결정
+
+이슈 타입이 아니라 **코드 범위(파일 오너십)**로 판단한다. 타입·하위이슈는 강한 힌트.
+
+1. 이슈/문서 + 하위이슈 탐색(`parent=` JQL) + (멀티 repo면) repo별 읽기전용 Explore로 범위 분석.
+2. 분리 가능한 오너십 영역 도출:
+   - 병렬 가능한 영역 **2개 이상** → `K = 영역 수`(multi-agent). 영역 1:1로 하위이슈 정렬/생성.
+   - **한 덩어리(cohesive)** → `K=1`(single-agent). 하위이슈 불필요.
+   - **멀티 repo → repo당 최소 1 에이전트**(repo 단위 오너십 = 충돌 원천 차단).
+3. 인자 강제 허용: `subtasks=키,키`(명시 분해) / `agents=1`(단일 강제). 미지정 시 자동 판단.
+
+### 브랜치 토폴로지
+
+- **K=1**: 부모(에픽) 브랜치 없이 실제 베이스 위에 바로. `master(베이스) └ bugfix/{키}`.
+- **K≥2**: 부모 브랜치 위에 에이전트별 브랜치. `master └ feature/{루트키} ├ feature/{하위1} └ feature/{하위2}`.
+- 부모 브랜치는 **K≥2일 때만** 생성. 통합(P7)도 K=1이면 no-op.
+
+---
+
+## 5. 폴더 구조
+
+모든 경로는 `$DOBBY_META`(= `${DOBBY_META_PATH:-$DOBBY_WORKSPACE/meta}`) 기준. 워크트리는 `$DOBBY_WORKSPACE/subtree/{repo}-{키}`.
+
+### 이슈/작업 폴더 (루트든 하위든 공통)
+
+```
+$DOBBY_META/{키}/
+├── status.md            # 진행 상태 인덱스 (§6) — 현재 단계·스킬 + 팬아웃 K + 에이전트 상태표
+├── analysis.md          # 착수·분석·수정 설계            (dobby-start)
+├── implementation.md    # 구현 요약 (code 작업)          (dobby-impl)
+├── produce.md           # 산출 요약 (비소스 작업)        (dobby-produce)
+├── test-plan.md         # 테스트 목록(초안→확정)          (dobby-start 초안, dobby-test 확정)
+├── test-runs/           # 테스트 실행(반복) — 폴더        (dobby-test)
+│   └── {YYYYMMDD-HHMMSS}/
+│       ├── result.md
+│       └── *.png
+├── deliverables/        # 비소스 meta 산출물 — 폴더       (dobby-produce, repo 밖 산출 시)
+├── code-changes/        # 종료 전 코드 스냅샷(멀티 repo) — 폴더  (dobby-end)
+│   ├── {repo}.commits
+│   └── {repo}.diff
+└── summary.md           # 종료 서머리                    (dobby-end)
+```
+
+- `implementation.md`/`produce.md`는 work-type에 따라 하나만 생긴다(code면 implementation, 비소스면 produce). `deliverables/`는 비소스 중 **repo 밖 산출**일 때만.
+
+### 오케스트레이션 메타 (K≥2일 때 루트 키 폴더에만 추가)
+
+```
+$DOBBY_META/{루트키}/
+├── orchestration.md     # 관제탑 보드(범위배분·이벤트로그)
+├── agents/{슬러그}.md · review-agent.md
+├── reviews/round-{n}/{슬러그}.md
+└── agent-logs.json
+```
+
+### 파일 vs 폴더 규칙
+
+- **1회성/최신 스냅샷으로 덮어씀 → 루트 파일**: `status.md`, `analysis.md`, `implementation.md`/`produce.md`, `test-plan.md`, `summary.md`, `orchestration.md`, `agent-logs.json`.
+- **반복·다수 인스턴스(회차·repo·에이전트·라운드) → 폴더**: `test-runs/`(테스트 반복), `deliverables/`(비소스 산출물), `code-changes/`(멀티 repo), `agents/`, `reviews/round-{n}/`.
+- K=1이면 `orchestration.md`·`agents/`·`reviews/`는 생략(status.md의 에이전트 상태표 1행으로 충분).
+
+---
+
+## 6. status.md 스키마 (단일 진행 인덱스)
+
+이슈당 status.md는 **1개**. 이 파일만 열면 현재 단계·담당 스킬·단계별 요약·에이전트·테스트 이력이 다 보인다.
+
+```markdown
+# {키} 상태
+
+## 이슈/작업
+- 키 · 타입 · 제목 · Jira URL(문서 전용이면 문서 경로)
+
+## 현재 단계
+- **단계**: {착수|분석|구현|리뷰|통합|검증|해결|종료}
+- **담당 스킬**: {스킬명}
+- **갱신**: {일시}
+
+## 팬아웃
+- **에이전트 수(K)**: {n}  ({K=1: 부모 브랜치 없음 / K≥2: 부모 브랜치 feature/{루트키}})
+
+## 에이전트
+| 슬러그 | 이슈/작업 | 브랜치 | 상태 | 라운드 | 갱신 |
+
+## 단계별 진행
+| 단계 | 스킬 | 상태 | 산출물 | 갱신 |
+| 착수·분석 | dobby-start | … | analysis.md | … |
+| 구현/산출 | dobby-impl / dobby-produce | … | implementation.md / produce.md | … |
+| 검증 | dobby-test (code만) | … | test-runs/{시각}/ | … |
+| 해결 | dobby-resolve | … | (status ## 해결) | … |
+| 종료 | dobby-end | … | summary.md | … |
+
+## 테스트 실행 이력   (dobby-test가 회차마다 누적)
+| 회차 | 시작 | 상태 | 성공/실패/skip | 폴더 |
+
+## 워크트리 / 브랜치
+| repo | 브랜치 | 경로 |
+
+## 해결   (dobby-resolve가 기록)
+- 근거(리뷰 클린·테스트 결과 폴더·통합 브랜치) · 일시
+```
+
+---
+
+## 7. 오케스트레이션 흐름 — 전이 조건과 게이트
+
+단계 전이는 **객관적 조건**으로 자동 판단한다(사용자 매번 확인 아님).
+
+| Phase 전이 | 판단 조건(객관적) | 사용자 확인 |
+|-----------|-------------------|:-----------:|
+| 진입 → 팬아웃·계획 확정 | 이슈/문서 + 하위이슈 탐색 + 범위 분석 | ✅ **초기 1회** |
+| 셋업(P0) → 분석(P1) | 브랜치·워크트리 생성됨 | 자동 |
+| 분석(P1) → 검증(P2) | 모든 에이전트 `analysis.md` 산출 | 자동 |
+| 검증(P2) → 배분(P3) | 분석이 기획·Jira/문서와 일치 | 자동(순수 제품/디자인 미결만 확인) |
+| 배분(P3) → 구현(P4) | 파일 오너십 화이트리스트 확정 | 자동(겹치면 순차 자동 결정) |
+| 구현(P4) → 리뷰(P5) | 에이전트 "구현·푸시 완료" 보고 | 자동 |
+| 리뷰(P5) → 루프(P6) | 리뷰 findings 산출 | 자동 |
+| 루프(P6) → 통합 | **blocking(blocker·major)=0** | 자동(최대 라운드 초과 시 확인) |
+| 통합(P7) | 리뷰 클린 브랜치 → 부모 브랜치 머지 | 자동(master는 금지) |
+
+### 확인 게이트 (좁음 — 이때만 사용자를 부른다)
+
+1. **초기 계획 1회**: 팬아웃 K, 하위이슈/작업 키, 범위 배분.
+2. **순수 제품/디자인 결정**: 코드로 확정 불가한 것. (코드로 확인 가능한 건 묻지 않고 직접 확인)
+3. **최대 리뷰 라운드 초과**(기본 3).
+4. **코드 외 작업**: 인프라·외부 콘솔 설정·배포 순서.
+5. **메인 브랜치 밖 반영**(배포 등). — master PR·머지는 확인이 아니라 **금지**.
+
+> 게이트에 닿기 전 규칙(§8-3): 사용자 결정이 필요해 보이면 **먼저 관련 코드를 다시 상세 분석**해 스스로 판단 불가한지 재확인하고, 그래도 필요할 때만 묻는다.
+
+---
+
+## 8. docs 참조 메커니즘 (분석·설계·게이트의 필수 폴백)
+
+**"docs 참조"의 정의 (2단계 조회):**
+1. `$DOBBY_DOCS_ROOT`(예: `~/work/repos/docs`)의 문서를 확인한다 — **`$DOBBY_DOCS_ROOT/{repo}.md`(파일) 또는 `$DOBBY_DOCS_ROOT/{repo}/`(폴더)** 중 존재하는 것을 읽는다(둘 다 있으면 폴더 우선).
+2. 문서에 없으면 `$DOBBY_REPOS_ROOT/{repo}`(예: `~/work/repos/{repo}`)의 **실제 소스 코드**를 읽어 확인한다.
+- 문서와 코드가 다르면 **코드가 진실**(문서 stale 가능).
+- `$DOBBY_DOCS_ROOT` 미설정이면 곧장 소스 코드 확인으로 간다.
+
+**트리거 규칙 (반드시 적용):**
+
+1. **외부 repo 참조 (분석 단계, `start`)**: 최초 분석 중 **현재 repo에서 알 수 없는 외부 repo 참조**가 나오면 → **무조건 docs 참조**로 그 외부 repo를 분석한다(현재 워크트리엔 외부 repo 코드가 없으므로 `docs/{외부repo}` → `$DOBBY_REPOS_ROOT/{외부repo}` 순).
+2. **구현 전 확인 (설계 단계, `impl`/`start`)**: 애매하거나 확인이 필요한데 **현재 코드로 확인 불가**하면 → docs 참조로 추가 분석하고 **반드시 사실 기반으로만 설계**한다.
+3. **사용자 결정 게이트 강화 (`i-order`)**: 사용자 결정이 필요해 보이면 → 묻기 전에 **관련 코드를 다시 상세 분석**해 스스로 판단 불가한지 재확인하고, 그래도 필요할 때만 묻는다.
+
+**반영 위치**: `dobby-start`(분석) · `dobby-impl`/`dobby-produce`(구현·산출 전 설계) · `dobby-order`(게이트 직전).
+
+### work-type 라우팅
+
+- 오케스트레이터는 배분(P3) 시 각 에이전트 작업의 **work-type**을 분류한다.
+  - `work-type = code` → `dobby-impl`(구현) + `dobby-test`(브라우저 검증)
+  - `work-type = 비소스`(문서·리서치·분석·설정 등) → `dobby-produce`(산출) + **P5 내용 리뷰**(브라우저 테스트 없음). 산출물이 repo면 자기 브랜치 푸시, repo 밖이면 `$DOBBY_META/{키}/deliverables/`.
+- 한 오케스트레이션에 두 work-type이 섞일 수 있다(에이전트별로 라우팅).
+
+---
+
+## 9. 생명주기 · 상태 머신
+
+```
+dobby-order                       dobby-test       dobby-resolve       dobby-end
+(착수→분석→구현/산출→리뷰→통합) →  (검증, code만) → (해결 표시)    →   (사용자 직접 정리)
+                                                   폴더 유지            워크트리 제거·요약
+```
+
+```
+착수 → 분석완료 → 구현중/산출중 → (리뷰중 ↔ 수정중) → 통합완료 → 검증완료 → 해결 → 종료
+ └dobby-start┘  └── dobby-impl/produce · 오케스트레이터 ──┘  └dobby-test┘  │      │
+                                                        dobby-resolve┘  dobby-end┘
+```
+
+- **dobby-test는 더 이상 자동으로 `해결`을 올리지 않는다.** `검증완료`까지만 표시·리포트. 비소스 작업은 dobby-test 없이 P5 내용 리뷰로 검증.
+- **`해결`(dobby-resolve)**: 상태만 표시, 워크트리·폴더 유지. 추가 수정 가능(폴더가 살아 있으니 dobby-impl/dobby-produce·오케스트레이터로 이어서).
+- **`종료`(dobby-end)**: 사용자 직접 실행. code-changes 스냅샷 → `worktree remove`(브랜치 보존) → summary.md. 메타 폴더는 보존.
+  - 제거 기준: `해결` 상태 AND 미푸시 커밋 없음. `$DOBBY_WORKSPACE/subtree/` 밖 안 건드림.
+
+---
+
+## 10. 병합 정책
+
+- **K=1**: 에이전트는 자기 브랜치까지(리뷰 완료·푸시). master 반영은 사용자 수동 PR.
+- **K≥2**: 에이전트 → 부모(에픽) 브랜치 통합. master 반영은 사용자 수동 PR.
+- **⛔ 금지**: 어떤 경우에도 `$DOBBY_DEFAULT_BASE`로 PR·머지하지 않는다.
+- 워크트리는 `node_modules`가 없어 커밋 시 `--no-verify`로 훅을 건너뛴다.
+
+---
+
+## 11. 열린 항목 (구현 착수 전 확정 필요)
+
+- ~~설정 기본값 (`DOBBY_REPOS_ROOT`·`DOBBY_DOCS_ROOT`)~~ → **확정·반영 완료**: `DOBBY_REPOS_ROOT="$HOME/work/repos"`, `DOBBY_DOCS_ROOT="$HOME/work/repos/docs"`(기본 활성화). 문서는 `{repo}.md` 또는 `{repo}/` 둘 다 지원.
+- ~~스킬 파일명 최종 확정~~ → **확정**: `dobby-` 접두어로 통일(`dobby-order`/`start`/`impl`/`produce`/`test`/`resolve`/`end`).
+- ~~`dobby-produce` 추가 시점~~ → **추가 완료**: 비소스 산출 building block 구현됨(§8). 향후 비소스 검증이 정교해지면 별도 검증 스킬을 고려한다.

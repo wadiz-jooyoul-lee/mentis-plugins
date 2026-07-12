@@ -13,26 +13,7 @@ description: issue-start를 확장한 멀티 에이전트 셋업+분석 스킬. 
 
 ## 설정 (첫 실행 시 확인)
 
-작업을 시작하기 전에 `~/.config/work-dobby/config.env`를 읽어 환경 변수를 불러온다(`[ -f ~/.config/work-dobby/config.env ] && source ~/.config/work-dobby/config.env`). **이미 값이 있는 변수는 묻지 않는다.** 빠진 변수만 아래 규칙으로 채운다.
-
-- **기본값이 있는 변수**: 현재 기본값을 보여주고 그대로 쓸지 바꿀지 물어본다.
-- **선택 변수**(생략 가능): 생략 시 어떤 영향이 있는지 설명하고 생략을 허용한다.
-- 사용자가 정한 값은 설정 파일에 저장하고(`mkdir -p ~/.config/work-dobby` 후 기록) `export` 한다.
-
-- **메타 루트**: `DOBBY_META="${DOBBY_META_PATH:-$DOBBY_WORKSPACE/meta}"` — `DOBBY_META_PATH`가 설정돼 있으면 그 경로, 없으면 `$DOBBY_WORKSPACE/meta`. 이하 메타 경로는 `$DOBBY_META` 기준.
-
-| 변수 | 뜻 | 기본값 |
-|------|-----|--------|
-| `JIRA_BASE_URL` | Jira 사이트 주소 | `https://wadiz.atlassian.net` |
-| `DOBBY_WORKSPACE` | 작업 루트(하위에 `subtree/`·`meta/`) | `$HOME/work/dobby-workspace` |
-| `DOBBY_META_PATH` | 메타 경로 직접 지정(선택) | (없음 → `$DOBBY_WORKSPACE/meta`) |
-| `DOBBY_DEFAULT_BASE` | 기본 베이스 브랜치 | `master` |
-| `DOBBY_REPOS_ROOT` | 원본 소스 저장소들이 있는 루트 | `$HOME/work` |
-| `DOBBY_ENV_MAP` | 테스트 환경→호스트 매핑 | `dev=dev.wadiz.io,rc=rc.wadiz.kr,rc2=rc2.wadiz.kr,rc4=rc4.wadiz.io` |
-| `DOBBY_DOCS_ROOT` | 참고 문서 루트(선택) | (없음 → 참고 문서 없이 진행) |
-| `TEST_LOGIN_ID` / `TEST_LOGIN_PW` | 테스트 계정(선택) | (없음 → 로그인 필요 테스트는 건너뜀) |
-
-워크트리(작업 폴더)는 `$DOBBY_WORKSPACE/subtree/`, 메타 파일은 `$DOBBY_META/`에 둔다.
+작업을 시작하기 전에 **`${CLAUDE_PLUGIN_ROOT}/reference/config.md`의 "설정 절차"를 그대로 따른다**: `~/.config/work-dobby/config.env`를 source 해 환경 변수를 불러오고, **이미 값이 있는 변수는 묻지 않고** 빠진 값만 규칙대로 채워 저장·export 한다. 메타 루트 `DOBBY_META`, 변수 목록·기본값, 폴더 배치(워크트리 `$DOBBY_WORKSPACE/subtree/` · 메타 `$DOBBY_META/`)는 모두 그 문서에 있다. 이하 메타 경로는 `$DOBBY_META` 기준.
 
 ## 입력
 
