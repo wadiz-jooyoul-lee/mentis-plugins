@@ -32,8 +32,9 @@ Jira 이슈 생명주기와 멀티 에이전트 오케스트레이션을 담은 
 |------|------|------|
 | `dobby-order` | 유일 진입점 — 팬아웃 K 판단·착수·구현·리뷰·통합 오케스트레이션 | 사용자 |
 | `dobby-start` | 에이전트별 착수·분석 (베이스 로컬/원격 모두 처리, docs 2단계 참조) | 내부 |
-| `dobby-impl` | 에이전트별 구현·자기 브랜치 푸시·리뷰 피드백 반영 | 내부 |
-| `dobby-test` | 실브라우저 검증 (자동 해결 승격 없음) | 사용자 |
+| `dobby-impl` | 에이전트별 구현·자기 브랜치 푸시·리뷰 피드백 반영 (code) | 내부 |
+| `dobby-produce` | 에이전트별 비소스 산출 (문서·리서치·분석 등, code 대신) | 내부 |
+| `dobby-test` | 실브라우저 검증 (code만, 자동 해결 승격 없음) | 사용자 |
 | `dobby-resolve` | 해결 표시 — 상태만 `해결`, 폴더 유지(비파괴) | 사용자 |
 | `dobby-end` | 워크트리 정리 — 스냅샷 후 제거(브랜치 보존) | 사용자 |
 
@@ -91,7 +92,7 @@ mentis-plugins/
         │   └── redesign-spec.md         # 재설계 SSOT
         └── skills/
             ├── dobby-order/             # 유일 진입점
-            ├── dobby-start/  dobby-impl/
+            ├── dobby-start/  dobby-impl/  dobby-produce/
             └── dobby-test/  dobby-resolve/  dobby-end/
 ```
 
