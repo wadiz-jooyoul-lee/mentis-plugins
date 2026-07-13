@@ -11,7 +11,7 @@ description: 이슈/작업이 (지금으로선) 다 됐다고 판단될 때, 상
 
 ## 설정 (첫 실행 시 확인)
 
-작업을 시작하기 전에 **`${CLAUDE_PLUGIN_ROOT}/reference/config.md`의 "설정 절차"를 그대로 따른다**: `~/.config/work-dobby/config.env`를 source 해 환경 변수를 불러오고, **이미 값이 있는 변수는 묻지 않고** 빠진 값만 규칙대로 채워 저장·export 한다. 메타 루트 `DOBBY_META`, 변수 목록·기본값, 폴더 배치(워크트리 `$DOBBY_WORKSPACE/subtree/` · 메타 `$DOBBY_META/`)는 모두 그 문서에 있다. 이하 메타 경로는 `$DOBBY_META` 기준.
+작업을 시작하기 전에 **`${CLAUDE_PLUGIN_ROOT}/reference/config.md`의 "설정 절차"를 그대로 따른다**: `~/.config/go-dobby/config.env`를 source 해 환경 변수를 불러오고, **이미 값이 있는 변수는 묻지 않고** 빠진 값만 규칙대로 채워 저장·export 한다. 메타 루트 `ORCHESTRATION_META`, 변수 목록·기본값, 폴더 배치(워크트리 `$ORCHESTRATION_WORKSPACE/subtree/` · 메타 `$ORCHESTRATION_META/`)는 모두 그 문서에 있다. 이하 메타 경로는 `$ORCHESTRATION_META` 기준.
 
 ## 입력
 
@@ -19,14 +19,14 @@ description: 이슈/작업이 (지금으로선) 다 됐다고 판단될 때, 상
 
 ## 사전 조건
 
-- `$DOBBY_META/{키}/status.md`가 있어야 한다. 없으면 "먼저 dobby-order로 진행하라"고 안내하고 중단한다.
+- `$ORCHESTRATION_META/{키}/status.md`가 있어야 한다. 없으면 "먼저 dobby-order로 진행하라"고 안내하고 중단한다.
 
 ## 절차
 
 ### 1. 상태·근거 확인 (사실 기반)
 - `status.md`의 현재 단계와 `단계별 진행`·`테스트 실행 이력`을 읽는다.
 - **해결 근거를 확인한다**:
-  - 최신 `$DOBBY_META/{키}/test-runs/{시각}/result.md`(있으면)의 집계 — **전부 PASS 권장**. 실패/중단이 있으면 그대로 해결로 올리지 말고 사용자에게 확인한다.
+  - 최신 `$ORCHESTRATION_META/{키}/test-runs/{시각}/result.md`(있으면)의 집계 — **전부 PASS 권장**. 실패/중단이 있으면 그대로 해결로 올리지 말고 사용자에게 확인한다.
   - 리뷰 클린 여부(`reviews/`) 및 루트 브랜치 통합 완료(에이전트가 여럿이면 각 브랜치가 루트로 머지됨; 하나면 자기 브랜치가 곧 루트).
 - 테스트 결과가 없어도 **사용자가 명시적으로 해결로 표시하라고 하면** 그 사실을 근거로 기록하고 진행한다(근거에 "사용자 지정"으로 남김).
 
@@ -39,7 +39,7 @@ description: 이슈/작업이 (지금으로선) 다 됐다고 판단될 때, 상
   - **근거**: 리뷰 클린({round}) · 테스트 결과 `test-runs/{시각}/`(집계 성공X/실패0/skip Z) · 통합 브랜치 {feature/루트키 또는 자기 브랜치}
   - **비고**: {추가 수정 여지 등}
   ```
-- **삭제·제거는 하지 않는다**: 워크트리(`$DOBBY_WORKSPACE/subtree/{repo}-{키}`)와 메타 폴더(`$DOBBY_META/{키}/`)를 그대로 유지한다.
+- **삭제·제거는 하지 않는다**: 워크트리(`$ORCHESTRATION_WORKSPACE/subtree/{repo}-{키}`)와 메타 폴더(`$ORCHESTRATION_META/{키}/`)를 그대로 유지한다.
 - **Jira 상태는 건드리지 않는다**(메타만 갱신). 실제 이슈 상태 전환이 필요하면 사용자가 직접 한다.
 
 ### 3. 안내
