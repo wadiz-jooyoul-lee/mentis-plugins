@@ -1,6 +1,6 @@
 ---
 name: dobby-test
-description: 구현한 내용이 실제 환경에서 정상 동작하는지 chrome-devtools로 검증하는 스킬. dobby-start가 만든 test-plan.md가 있으면 재사용하고 없으면 변경(diff)을 분석해 테스트 목록을 도출한 뒤, 국내/글로벌 국가 전환·로그인을 포함해 실제 브라우저로 테스트하고 결과를 $DOBBY_META/{키}/test-runs/{시각}/ 에 회차별로(덮어쓰지 않게) 저장하고 화면에도 출력한다. 진행 상태는 이슈 폴더 루트의 단일 status.md(테스트 실행 이력 표·현재 단계)를 갱신한다. 검증은 여기까지이며 상태를 자동으로 "해결"로 올리지 않는다(해결 표시는 dobby-resolve 담당). 사용법 /dobby-test {키|브랜치} 또는 /dobby-test (현재 브랜치).
+description: 구현한 내용이 실제 환경에서 정상 동작하는지 chrome-devtools로 검증하는 스킬. dobby-start가 만든 test-plan.md가 있으면 재사용하고 없으면 변경(diff)을 분석해 테스트 목록을 도출한 뒤, 국내/글로벌 국가 전환·로그인을 포함해 실제 브라우저로 테스트하고 결과를 $ORCHESTRATION_META/{키}/test-runs/{시각}/ 에 회차별로(덮어쓰지 않게) 저장하고 화면에도 출력한다. 진행 상태는 이슈 폴더 루트의 단일 status.md(테스트 실행 이력 표·현재 단계)를 갱신한다. 검증은 여기까지이며 상태를 자동으로 "해결"로 올리지 않는다(해결 표시는 dobby-resolve 담당). 사용법 /dobby-test {키|브랜치} 또는 /dobby-test (현재 브랜치).
 ---
 
 # dobby-test
@@ -11,11 +11,11 @@ description: 구현한 내용이 실제 환경에서 정상 동작하는지 chro
 
 ## 설정 (첫 실행 시 확인)
 
-작업을 시작하기 전에 **`${CLAUDE_PLUGIN_ROOT}/reference/config.md`의 "설정 절차"를 그대로 따른다**: `~/.config/work-dobby/config.env`를 source 해 환경 변수를 불러오고, **이미 값이 있는 변수는 묻지 않고** 빠진 값만 규칙대로 채워 저장·export 한다. 메타 루트 `DOBBY_META`, 변수 목록·기본값, 폴더 배치(워크트리 `$DOBBY_WORKSPACE/subtree/` · 메타 `$DOBBY_META/`)는 모두 그 문서에 있다. 이하 메타 경로는 `$DOBBY_META` 기준.
+작업을 시작하기 전에 **`${CLAUDE_PLUGIN_ROOT}/reference/config.md`의 "설정 절차"를 그대로 따른다**: `~/.config/go-dobby/config.env`를 source 해 환경 변수를 불러오고, **이미 값이 있는 변수는 묻지 않고** 빠진 값만 규칙대로 채워 저장·export 한다. 메타 루트 `ORCHESTRATION_META`, 변수 목록·기본값, 폴더 배치(워크트리 `$ORCHESTRATION_WORKSPACE/subtree/` · 메타 `$ORCHESTRATION_META/`)는 모두 그 문서에 있다. 이하 메타 경로는 `$ORCHESTRATION_META` 기준.
 
 ## 산출물 (단일 이슈 폴더)
 
-이슈/작업 루트: `$DOBBY_META/{키}/`
+이슈/작업 루트: `$ORCHESTRATION_META/{키}/`
 
 - `status.md` — **단일 진행 인덱스**(이슈 폴더에 하나). 테스트 진행 중 현재 단계·`테스트 실행 이력` 표를 실시간 갱신한다.
 - `test-plan.md` — **테스트 목록**(dobby-start가 초안 생성). 없으면 이 스킬이 diff로 생성. self-contained.
@@ -31,12 +31,12 @@ description: 구현한 내용이 실제 환경에서 정상 동작하는지 chro
 - 입력이 있으면 그 키/브랜치, 없으면 `git rev-parse --abbrev-ref HEAD`. 키로 Jira를 조회해 맥락 파악(작업 키면 대상 문서·analysis.md로 파악).
 
 ### 2. 테스트 목록 확보 — 기존 우선, 없으면 생성
-- `$DOBBY_META/{키}/test-plan.md`가 **있으면**(대개 dobby-start 작성) 기본으로 **재사용**한다. 실제 diff와 대조해 빠진 부분만 보강하고, `미정`으로 남은 환경은 3단계에서 채운다.
+- `$ORCHESTRATION_META/{키}/test-plan.md`가 **있으면**(대개 dobby-start 작성) 기본으로 **재사용**한다. 실제 diff와 대조해 빠진 부분만 보강하고, `미정`으로 남은 환경은 3단계에서 채운다.
 - **없으면**: 베이스 대비 변경 파일 확인(`git diff --name-only origin/{base}...{branch}`) → 사용자에게 보이는 페이지/기능으로 매핑 → 시나리오(S1, S2…)를 도출해 `test-plan.md`에 저장(self-contained: 대상 URL·사전조건·조작·기대·검증 방법·테스트 데이터+재현 SQL). 재실행 시 최신 분석으로 덮어쓴다.
 
 ### 3. 테스트 환경 결정
 - 브랜치가 **머지된 환경**에서 테스트한다. `gh pr list --head {branch} --state all --json number,baseRefName,mergedAt,state`로 머지 대상(base)을 확인해 env를 판단.
-- env를 **`DOBBY_ENV_MAP`**으로 접속 호스트에 대응(기본: dev=dev.wadiz.io, rc=rc.wadiz.kr, rc2=rc2.wadiz.kr, rc4=rc4.wadiz.io). **매핑에 없으면 추측하지 말고** 사용자에게 직접 테스트를 부탁한다.
+- env를 **`ORCHESTRATION_ENV_MAP`**으로 접속 호스트에 대응(기본: dev=dev.wadiz.io, rc=rc.wadiz.kr, rc2=rc2.wadiz.kr, rc4=rc4.wadiz.io). **매핑에 없으면 추측하지 말고** 사용자에게 직접 테스트를 부탁한다.
 - PR이 없거나 머지 안 됐거나 환경이 애매하면 **중단하고 사용자에게** 어느 환경에서 테스트할지 묻는다.
 
 ### 4. 국내/글로벌 판별 + 국가 전환
@@ -49,7 +49,7 @@ description: 구현한 내용이 실제 환경에서 정상 동작하는지 chro
 
 ### 6. 테스트 수행
 #### 6-0. 시작 전 준비 (조작 전에 반드시 먼저)
-1. **결과 폴더 생성**: `date '+%Y%m%d-%H%M%S'`로 `$DOBBY_META/{키}/test-runs/{YYYYMMDD-HHMMSS}/`를 `mkdir -p`(기존 폴더 안 덮음).
+1. **결과 폴더 생성**: `date '+%Y%m%d-%H%M%S'`로 `$ORCHESTRATION_META/{키}/test-runs/{YYYYMMDD-HHMMSS}/`를 `mkdir -p`(기존 폴더 안 덮음).
 2. **status.md 갱신**: 현재 단계 `검증`, `테스트 실행 이력` 표에 이번 회차 행 추가(회차 = 기존 `test-runs/` 폴더 수 + 1, 상태 `테스트중`, 진행률 `0/N`).
 3. **result.md 골격 생성**: 위 폴더에 시나리오 표 행을 미리 깔아둔다(결과·판정 빈칸).
 

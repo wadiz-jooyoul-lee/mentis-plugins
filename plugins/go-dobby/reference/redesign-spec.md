@@ -11,7 +11,7 @@
 - **단일 진입점**: 모든 작업은 `dobby-order` 하나로 시작한다. 단독 이슈 해결 경로(구 issue-start 직접 실행)는 없앤다.
 - **항상 오케스트레이션, 팬아웃 K**: 진입 후 내부에서 필요한 에이전트 수 `K`를 판단한다. `K=1`은 팬아웃 수가 1일 뿐이며 **별도 경로도, 구조적 특수 케이스도 아니다.** 메타(orchestration.md·계약·reviews)·절차·산출물은 **K와 무관하게 동일**하고, K=1은 에이전트·계약·보드 행이 1개가 될 뿐이다. **K에 따라 파일 생성/생략을 분기하지 않는다.**
 - **자율 기본 + 좁은 게이트**: 단계 전이는 객관적 조건으로 자동 진행하고, 사용자 확인은 좁은 게이트에서만 받는다.
-- **병합 정책 통일**: 어떤 경우에도 정식 배포 베이스(`$DOBBY_DEFAULT_BASE`)로 PR·머지하지 않는다. 최종 반영은 항상 사용자의 수동 PR.
+- **병합 정책 통일**: 어떤 경우에도 정식 배포 베이스(`$ORCHESTRATION_DEFAULT_BASE`)로 PR·머지하지 않는다. 최종 반영은 항상 사용자의 수동 PR.
 - **사실 기반**: 모든 분석·설계·판단은 확인된 사실(코드·문서·조회 결과)에만 근거한다. 추측 금지.
 
 ---
@@ -57,7 +57,7 @@
 
 - 규칙: **`TASK-{slug}`** — `slug`는 문서 제목/주제에서 뽑은 짧은 영문 kebab. 충돌 시 `-YYYYMMDD` 부가.
 - 예: `TASK-login-refactor`
-- 이 키가 이슈 키 자리를 그대로 대체: 폴더 `$DOBBY_META/TASK-{slug}/`, 브랜치 `feature/TASK-{slug}`.
+- 이 키가 이슈 키 자리를 그대로 대체: 폴더 `$ORCHESTRATION_META/TASK-{slug}/`, 브랜치 `feature/TASK-{slug}`.
 - Jira 조회·상태 전환은 **건너뛴다.**
 - 생성한 작업 키는 **시작 계획 게이트(§7 gate #1)에서 사용자에게 1회 확인**한다(canonical 출처가 없으므로).
 
@@ -87,12 +87,12 @@
 
 ## 5. 폴더 구조
 
-모든 경로는 `$DOBBY_META`(= `${DOBBY_META_PATH:-$DOBBY_WORKSPACE/meta}`) 기준. 워크트리는 `$DOBBY_WORKSPACE/subtree/{repo}-{키}`.
+모든 경로는 `$ORCHESTRATION_META`(= `${ORCHESTRATION_META_PATH:-$ORCHESTRATION_WORKSPACE/meta}`) 기준. 워크트리는 `$ORCHESTRATION_WORKSPACE/subtree/{repo}-{키}`.
 
 ### 이슈/작업 폴더 (루트든 하위든 공통)
 
 ```
-$DOBBY_META/{키}/
+$ORCHESTRATION_META/{키}/
 ├── status.md            # 진행 상태 인덱스 (§6) — 현재 단계·스킬 + 팬아웃 K + 에이전트 상태표
 ├── analysis.md          # 착수·분석·수정 설계            (dobby-start)
 ├── implementation.md    # 구현 요약 (code 작업)          (dobby-impl)
@@ -114,7 +114,7 @@ $DOBBY_META/{키}/
 ### 오케스트레이션 메타 (K와 무관하게 항상, 루트 키 폴더에)
 
 ```
-$DOBBY_META/{루트키}/
+$ORCHESTRATION_META/{루트키}/
 ├── orchestration.md     # 관제탑 보드(범위배분·이벤트로그)
 ├── agents/{슬러그}.md · review-agent.md
 ├── reviews/round-{n}/{슬러그}.md
@@ -201,14 +201,14 @@ $DOBBY_META/{루트키}/
 ## 8. docs 참조 메커니즘 (분석·설계·게이트의 필수 폴백)
 
 **"docs 참조"의 정의 (2단계 조회):**
-1. `$DOBBY_DOCS_ROOT`(예: `~/work/repos/docs`)의 문서를 확인한다 — **`$DOBBY_DOCS_ROOT/{repo}.md`(파일) 또는 `$DOBBY_DOCS_ROOT/{repo}/`(폴더)** 중 존재하는 것을 읽는다(둘 다 있으면 폴더 우선).
-2. 문서에 없으면 `$DOBBY_REPOS_ROOT/{repo}`(예: `~/work/repos/{repo}`)의 **실제 소스 코드**를 읽어 확인한다.
+1. `$ORCHESTRATION_DOCS_ROOT`(예: `~/work/repos/docs`)의 문서를 확인한다 — **`$ORCHESTRATION_DOCS_ROOT/{repo}.md`(파일) 또는 `$ORCHESTRATION_DOCS_ROOT/{repo}/`(폴더)** 중 존재하는 것을 읽는다(둘 다 있으면 폴더 우선).
+2. 문서에 없으면 `$ORCHESTRATION_REPOS_ROOT/{repo}`(예: `~/work/repos/{repo}`)의 **실제 소스 코드**를 읽어 확인한다.
 - 문서와 코드가 다르면 **코드가 진실**(문서 stale 가능).
-- `$DOBBY_DOCS_ROOT` 미설정이면 곧장 소스 코드 확인으로 간다.
+- `$ORCHESTRATION_DOCS_ROOT` 미설정이면 곧장 소스 코드 확인으로 간다.
 
 **트리거 규칙 (반드시 적용):**
 
-1. **외부 repo 참조 (분석 단계, `start`)**: 최초 분석 중 **현재 repo에서 알 수 없는 외부 repo 참조**가 나오면 → **무조건 docs 참조**로 그 외부 repo를 분석한다(현재 워크트리엔 외부 repo 코드가 없으므로 `docs/{외부repo}` → `$DOBBY_REPOS_ROOT/{외부repo}` 순).
+1. **외부 repo 참조 (분석 단계, `start`)**: 최초 분석 중 **현재 repo에서 알 수 없는 외부 repo 참조**가 나오면 → **무조건 docs 참조**로 그 외부 repo를 분석한다(현재 워크트리엔 외부 repo 코드가 없으므로 `docs/{외부repo}` → `$ORCHESTRATION_REPOS_ROOT/{외부repo}` 순).
 2. **구현 전 확인 (설계 단계, `impl`/`start`)**: 애매하거나 확인이 필요한데 **현재 코드로 확인 불가**하면 → docs 참조로 추가 분석하고 **반드시 사실 기반으로만 설계**한다.
 3. **사용자 결정 게이트 강화 (`i-order`)**: 사용자 결정이 필요해 보이면 → 묻기 전에 **관련 코드를 다시 상세 분석**해 스스로 판단 불가한지 재확인하고, 그래도 필요할 때만 묻는다.
 
@@ -218,7 +218,7 @@ $DOBBY_META/{루트키}/
 
 - 오케스트레이터는 배분(P3) 시 각 에이전트 작업의 **work-type**을 분류한다.
   - `work-type = code` → `dobby-impl`(구현) + `dobby-test`(브라우저 검증)
-  - `work-type = 비소스`(문서·리서치·분석·설정 등) → `dobby-produce`(산출) + **P5 내용 리뷰**(브라우저 테스트 없음). 산출물이 repo면 자기 브랜치 푸시, repo 밖이면 `$DOBBY_META/{키}/deliverables/`.
+  - `work-type = 비소스`(문서·리서치·분석·설정 등) → `dobby-produce`(산출) + **P5 내용 리뷰**(브라우저 테스트 없음). 산출물이 repo면 자기 브랜치 푸시, repo 밖이면 `$ORCHESTRATION_META/{키}/deliverables/`.
 - 한 오케스트레이션에 두 work-type이 섞일 수 있다(에이전트별로 라우팅).
 
 ---
@@ -240,20 +240,20 @@ dobby-order                       dobby-test       dobby-resolve       dobby-end
 - **dobby-test는 더 이상 자동으로 `해결`을 올리지 않는다.** `검증완료`까지만 표시·리포트. 비소스 작업은 dobby-test 없이 P5 내용 리뷰로 검증.
 - **`해결`(dobby-resolve)**: 상태만 표시, 워크트리·폴더 유지. 추가 수정 가능(폴더가 살아 있으니 dobby-impl/dobby-produce·오케스트레이터로 이어서).
 - **`종료`(dobby-end)**: 사용자 직접 실행. code-changes 스냅샷 → `worktree remove`(브랜치 보존) → summary.md. 메타 폴더는 보존.
-  - 제거 기준: `해결` 상태 AND 미푸시 커밋 없음. `$DOBBY_WORKSPACE/subtree/` 밖 안 건드림.
+  - 제거 기준: `해결` 상태 AND 미푸시 커밋 없음. `$ORCHESTRATION_WORKSPACE/subtree/` 밖 안 건드림.
 
 ---
 
 ## 10. 병합 정책
 
 - 각 에이전트 브랜치는 리뷰 완료 후 **루트 브랜치로 머지**된다(단일 에이전트면 자기 브랜치가 곧 루트라 머지할 것이 없다). **master 반영은 어느 경우든 사용자 수동 PR.**
-- **⛔ 금지**: 어떤 경우에도 `$DOBBY_DEFAULT_BASE`로 PR·머지하지 않는다.
+- **⛔ 금지**: 어떤 경우에도 `$ORCHESTRATION_DEFAULT_BASE`로 PR·머지하지 않는다.
 - 워크트리는 `node_modules`가 없어 커밋 시 `--no-verify`로 훅을 건너뛴다.
 
 ---
 
 ## 11. 열린 항목 (구현 착수 전 확정 필요)
 
-- ~~설정 기본값 (`DOBBY_REPOS_ROOT`·`DOBBY_DOCS_ROOT`)~~ → **확정·반영 완료**: `DOBBY_REPOS_ROOT="$HOME/work/repos"`, `DOBBY_DOCS_ROOT="$HOME/work/repos/docs"`(기본 활성화). 문서는 `{repo}.md` 또는 `{repo}/` 둘 다 지원.
+- ~~설정 기본값 (`ORCHESTRATION_REPOS_ROOT`·`ORCHESTRATION_DOCS_ROOT`)~~ → **확정·반영 완료**: `ORCHESTRATION_REPOS_ROOT="$HOME/work/repos"`, `ORCHESTRATION_DOCS_ROOT="$HOME/work/repos/docs"`(기본 활성화). 문서는 `{repo}.md` 또는 `{repo}/` 둘 다 지원.
 - ~~스킬 파일명 최종 확정~~ → **확정**: `dobby-` 접두어로 통일(`dobby-order`/`start`/`impl`/`produce`/`test`/`resolve`/`end`).
 - ~~`dobby-produce` 추가 시점~~ → **추가 완료**: 비소스 산출 building block 구현됨(§8). 향후 비소스 검증이 정교해지면 별도 검증 스킬을 고려한다.
