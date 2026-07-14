@@ -1,6 +1,6 @@
 ---
 name: avatar-quips
-description: mentis 대시보드 전용 재미기능. 한 오더의 에이전트들에 배정된 아바타(BTS·프로미스나인·도비)가 자기 작업 콘텐츠를 읽고 성격대로 한 줄 소감(만족·불평·환호·고민)을 남겨 대시보드 호버 말풍선용 파일을 만든다. ⛔ 오케스트레이션(dobby-order 등)에서는 절대 호출하지 않는다 — 대시보드가 페이지 진입 시 백그라운드로만 실행한다. 사용법 /avatar-quips {키}.
+description: mentis 대시보드 전용 재미기능. 한 오더의 에이전트들에 배정된 아바타(BTS·프로미스나인·도비)가 자기 작업 콘텐츠를 읽고 성격대로 한 줄 소감(만족·불평·환호·고민)을 남겨 대시보드 호버 말풍선용 파일을 만든다. ⛔ 오케스트레이션(dobby-order 등)에서는 절대 호출하지 않는다 — 대시보드가 페이지 진입 시 백그라운드로만 실행한다. 사용법 /avatar-quips {키} [슬러그...] — 슬러그를 주면 그 에이전트들 소감만 다시 만들어 병합한다(없으면 전체).
 ---
 
 # avatar-quips
@@ -8,6 +8,12 @@ description: mentis 대시보드 전용 재미기능. 한 오더의 에이전트
 대시보드가 백그라운드로 실행하는 **재미기능 스킬**. 오더 하나의 각 에이전트에 배정된 아바타가, 자기 작업을 성격대로 촌평하는 짧은 소감을 만들어 `$ORCHESTRATION_META/.mentis-quips/{키}.json`에 저장한다.
 
 > ⛔ **오케스트레이션 미사용**: dobby-order/start/impl/produce는 이 스킬을 호출하지 않는다. 오직 대시보드가 트리거한다. 이 스킬은 코드·메타를 **읽기만** 하고 오더 메타(orchestration.md 등)는 **수정하지 않는다**(별도 `.mentis-quips/` 파일만 씀).
+
+## 실행 모드 (인자로 결정)
+`/avatar-quips {키} [슬러그...]`
+- **전체 모드**(슬러그 인자 없음): 오더의 모든 에이전트 소감을 만든다(첫 생성 등).
+- **선택 모드**(슬러그 인자 있음): **그 슬러그들만** 다시 만들어 기존 `.mentis-quips/{키}.json`에 **병합**한다. 나머지 슬러그의 기존 소감은 그대로 둔다. (대시보드가 "소감 없음 + 소감 만든 뒤 추가 작업함"인 에이전트만 골라 넘긴다.)
+아래 절차는 두 모드 공통이되, **대상 슬러그 집합**만 다르다(전체=상태표의 모든 슬러그, 선택=인자로 받은 슬러그).
 
 ## 설정
 `~/.config/go-dobby/config.env`를 source 해 `$ORCHESTRATION_META`를 확인한다(`${CLAUDE_PLUGIN_ROOT}/reference/config.md`).
@@ -39,6 +45,8 @@ console.log(JSON.stringify(map));
 ```
 → 각 슬러그의 `{group, member}`. `group:"dobby"`면 멤버 없음(도비).
 
+> ⚠️ **선택 모드에서도 배정은 전체 슬러그로 계산한다.** 배정은 정렬된 전체 슬러그 순서에 의존하므로, 대상 슬러그만 넣으면 같은 에이전트가 다른 아바타를 받는다. **오더의 모든 슬러그**를 node 스니펫에 넣어 배정을 구한 뒤, 그중 **대상 슬러그의 배정만** 골라 쓴다.
+
 ## 3. 성격 (프로필 기반)
 멤버별 성격을 아래 성향대로 반영한다(프로필에서 유추). 필요하면 프로필을 더 조사해 보강해도 된다.
 - **RM**(리더·래퍼, "파괴신"): 분석적·차분한 리더, 논리 중시, 가끔 자책 개그
@@ -62,25 +70,34 @@ console.log(JSON.stringify(map));
 - **reviews**: 리뷰 라운드 소감(1회=개운, 여러 번=투덜/각오)
 각 소감 = `{ "mood": <happy|cheer|complain|ponder|chill|tired|bored>, "text": "<한 문장, ~30자>" }`. text는 한국어 구어체, 이모지 0~1개.
 
-## 5. 저장 (원자적 · 격리)
-`$ORCHESTRATION_META/.mentis-quips/`가 없으면 `mkdir -p`. 아래 형식으로 **임시 파일에 쓰고 rename** 한다(생성 중 중단돼도 반쪽 파일이 안 생기게):
+## 5. 에이전트별 작업 지문(agents) 기록
+대상 각 슬러그에 대해 **작업 지문** `sig = "<상태>#<라운드>"`를 구한다. 대시보드가 이 값으로 "소감 만든 뒤 추가 작업했는지"를 판단한다(달라지면 다음 새로고침 대상).
+- **상태**: orchestration.md 상태표의 그 슬러그 상태 칸(대기/분석중/구현중/수정중/리뷰중/재통합대기/완료). 단, `deliverables/{슬러그}.md` 또는 `deliverables/{슬러그}/`가 있으면 상태를 **완료**로 본다(대시보드 보정과 일치).
+- **라운드**: 상태표의 라운드 칸 문자열(없으면 빈 문자열). 예: `완료#1`, `구현중#`.
+
+## 6. 저장 (원자적 · 병합 · 격리)
+`$ORCHESTRATION_META/.mentis-quips/`가 없으면 `mkdir -p`.
+
+**⚠️ 병합 필수**: 기존 `{키}.json`이 있으면 먼저 읽어서, 이번 대상 슬러그의 항목만 갱신하고 **나머지 슬러그의 기존 값(board/changes/reviews/agents)은 그대로 유지**한다(선택 모드에서 다른 에이전트 소감을 지우면 안 됨). 전체 모드면 전체가 대상이라 사실상 전체 갱신이 된다.
+
+병합한 최종 내용을 **임시 파일에 쓰고 rename** 한다(생성 중 중단돼도 반쪽 파일이 안 생기게):
 ```bash
 mkdir -p "$ORCHESTRATION_META/.mentis-quips"
-# 내용을 {키}.json.tmp 에 먼저 쓰고
+# 기존 파일을 읽어 병합한 최종 JSON을 {키}.json.tmp 에 먼저 쓰고
 mv "$ORCHESTRATION_META/.mentis-quips/{키}.json.tmp" "$ORCHESTRATION_META/.mentis-quips/{키}.json"
 ```
 파일 스키마:
 ```json
 {
-  "sig": "<orchestration.md 의 mtimeMs 정수 문자열. 없으면 status.md mtimeMs>",
   "generatedAt": "<ISO 시각>",
+  "agents":  { "<슬러그>": { "sig": "완료#1" } },
   "board":   { "<슬러그>": { "mood": "cheer", "text": "..." } },
   "changes": { "<슬러그>": { "mood": "ponder", "text": "..." } },
   "reviews": { "<슬러그>": { "mood": "complain", "text": "..." } }
 }
 ```
-- `sig`는 `node -e 'console.log(String(Math.floor(require("fs").statSync(process.argv[1]).mtimeMs)))' "$ORCHESTRATION_META/{키}/orchestration.md"` 로 구한다(대시보드가 같은 값으로 최신 여부 판단. 대시보드는 orchestration.md 없으면 status.md를 본다 — 가능하면 orchestration.md 기준).
-- 리뷰가 없는 슬러그는 `reviews`에서 생략, 로그 없는 슬러그는 `changes` 생략 가능(board는 항상 채운다).
+- `agents[슬러그].sig`는 5번에서 구한 지문. 대상 슬러그는 board와 agents를 **반드시** 채운다(둘 중 하나라도 비면 대시보드가 계속 "미생성"으로 보고 다시 요청함).
+- 리뷰가 없는 슬러그는 `reviews`에서 생략, 로그 없는 슬러그는 `changes` 생략 가능.
 
 ## 원칙
 - 오더 메타를 수정하지 않는다. `.mentis-quips/` 외 아무 데도 쓰지 않는다.
