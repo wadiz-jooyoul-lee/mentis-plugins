@@ -29,9 +29,11 @@
 | `dobby-test` | 실브라우저 검증 (자동 해결 승격 제거) | **사용자** |
 | `dobby-resolve` | 해결 표시 — 상태만 `해결`, 폴더·워크트리 유지(비파괴) | **사용자** |
 | `dobby-end` | 워크트리 정리 — 제거 전 스냅샷 + `worktree remove`(브랜치 보존) | **사용자** |
+| `dobby-qa` | 통합(P7) 후 QA 감시 루프 — Jira 폴링으로 소관 버그를 트리아지해 담당 에이전트 수정·담당 리뷰(§7 P8 재개를 자동 트리거) | **사용자** |
 
 - **리뷰 소유권**: 코드리뷰는 **오케스트레이터(`dobby-order` P5)의 별도 리뷰 에이전트가 단독 수행**한다. `dobby-impl`은 셀프리뷰하지 않는다(오케스트레이터 리뷰와 중복이므로 제거). 리뷰어≠구현자 원칙은 P5 리뷰 에이전트가 충족하며, 에이전트 수와 무관하게 동일하게 적용된다(단일 에이전트도 별도 리뷰 에이전트 1회). 범위 준수 검증(계약 화이트리스트 대조)은 오케스트레이터 리뷰만 할 수 있다.
 - **비소스 산출**: `work-type = 비소스`(문서·리서치 등)는 `dobby-produce`가 담당한다(dobby-impl 대응물, 브라우저 테스트 없음·P5 내용 리뷰, §8). code/비소스는 한 오케스트레이션에 섞일 수 있다.
+- **QA 감시**: 통합(P7) 후 `dobby-qa`가 Jira를 5분 주기로 폴링해 소관 버그를 세 기준(부모/버그 하위이슈·사용자 명시·내용 판단→슬랙 문의)으로 트리아지하고, 편입 버그를 P8(후속 재개) 흐름으로 담당 에이전트가 수정·담당 리뷰어가 리뷰한다. 감지는 원격 MCP로 가능하나 수정·검증은 로컬 필수 → 로컬 세션 루프(§12).
 
 ### 통합으로 사라지는 것 (마이그레이션)
 
@@ -118,13 +120,17 @@ $ORCHESTRATION_META/{루트키}/
 ├── orchestration.md     # 관제탑 보드(범위배분·이벤트로그)
 ├── agents/{슬러그}.md · review-agent.md
 ├── reviews/round-{n}/{슬러그}.md
-└── agent-logs.json
+├── agent-logs.json
+├── qa-watch.md          # QA 폴링·트리아지 이력          (dobby-qa)
+└── qa/{버그키}/          # QA 버그별 처리 산출물 — 폴더    (dobby-qa)
+    ├── analysis.md · implementation.md
+    └── reviews/round-{n}.md
 ```
 
 ### 파일 vs 폴더 규칙
 
-- **1회성/최신 스냅샷으로 덮어씀 → 루트 파일**: `status.md`, `analysis.md`, `implementation.md`/`produce.md`, `test-plan.md`, `summary.md`, `orchestration.md`, `agent-logs.json`.
-- **반복·다수 인스턴스(회차·repo·에이전트·라운드) → 폴더**: `test-runs/`(테스트 반복), `deliverables/`(비소스 산출물), `code-changes/`(멀티 repo), `agents/`, `reviews/round-{n}/`.
+- **1회성/최신 스냅샷으로 덮어씀 → 루트 파일**: `status.md`, `analysis.md`, `implementation.md`/`produce.md`, `test-plan.md`, `summary.md`, `orchestration.md`, `agent-logs.json`, `qa-watch.md`.
+- **반복·다수 인스턴스(회차·repo·에이전트·라운드) → 폴더**: `test-runs/`(테스트 반복), `deliverables/`(비소스 산출물), `code-changes/`(멀티 repo), `agents/`, `reviews/round-{n}/`, `qa/{버그키}/`(QA 버그별).
 - **이 메타는 K와 무관하게 항상 만든다.** 에이전트가 하나뿐이면 `orchestration.md` 보드 1행, `agents/`에 계약 1개(화이트리스트=전체 범위), `reviews/`에 그 1개 에이전트 라운드가 쌓인다. 단일 에이전트면 루트 키 = 에이전트 키라 이 메타와 work 파일이 같은 폴더에 함께 놓인다.
 
 ---
@@ -160,6 +166,9 @@ $ORCHESTRATION_META/{루트키}/
 
 ## 테스트 실행 이력   (dobby-test가 회차마다 누적)
 | 회차 | 시작 | 상태 | 성공/실패/skip | 폴더 |
+
+## QA   (dobby-qa가 편입 버그마다 기록)
+| 버그키 | 편입 기준 | 담당 슬러그 | 상태 | 리뷰 라운드 | 갱신 |
 
 ## 워크트리 / 브랜치
 | repo | 브랜치 | 경로 |
@@ -241,6 +250,7 @@ dobby-order                       dobby-test       dobby-resolve       dobby-end
 - **`해결`(dobby-resolve)**: 상태만 표시, 워크트리·폴더 유지. 추가 수정 가능(폴더가 살아 있으니 dobby-impl/dobby-produce·오케스트레이터로 이어서).
 - **`종료`(dobby-end)**: 사용자 직접 실행. code-changes 스냅샷 → `worktree remove`(브랜치 보존) → summary.md. 메타 폴더는 보존.
   - 제거 기준: `해결` 상태 AND 미푸시 커밋 없음. `$ORCHESTRATION_WORKSPACE/subtree/` 밖 안 건드림.
+- **QA 감시(dobby-qa)**: 통합 이후 진입하는 별도 루프. `QA감시중`으로 폴링하다 버그 편입 시 담당 에이전트를 `수정중 ↔ 리뷰중`으로 되돌려(P8 재개) 처리하고 `검증완료 → 해결`까지 간다. 상태값·절차는 본 흐름과 동일. 루트 이슈 머지/종료 또는 사용자 중단 시 끝난다(§12).
 
 ---
 
@@ -257,3 +267,16 @@ dobby-order                       dobby-test       dobby-resolve       dobby-end
 - ~~설정 기본값 (`ORCHESTRATION_REPOS_ROOT`·`ORCHESTRATION_DOCS_ROOT`)~~ → **확정·반영 완료**: `ORCHESTRATION_REPOS_ROOT="$HOME/work/repos"`, `ORCHESTRATION_DOCS_ROOT="$HOME/work/repos/docs"`(기본 활성화). 문서는 `{repo}.md` 또는 `{repo}/` 둘 다 지원.
 - ~~스킬 파일명 최종 확정~~ → **확정**: `dobby-` 접두어로 통일(`dobby-order`/`start`/`impl`/`produce`/`test`/`resolve`/`end`).
 - ~~`dobby-produce` 추가 시점~~ → **추가 완료**: 비소스 산출 building block 구현됨(§8). 향후 비소스 검증이 정교해지면 별도 검증 스킬을 고려한다.
+
+---
+
+## 12. QA 감시 (dobby-qa)
+
+개발 통합(P7) 후 진입하는 QA 감시·수정 루프. 절차·라우팅·리뷰·재통합은 §7 P8(후속 재개)과 동일하며, 트리거만 Jira 폴링으로 자동화한다.
+
+- **동작 모드(로컬 세션 루프)**: 감지(Jira)·문의(Slack)는 원격 MCP로 가능하나, 수정(워크트리·dobby-impl)·검증(chrome-devtools)은 로컬 PC/세션 필수. 로컬 세션이 떠 있는 동안만 도는 루프(`ScheduleWakeup`/`loop`)로 구현한다.
+- **폴링(기본 5분)**: JQL `assignee = currentUser() AND issuetype = Bug AND assignee CHANGED TO currentUser() AFTER "-1d"`. 할당 *시각* 기준 최근 24h·진행중 포함. `qa-watch.md`에 이미 트리아지된 이슈는 제외(미확인만).
+- **트리아지 3기준**: ① 부모 QA(`parent=`) 또는 루트키의 버그 타입 하위이슈 → 자동 편입. ② 사용자 명시(`bugs=`) → 자동 편입. ③ 내용상 소관 판단 → 슬랙 DM 문의(현재 이슈·버그 이슈 링크 포함) 후 `:넵:`/`:아니오:` 이모지로 판정.
+- **라우팅**: 편입 버그의 수정 파일을 계약 화이트리스트에 대조해 담당 에이전트를 특정 → 그 에이전트가 `dobby-impl`로 수정, 별도 리뷰 에이전트가 리뷰(P5·P8 규칙). `dobby-end`로 워크트리가 정리됐으면 담당 브랜치의 master 머지 여부를 확인해, 머지됐으면 `origin/{DEFAULT_BASE}`에서·아니면 살아있는 브랜치에서 워크트리를 재생성한다.
+- **종료**: `/dobby-qa stop {루트키}` 또는 루트 이슈의 배포 베이스 머지/종료.
+- **산출물**: `qa-watch.md`(폴링·트리아지 이력), `qa/{버그키}/`(analysis·implementation·reviews), status.md `## QA` 표(§6).
