@@ -9,6 +9,8 @@ description: 구현한 내용이 실제 환경에서 정상 동작하는지 chro
 
 > chrome-devtools: 브라우저를 열어 이동·클릭·입력·스크린샷·네트워크 확인을 자동으로 하는 도구(MCP). `mcp__chrome-devtools__*`를 쓴다.
 
+**검증 원칙**: **`${CLAUDE_PLUGIN_ROOT}/reference/role-personas.md`의 "테스트 에이전트" 판단 기준**(불신 기본값·직접 실행한 것만 통과·경계/오류/권한을 노려 테스트·재현 가능한 실패 보고)을 따른다.
+
 ## 설정 (첫 실행 시 확인)
 
 작업을 시작하기 전에 **`${CLAUDE_PLUGIN_ROOT}/reference/config.md`의 "설정 절차"를 그대로 따른다**: `~/.config/go-dobby/config.env`를 source 해 환경 변수를 불러오고, **이미 값이 있는 변수는 묻지 않고** 빠진 값만 규칙대로 채워 저장·export 한다. 메타 루트 `ORCHESTRATION_META`, 변수 목록·기본값, 폴더 배치(워크트리 `$ORCHESTRATION_WORKSPACE/subtree/` · 메타 `$ORCHESTRATION_META/`)는 모두 그 문서에 있다. 이하 메타 경로는 `$ORCHESTRATION_META` 기준.
