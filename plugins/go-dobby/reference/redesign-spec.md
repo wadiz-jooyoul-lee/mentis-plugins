@@ -96,7 +96,7 @@
 
 ```
 $ORCHESTRATION_META/{키}/
-├── status.md            # 진행 상태 인덱스 (§6) — 현재 단계·스킬 + 팬아웃 K + 에이전트 상태표
+├── status.md            # 진행 상태 인덱스 (§6) — 현재 단계·스킬 + 팬아웃 K (에이전트 상태표는 orchestration.md 단일 정본)
 ├── analysis.md          # 착수·분석·수정 설계            (dobby-start)
 ├── implementation.md    # 구현 요약 (code 작업)          (dobby-impl)
 ├── produce.md           # 산출 요약 (비소스 작업)        (dobby-produce)
@@ -154,8 +154,8 @@ $ORCHESTRATION_META/{루트키}/
 ## 팬아웃
 - **에이전트 수(K)**: {n}  (루트 브랜치 `{prefix}/{루트키}`; 에이전트가 여럿이면 각 `{prefix}/{에이전트키}`가 루트로 머지, 하나면 루트 브랜치가 곧 그 에이전트 브랜치)
 
-## 에이전트
-| 슬러그 | 이슈/작업 | 브랜치 | 상태 | 라운드 | 갱신 |
+<!-- ⛔ 에이전트 상태표는 status.md에 두지 않는다(단일 정본). 에이전트별 상태(대기·분석·구현·리뷰·완료)는
+     오직 orchestration.md의 `## 에이전트 상태표`에서만 관리한다. -->
 
 ## 단계별 진행
 | 단계 | 스킬 | 상태 | 산출물 | 갱신 |
@@ -293,5 +293,5 @@ dobby-order                       dobby-test       dobby-resolve       dobby-end
 - **발동 게이트**: `light` + K=1 + 소규모(수정 예상 파일 소수·단일 영역·단일 repo). 분석 중 여러 영역/저장소로 번지면 **경량 중단·일반(서브) 모드 권고**(메인 컨텍스트 포화 방지).
 - **실행**: 메인이 dobby-start/dobby-impl을 서브로 띄우지 않고 절차를 인라인 수행(활성 경로 확정 → analysis.md·test-plan.md → 구현 → implementation.md → commit --no-verify → 자기 브랜치 푸시). 프롬프트 규율은 `analysis-discipline` + `role-personas`의 「경량 인라인 에이전트」. **리뷰(P5)는 별도 에이전트로 그대로.**
 - **상태머신**: §9와 동일(인라인 에이전트 `분석중→구현중→리뷰중→(수정중↔리뷰중)→재통합대기→완료`, 리뷰 `진행중→완료`). 상태 선(先)갱신 원칙 유지.
-- **대시보드 호환 필수 산출물**(빠지면 상세 페이지가 조용히 빈다): `status.md`(현재 단계·이슈 메타·**에이전트 표 인라인 1행+리뷰 행**·`## 세션` 세션ID/cwd), `orchestration.md`(상태표·이벤트 로그), `agent-logs.json`(**인라인 슬러그 → 메인 세션 전사**, `review-agent` → 리뷰 output), `implementation.md`(work-type=code 확정). 나머지(analysis/explainer/test-runs/reviews 등)는 기존과 동일.
+- **대시보드 호환 필수 산출물**(빠지면 상세 페이지가 조용히 빈다): `status.md`(현재 단계·이슈 메타·`## 세션` 세션ID/cwd — 에이전트 상태표는 두지 않음), `orchestration.md`(**`## 에이전트 상태표`에 인라인 1행+리뷰 행** — 에이전트 상태 단일 정본·이벤트 로그), `agent-logs.json`(**인라인 슬러그 → 메인 세션 전사**, `review-agent` → 리뷰 output), `implementation.md`(work-type=code 확정). 나머지(analysis/explainer/test-runs/reviews 등)는 기존과 동일.
 - **대시보드 차이점(유일)**: 인라인 에이전트의 콘솔·코드변경 diff가 격리된 서브 로그가 아니라 **메인 세션 전사**에서 추출된다(대시보드가 메타 경로는 자동 제외해 정상 동작). 목록·보드·상태·리뷰·구현내용·검증 렌더는 일반 K=1과 동일 → **대시보드 코드 수정 불필요.**
