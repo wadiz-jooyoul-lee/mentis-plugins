@@ -4,19 +4,23 @@ go-dobby의 모든 스킬(`dobby-order`·`dobby-start`·`dobby-impl`·`dobby-pro
 
 > 이 문서는 스킬 본문에 중복 복사돼 있던 설정 블록을 한곳으로 모은 단일 출처다. 변수·기본값을 바꿀 때는 **여기만** 고치면 된다.
 
-## 설정 절차 (첫 실행 시 확인)
+## 설정 절차 (작업 스킬 — 읽기 전용)
 
-작업을 시작하기 전에 `~/.config/go-dobby/config.env`를 읽어 환경 변수를 불러온다:
+작업을 시작하기 전에 `~/.config/go-dobby/config.env`를 **읽기만** 한다:
 
 ```bash
 [ -f ~/.config/go-dobby/config.env ] && source ~/.config/go-dobby/config.env
 ```
 
-**이미 값이 있는 변수는 묻지 않는다.** 빠진 변수만 아래 규칙으로 채운다.
+⛔ **비파괴 원칙 (강제 — 가장 중요):** `dobby-order`·`dobby-start`·`dobby-impl`·`dobby-produce`·`dobby-test`·`dobby-resolve`·`dobby-end`·`dobby-explain`·`dobby-qa`·`dobby-jira-tab` 등 **모든 작업 스킬은 `config.env`를 절대 생성·수정·삭제하지 않는다.** 값 채우기·저장·`export` 후 기록은 **오직 `dobby-init` 스킬**만 한다. **헤드리스(무인) 실행에서도 예외 없다.** 작업 스킬이 config.env를 다시 쓰면, 사용자가 지정한 선택 값(예: `ORCHESTRATION_META_PATH`)이 조용히 사라져 대시보드가 엉뚱한 폴더를 읽는 사고가 난다(실제 발생 이력).
 
-- **기본값이 있는 변수**: 현재 기본값을 보여주고 그대로 쓸지 바꿀지 물어본다.
-- **선택 변수**(생략 가능): 생략 시 어떤 영향이 있는지 설명하고 생략을 허용한다.
-- 사용자가 정한 값은 설정 파일에 저장하고(`mkdir -p ~/.config/go-dobby` 후 기록) `export` 한다.
+값을 읽은 뒤 처리:
+
+- **값이 있으면** 그대로 쓴다.
+- **기본값이 있는 변수가 비어 있으면** 그 기본값을 **메모리에서만** 쓴다(아래 "환경 변수" 표의 기본값). config.env에 되쓰지 않는다.
+- **`~/.config/go-dobby/config.env` 파일 자체가 없으면**(최초 실행) → **작업을 멈추고** "go-dobby 초기 설정이 필요합니다. 먼저 `/dobby-init`을 실행하세요"라고 안내한다. **작업 스킬이 임의로 config.env를 만들지 않는다.**
+
+> 값을 새로 정하거나 **바꾸는 것은 초기 설정 또는 사용자가 명시적으로 "설정을 바꿔라"고 요청한 경우에만** 가능하며, 그 작업은 전용 스킬 **`dobby-init`**으로만 한다.
 
 ## 메타 루트
 
