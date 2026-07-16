@@ -13,7 +13,7 @@ description: 오더(이슈/작업)의 Jira 관련 문서를 대시보드 "Jira" 
 `${CLAUDE_PLUGIN_ROOT}/reference/config.md`의 "설정 절차"를 그대로 따른다: `~/.config/go-dobby/config.env`를 source 해 환경 변수를 불러온다. 이하 메타 경로는 `$ORCHESTRATION_META` 기준, 대상 폴더는 `$ORCHESTRATION_META/{키}/`.
 
 ## 사용법
-`/dobby-jira-tab {키} <clean|comments|enrich|post> [target=desc|comment]`
+`/dobby-jira-tab {키} <snapshot|clean|comments|enrich|post> [target=desc|comment]`
 - `{키}`: 이슈 키(예 `FE1-1274`). `TASK-…` 문서 전용 키는 Jira가 없으므로 대상 아님.
 - 서브커맨드 하나만 실행한다(대시보드가 버튼별로 호출).
 
@@ -21,6 +21,11 @@ description: 오더(이슈/작업)의 Jira 관련 문서를 대시보드 "Jira" 
 Jira 조회·쓰기는 Atlassian MCP 도구를 쓴다(필요한 도구만 `ToolSearch`로 로드). 헤드리스 실행에서는 **토큰 기반 Atlassian MCP**가 있어야 동작한다. 도구가 없거나 인증이 안 되면 **그 서브커맨드는 실패로 종료**한다(대시보드가 미완성으로 표시). 조회는 `getJiraIssue`/이슈 코멘트 조회, 쓰기는 이슈 편집(설명)·코멘트 추가/수정 계열을 사용한다.
 
 ---
+
+## snapshot — 이슈 원문 가져오기(재활용본이 없을 때)  · [단순 조회: Haiku 가능]
+- `dobby-order`가 저장한 `jira-issue.md`가 **없을 때만** 쓰는 폴백. Atlassian MCP로 **이슈 설명을 조회해 원문 그대로** `$ORCHESTRATION_META/{키}/jira-issue.md`에 저장한다(요약·정리 없이 원문만).
+- 설명이 비어 있으면 저장하지 않고 그 사실만 알린다. 코멘트는 여기서 다루지 않는다(`comments`가 별도).
+- 이미 `jira-issue.md`가 있으면 덮어쓰지 않는다(재활용 우선).
 
 ## clean — 저장된 이슈 원문을 읽기 쉽게 정리  · [분석: Opus]
 - 입력: `$ORCHESTRATION_META/{키}/jira-issue.md`(dobby-order가 조회 시 저장한 **원문**). 없으면 아무 것도 안 하고 종료.
