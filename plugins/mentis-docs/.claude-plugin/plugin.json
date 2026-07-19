@@ -1,6 +1,6 @@
 {
   "name": "mentis-docs",
-  "description": "레포지토리 git pull 후 diff를 근거로 대응 문서를 자동 갱신하는 스킬 모음 (docs-sync)",
+  "description": "레포 구성(clone/pull, repos-setup)과 pull diff 기반 문서 자동 갱신(docs-sync) 스킬 모음",
   "version": "0.1.0",
   "author": {
     "name": "이주열"

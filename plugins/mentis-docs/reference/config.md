@@ -22,6 +22,7 @@
 |------|-----|--------|
 | `DOCS_REPOS_ROOT` | 원본 저장소들이 있는 상위 폴더(하위 폴더 각각이 레포) | `$HOME/work/repos` |
 | `DOCS_ROOT` | 문서 루트. 레포 `X` 문서 = `$DOCS_ROOT/X.md` 또는 `$DOCS_ROOT/X/` | `$HOME/work/repos/docs` |
+| `REPOS_MANIFEST` | 레포 git 주소 명세서(`repos-setup`가 clone/pull 대상을 읽는 정본) | `$HOME/work/repos/REPOS.md` |
 | `DOCS_SYNC_EXCLUDE` | pull/diff 제외 폴더(쉼표) | `docs,execute_all` |
 | `DOCS_SYNC_MAP` | 이름으로 안 맞는 레포↔문서 수동 매핑(`레포=문서상대경로` 쉼표) | (없음) |
 | `DOCS_SYNC_BRANCH_PREFIX` | 문서 커밋용 브랜치 접두사. 비우면 커밋 안 함(작업트리만) | (없음) |
