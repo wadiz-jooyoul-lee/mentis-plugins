@@ -26,6 +26,15 @@
       "author": { "name": "이주열" },
       "category": "workflow",
       "tags": ["issue", "multi-agent", "orchestration", "go-dobby", "jira"]
+    },
+    {
+      "name": "mentis-docs",
+      "source": "./plugins/mentis-docs",
+      "description": "레포 git pull 후 diff를 근거로 대응 문서를 자동 갱신 (docs-sync)",
+      "version": "0.1.0",
+      "author": { "name": "이주열" },
+      "category": "docs",
+      "tags": ["docs", "git", "sync", "changelog", "mentis-docs"]
     }
   ]
 }
