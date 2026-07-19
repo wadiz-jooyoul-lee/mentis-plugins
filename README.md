@@ -1,9 +1,10 @@
 # mentis-plugins
 
-Jira 이슈 생명주기와 멀티 에이전트 오케스트레이션을 담은 Claude Code 플러그인 마켓플레이스입니다. 두 플러그인을 제공합니다:
+Jira 이슈 생명주기와 멀티 에이전트 오케스트레이션, 문서 동기화를 담은 Claude Code 플러그인 마켓플레이스입니다. 세 플러그인을 제공합니다:
 
 - **`work-dobby`** — 이슈의 **착수 → 구현 → 테스트 → 종료** 생명주기 + 멀티 에이전트 오케스트레이션 (원본).
 - **`go-dobby`** — work-dobby를 재설계한 **단일 진입점 오케스트레이션**. 모든 이슈/작업을 `dobby-order` 하나로 시작해 필요한 에이전트 수(팬아웃 K)를 스스로 판단해 진행합니다. 설계 상세는 `plugins/go-dobby/reference/redesign-spec.md` 참고.
+- **`mentis-docs`** — 레포 **git pull 후 diff를 근거로 대응 문서를 자동 갱신**하는 `docs-sync` 스킬.
 
 ## work-dobby 스킬
 
@@ -39,6 +40,18 @@ Jira 이슈 생명주기와 멀티 에이전트 오케스트레이션을 담은 
 | `dobby-end` | 워크트리 정리 — 스냅샷 후 제거(브랜치 보존) | 사용자 |
 
 주요 차이: 단독/오케스트레이션 경로 단일화, 이슈당 폴더 1개(`$DOBBY_META/{키}/`) + 단일 status.md 인덱스, 코드리뷰는 오케스트레이터가 단독 수행, 정식 배포 베이스로의 PR·머지 금지(최종 반영은 사용자 수동 PR).
+
+## mentis-docs 스킬
+
+레포를 pull 하고 **그 pull로 실제 들어온 변경(diff)만 근거로 대응 문서를 갱신**합니다.
+
+| 스킬 | 역할 | 호출 |
+|------|------|------|
+| `docs-sync` | 레포별 pull 전후 HEAD 비교 → 변경 커밋·이슈키·파일 diff 수집 → 레포↔문서 매핑 → 문서 컨벤션대로 비파괴 갱신 → 요약 보고 | 사용자 |
+
+- 사용법: `/docs-sync` (전체) 또는 `/docs-sync wadiz-frontend app-api` (특정 레포), `pull=off`로 pull 생략.
+- 동작: **pull 수행 → 자동 반영 → 요약 보고**. 문서 없는 레포는 "신규 후보"로만 보고, 원본 소스는 수정하지 않습니다.
+- 설정 변수(`~/.config/mentis-docs/config.env`): `DOCS_REPOS_ROOT`(기본 `$HOME/work/repos`), `DOCS_ROOT`(기본 `$HOME/work/repos/docs`), `DOCS_SYNC_EXCLUDE`, `DOCS_SYNC_MAP`, `DOCS_SYNC_BRANCH_PREFIX`. 규격은 `plugins/mentis-docs/reference/config.md` 참고.
 
 ## 설정 (첫 실행 시 1회)
 
