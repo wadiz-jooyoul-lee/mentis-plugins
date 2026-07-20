@@ -30,8 +30,8 @@
     {
       "name": "mentis-docs",
       "source": "./plugins/mentis-docs",
-      "description": "레포 git pull 후 diff를 근거로 대응 문서를 자동 갱신 (docs-sync)",
-      "version": "0.1.0",
+      "description": "레포 구성(clone/pull, repos-setup) + pull diff 기반 문서 자동 갱신(docs-sync)",
+      "version": "0.2.0",
       "author": { "name": "이주열" },
       "category": "docs",
       "tags": ["docs", "git", "sync", "changelog", "mentis-docs"]
