@@ -26,6 +26,24 @@ dobby_load_config() {
   : "${ORCHESTRATION_DEFAULT_BASE:=master}"
   : "${ORCHESTRATION_REPOS_ROOT:=$HOME/work/repos}"
   export ORCHESTRATION_META="${ORCHESTRATION_META_PATH:-$ORCHESTRATION_WORKSPACE/meta}"
+  dobby_check_deps
+}
+
+# dobby_check_deps — 최초 실행 시 jq 확인. 없으면 설치 가이드 안내(하드 실패 아님).
+# jq는 agent-logs.json 병합(dobby_log)에 쓴다 — JSON은 파서로 안전하게 다뤄야 하므로(awk 손파싱은
+# 인라인 {}·compact·따옴표에서 깨져 데이터가 사라진다) jq를 쓴다.
+dobby_check_deps() {
+  command -v jq >/dev/null 2>&1 && return 0
+  {
+    printf '⚠️ go-dobby: jq 가 필요합니다 — agent-logs.json 기록(dobby_log)에 씁니다.\n'
+    case "$(uname -s)" in
+      Darwin) printf '   설치: brew install jq\n' ;;
+      Linux)  printf '   설치: sudo apt-get install -y jq   (또는 sudo yum install jq / dnf install jq)\n' ;;
+      *)      printf '   설치: https://jqlang.github.io/jq/download/ 참고\n' ;;
+    esac
+    printf '   설치 후 다시 실행하세요.\n'
+  } >&2
+  return 0
 }
 
 _meta() { printf '%s' "${ORCHESTRATION_META:?ORCHESTRATION_META 미설정 — dobby_load_config 먼저}"; }
@@ -119,34 +137,18 @@ dobby_event() {
 }
 
 # ── agent-logs.json ──────────────────────────────────────────────────
-# dobby_log KEY SLUG PATH [ROUND] — 스폰 로그 경로 기록. 외부 설치 없이 awk로 병합.
-# (라운드 있으면 {슬러그:{round-N:경로}}로 중첩, 없으면 {슬러그:"경로"}. 슬러그·경로에 " 없음 전제 — 파일 경로는 안전.)
+# dobby_log KEY SLUG PATH [ROUND] — 스폰 로그 경로 기록(jq로 안전 병합).
+# 라운드 있으면 {슬러그:{round-N:경로}}로 중첩, 없으면 {슬러그:"경로"}. jq가 없으면 설치 가이드 후 건너뜀.
 dobby_log() {
   local key="$1" slug="$2" p="$3" rd="${4:-}"
   local f; f="$(_order_dir "$key")/agent-logs.json"
-  [ -f "$f" ] || printf '{}\n' > "$f"
-  awk -F'"' -v nslug="$slug" -v npath="$p" -v nrd="$rd" '
-    NF==3 && $0 ~ /\{[ \t]*$/ { s=$2; if(!(s in seen)){seen[s]=1; ord[++no]=s} isobj[s]=1; cur=s; delete sc[s]; next }
-    NF>=4 && $0 ~ /:[ \t]*"/ {
-      if (length($1)<=2) { s=$2; if(!(s in seen)){seen[s]=1; ord[++no]=s} sc[s]=$4; isobj[s]=0; cur="" }
-      else { k=cur SUBSEP $2; if(!(k in rvs)){rvs[k]=1; rord[cur]=rord[cur] (rord[cur]==""?"":SUBSEP) $2} rv[k]=$4 }
-      next
-    }
-    /^[ \t]*}/ { cur="" }
-    END{
-      if(!(nslug in seen)){seen[nslug]=1; ord[++no]=nslug}
-      if (nrd!="") { isobj[nslug]=1; delete sc[nslug]; k=nslug SUBSEP nrd; if(!(k in rvs)){rvs[k]=1; rord[nslug]=rord[nslug] (rord[nslug]==""?"":SUBSEP) nrd} rv[k]=npath }
-      else { isobj[nslug]=0; sc[nslug]=npath; rord[nslug]="" }
-      printf "{"; first=1
-      for(i=1;i<=no;i++){ kk=ord[i]; printf "%s\n", (first?"":","); first=0
-        if(isobj[kk]){ printf "  \"%s\": {", kk; m=split(rord[kk], rr, SUBSEP)
-          for(j=1;j<=m;j++) printf "%s\n    \"%s\": \"%s\"", (j==1?"":","), rr[j], rv[kk SUBSEP rr[j]]
-          printf "\n  }"
-        } else printf "  \"%s\": \"%s\"", kk, sc[kk]
-      }
-      printf "\n}\n"
-    }
-  ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  command -v jq >/dev/null 2>&1 || { dobby_check_deps; _die "jq 없음 — agent-logs 기록 생략"; return 1; }
+  [ -f "$f" ] || echo '{}' > "$f"
+  if [ -n "$rd" ]; then
+    jq --arg s "$slug" --arg r "$rd" --arg p "$p" '.[$s] = ((.[$s] // {}) + {($r): $p})' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  else
+    jq --arg s "$slug" --arg p "$p" '.[$s] = $p' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  fi
 }
 
 # ── status.md 단계 ───────────────────────────────────────────────────

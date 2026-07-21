@@ -14,7 +14,7 @@ source "${CLAUDE_PLUGIN_ROOT}/reference/dobby-lib.sh"   # dobby_* 함수 + $ORCH
 dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으면 3 반환 → /dobby-init 안내)
 ```
 
-> **의존성 없음(추가 설치 불필요)**: dobby-lib.sh는 **어디에나 기본 내장된 `bash`·`awk`·`git`만** 쓴다. `agent-logs.json` 병합도 jq·python 없이 **awk로** 처리하므로 `brew install` 같은 설치가 필요 없다.
+> **의존성(jq)**: dobby-lib.sh는 대부분 기본 내장된 `bash`·`awk`·`git`만 쓰지만, `agent-logs.json` 병합(`dobby_log`)만 **`jq`**(JSON 파서)를 쓴다 — JSON은 파서로 안전하게 다뤄야 하기 때문(awk 손파싱은 인라인 `{}`·compact·따옴표에서 항목이 사라진다). `dobby_load_config`가 **최초 실행 시 jq 설치 여부를 확인**하고, 없으면 설치 가이드(`brew install jq` / `apt-get install jq`)를 안내한다(하드 실패 아님 — 나머지 함수는 jq 없이도 동작, `dobby_log`만 건너뜀). 안내가 뜨면 설치 후 다시 실행한다.
 
 ⛔ **비파괴 원칙 (강제 — 가장 중요):** `dobby-order`·`dobby-start`·`dobby-impl`·`dobby-produce`·`dobby-test`·`dobby-resolve`·`dobby-end`·`dobby-explain`·`dobby-qa`·`dobby-jira-tab` 등 **모든 작업 스킬은 `config.env`를 절대 생성·수정·삭제하지 않는다.** 값 채우기·저장·`export` 후 기록은 **오직 `dobby-init` 스킬**만 한다. **헤드리스(무인) 실행에서도 예외 없다.** 작업 스킬이 config.env를 다시 쓰면, 사용자가 지정한 선택 값(예: `ORCHESTRATION_META_PATH`)이 조용히 사라져 대시보드가 엉뚱한 폴더를 읽는 사고가 난다(실제 발생 이력).
 
