@@ -11,7 +11,7 @@ description: 이슈/작업이 (지금으로선) 다 됐다고 판단될 때, 상
 
 ## 설정 (첫 실행 시 확인)
 
-작업을 시작하기 전에 **`${CLAUDE_PLUGIN_ROOT}/reference/config.md`의 "설정 절차"를 그대로 따른다**: `~/.config/go-dobby/config.env`를 source 해 환경 변수를 **읽기만** 한다. ⛔ **이 스킬은 config.env를 저장·수정·생성하지 않는다**(값 변경은 `dobby-init` 전용 — config.md '비파괴 원칙'). config.env 파일이 아예 없으면 멈추고 `/dobby-init`을 먼저 실행하도록 안내한다. 메타 루트 `ORCHESTRATION_META`, 변수 목록·기본값, 폴더 배치(워크트리 `$ORCHESTRATION_WORKSPACE/subtree/` · 메타 `$ORCHESTRATION_META/`)는 모두 그 문서에 있다. 이하 메타 경로는 `$ORCHESTRATION_META` 기준.
+작업을 시작하기 전에 **`${CLAUDE_PLUGIN_ROOT}/reference/config.md`의 "설정 절차"를 그대로 따른다**: `~/.config/go-dobby/config.env`를 source 해 환경 변수를 **읽기만** 한다. ⛔ **이 스킬은 config.env를 저장·수정·생성하지 않는다**(값 변경은 `dobby-init` 전용 — config.md '비파괴 원칙'). config.env 파일이 아예 없으면 멈추고 `/dobby-init`을 먼저 실행하도록 안내한다. 메타 루트 `ORCHESTRATION_META`, 변수 목록·기본값, 폴더 배치(워크트리 `$ORCHESTRATION_WORKSPACE/subtree/` · 메타 `$ORCHESTRATION_META/`)는 모두 그 문서에 있다. 이하 메타 경로는 `$ORCHESTRATION_META` 기준. **공용 헬퍼(config.md '공용 헬퍼', 이미 source됨)**: 상태 표시·취소의 결정론 부분은 `dobby_resolve 키`(단계→해결·`## 해결` 골격·미완료 에이전트 일괄 완료) / `dobby_resolve 키 undo`(단계→통합·`## 해결` 제거). 근거 값(테스트 집계·통합 브랜치)은 골격에 LLM이 채운다. 실패가 있으면 자동 해결 금지(사용자 확인).
 
 ## 입력
 
