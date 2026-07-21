@@ -14,6 +14,8 @@ source "${CLAUDE_PLUGIN_ROOT}/reference/dobby-lib.sh"   # dobby_* 함수 + $ORCH
 dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으면 3 반환 → /dobby-init 안내)
 ```
 
+> **의존성 없음(추가 설치 불필요)**: dobby-lib.sh는 **어디에나 기본 내장된 `bash`·`awk`·`git`만** 쓴다. `agent-logs.json` 병합도 jq·python 없이 **awk로** 처리하므로 `brew install` 같은 설치가 필요 없다.
+
 ⛔ **비파괴 원칙 (강제 — 가장 중요):** `dobby-order`·`dobby-start`·`dobby-impl`·`dobby-produce`·`dobby-test`·`dobby-resolve`·`dobby-end`·`dobby-explain`·`dobby-qa`·`dobby-jira-tab` 등 **모든 작업 스킬은 `config.env`를 절대 생성·수정·삭제하지 않는다.** 값 채우기·저장·`export` 후 기록은 **오직 `dobby-init` 스킬**만 한다. **헤드리스(무인) 실행에서도 예외 없다.** 작업 스킬이 config.env를 다시 쓰면, 사용자가 지정한 선택 값(예: `ORCHESTRATION_META_PATH`)이 조용히 사라져 대시보드가 엉뚱한 폴더를 읽는 사고가 난다(실제 발생 이력).
 
 값을 읽은 뒤 처리:

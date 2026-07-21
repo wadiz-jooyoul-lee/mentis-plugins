@@ -119,18 +119,34 @@ dobby_event() {
 }
 
 # ── agent-logs.json ──────────────────────────────────────────────────
-# dobby_log KEY SLUG PATH [ROUND] — 스폰 로그 경로 기록(jq 병합).
+# dobby_log KEY SLUG PATH [ROUND] — 스폰 로그 경로 기록. 외부 설치 없이 awk로 병합.
+# (라운드 있으면 {슬러그:{round-N:경로}}로 중첩, 없으면 {슬러그:"경로"}. 슬러그·경로에 " 없음 전제 — 파일 경로는 안전.)
 dobby_log() {
   local key="$1" slug="$2" p="$3" rd="${4:-}"
   local f; f="$(_order_dir "$key")/agent-logs.json"
-  command -v jq >/dev/null 2>&1 || { _die "jq 필요(agent-logs)"; return 1; }
-  [ -f "$f" ] || echo '{}' > "$f"
-  if [ -n "$rd" ]; then
-    jq --arg s "$slug" --arg r "$rd" --arg p "$p" '.[$s] = ((.[$s] // {}) + {($r): $p})' "$f" > "$f.tmp"
-  else
-    jq --arg s "$slug" --arg p "$p" '.[$s] = $p' "$f" > "$f.tmp"
-  fi
-  mv "$f.tmp" "$f"
+  [ -f "$f" ] || printf '{}\n' > "$f"
+  awk -F'"' -v nslug="$slug" -v npath="$p" -v nrd="$rd" '
+    NF==3 && $0 ~ /\{[ \t]*$/ { s=$2; if(!(s in seen)){seen[s]=1; ord[++no]=s} isobj[s]=1; cur=s; delete sc[s]; next }
+    NF>=4 && $0 ~ /:[ \t]*"/ {
+      if (length($1)<=2) { s=$2; if(!(s in seen)){seen[s]=1; ord[++no]=s} sc[s]=$4; isobj[s]=0; cur="" }
+      else { k=cur SUBSEP $2; if(!(k in rvs)){rvs[k]=1; rord[cur]=rord[cur] (rord[cur]==""?"":SUBSEP) $2} rv[k]=$4 }
+      next
+    }
+    /^[ \t]*}/ { cur="" }
+    END{
+      if(!(nslug in seen)){seen[nslug]=1; ord[++no]=nslug}
+      if (nrd!="") { isobj[nslug]=1; delete sc[nslug]; k=nslug SUBSEP nrd; if(!(k in rvs)){rvs[k]=1; rord[nslug]=rord[nslug] (rord[nslug]==""?"":SUBSEP) nrd} rv[k]=npath }
+      else { isobj[nslug]=0; sc[nslug]=npath; rord[nslug]="" }
+      printf "{"; first=1
+      for(i=1;i<=no;i++){ kk=ord[i]; printf "%s\n", (first?"":","); first=0
+        if(isobj[kk]){ printf "  \"%s\": {", kk; m=split(rord[kk], rr, SUBSEP)
+          for(j=1;j<=m;j++) printf "%s\n    \"%s\": \"%s\"", (j==1?"":","), rr[j], rv[kk SUBSEP rr[j]]
+          printf "\n  }"
+        } else printf "  \"%s\": \"%s\"", kk, sc[kk]
+      }
+      printf "\n}\n"
+    }
+  ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
 }
 
 # ── status.md 단계 ───────────────────────────────────────────────────
