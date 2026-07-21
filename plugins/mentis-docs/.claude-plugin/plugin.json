@@ -1,7 +1,7 @@
 {
   "name": "mentis-docs",
   "description": "레포 구성(clone/pull, repos-setup)과 pull diff 기반 문서 자동 갱신(docs-sync) 스킬 모음",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "author": {
     "name": "이주열"
   },
