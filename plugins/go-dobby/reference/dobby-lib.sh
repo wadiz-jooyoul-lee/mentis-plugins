@@ -212,13 +212,23 @@ dobby_testrun_new() {
 
 # ── 워크트리/커밋/통합 ───────────────────────────────────────────────
 # dobby_setup_worktree REPO KEY PREFIX BASE — 워크트리 생성(재사용 시 그대로) + origin push. 경로 stdout.
+# dobby_record_branch KEY REPO BRANCH  — status.md '## 브랜치' 섹션에 (브랜치, repo) 한 줄을 중복 없이 남긴다.
+# 오케스트레이터가 status.md에 브랜치를 깜빡 안 남겨도 PR 링크·이력이 유지되게 하는 결정론 기록(대시보드 prTargets가 읽음).
+dobby_record_branch() {
+  local key="$1" repo="$2" branch="$3" sf
+  sf="$(_order_dir "$key")/status.md"
+  [ -f "$sf" ] || return 0
+  grep -q '^## 브랜치' "$sf" || printf '\n## 브랜치\n' >> "$sf"
+  grep -qF "$branch" "$sf" || printf -- '- %s (%s)\n' "$branch" "$repo" >> "$sf"
+}
+
 dobby_setup_worktree() {
   local repo="$1" key="$2" prefix="$3" base="$4"
   local src="$ORCHESTRATION_REPOS_ROOT/$repo" wt branch
   wt="$ORCHESTRATION_WORKSPACE/subtree/$repo-$key"; branch="$prefix/$key"
   [ -d "$src/.git" ] || git -C "$src" rev-parse --git-dir >/dev/null 2>&1 || { _die "소스 repo 없음: $src"; return 1; }
   mkdir -p "$ORCHESTRATION_WORKSPACE/subtree"
-  if git -C "$src" worktree list --porcelain 2>/dev/null | grep -qx "worktree $wt"; then printf '%s' "$wt"; return 0; fi
+  if git -C "$src" worktree list --porcelain 2>/dev/null | grep -qx "worktree $wt"; then dobby_record_branch "$key" "$repo" "$branch"; printf '%s' "$wt"; return 0; fi
   if git -C "$src" show-ref --verify --quiet "refs/heads/$base"; then
     git -C "$src" worktree add -b "$branch" "$wt" "$base" >&2 || { _die "worktree add 실패($base)"; return 1; }
   else
@@ -226,6 +236,7 @@ dobby_setup_worktree() {
     git -C "$src" worktree add -b "$branch" "$wt" "origin/$base" >&2 || { _die "worktree add 실패(origin/$base)"; return 1; }
   fi
   git -C "$wt" push -u origin "$branch" >&2 2>/dev/null || true
+  dobby_record_branch "$key" "$repo" "$branch"
   printf '%s' "$wt"
 }
 
