@@ -49,6 +49,22 @@ dobby_check_deps() {
 _meta() { printf '%s' "${ORCHESTRATION_META:?ORCHESTRATION_META 미설정 — dobby_load_config 먼저}"; }
 _order_dir() { printf '%s/%s' "$(_meta)" "$1"; }
 
+# dobby_docs_search "키워드1|키워드2|..."  — 착수 시(Explore·코드 분석 전) 참고 문서 위치를 빠르게 잡는다.
+# $ORCHESTRATION_DOCS_ROOT(없으면 $ORCHESTRATION_REPOS_ROOT/docs)에서 키워드로 grep해 관련 문서 경로만 출력(내용 X, 최대 20개).
+# 히트 없거나 루트가 없으면 조용히 빈 출력(0 반환) — 그대로 코드 분석으로 진행하면 된다.
+dobby_docs_search() {
+  local kw="$1" root
+  root="${ORCHESTRATION_DOCS_ROOT:-${ORCHESTRATION_REPOS_ROOT:-$HOME/work/repos}/docs}"
+  [ -n "$kw" ] || return 0
+  # 루트 폴더 부재(미설정/오설정)면 stderr로 보이게 알린다 — 정상 no-hit(폴더 있음+0건)와 구분.
+  # stdout은 빈 채로, exit 0(흐름은 그대로 코드 분석 진행). 오설정이 조용히 묻히지 않게.
+  if [ ! -d "$root" ]; then
+    printf 'dobby-lib: docs 루트 없음(%s) — 착수 docs 검색 건너뜀. ORCHESTRATION_DOCS_ROOT 확인 권장\n' "$root" >&2
+    return 0
+  fi
+  grep -rilE "$kw" "$root" 2>/dev/null | head -20
+}
+
 # ── 메타 스캐폴딩 ─────────────────────────────────────────────────────
 # dobby_scaffold_meta KEY [TITLE]  — 폴더 + 골격 status.md(없을 때만)
 dobby_scaffold_meta() {
@@ -196,13 +212,23 @@ dobby_testrun_new() {
 
 # ── 워크트리/커밋/통합 ───────────────────────────────────────────────
 # dobby_setup_worktree REPO KEY PREFIX BASE — 워크트리 생성(재사용 시 그대로) + origin push. 경로 stdout.
+# dobby_record_branch KEY REPO BRANCH  — status.md '## 브랜치' 섹션에 (브랜치, repo) 한 줄을 중복 없이 남긴다.
+# 오케스트레이터가 status.md에 브랜치를 깜빡 안 남겨도 PR 링크·이력이 유지되게 하는 결정론 기록(대시보드 prTargets가 읽음).
+dobby_record_branch() {
+  local key="$1" repo="$2" branch="$3" sf
+  sf="$(_order_dir "$key")/status.md"
+  [ -f "$sf" ] || return 0
+  grep -q '^## 브랜치' "$sf" || printf '\n## 브랜치\n' >> "$sf"
+  grep -qF "$branch" "$sf" || printf -- '- %s (%s)\n' "$branch" "$repo" >> "$sf"
+}
+
 dobby_setup_worktree() {
   local repo="$1" key="$2" prefix="$3" base="$4"
   local src="$ORCHESTRATION_REPOS_ROOT/$repo" wt branch
   wt="$ORCHESTRATION_WORKSPACE/subtree/$repo-$key"; branch="$prefix/$key"
   [ -d "$src/.git" ] || git -C "$src" rev-parse --git-dir >/dev/null 2>&1 || { _die "소스 repo 없음: $src"; return 1; }
   mkdir -p "$ORCHESTRATION_WORKSPACE/subtree"
-  if git -C "$src" worktree list --porcelain 2>/dev/null | grep -qx "worktree $wt"; then printf '%s' "$wt"; return 0; fi
+  if git -C "$src" worktree list --porcelain 2>/dev/null | grep -qx "worktree $wt"; then dobby_record_branch "$key" "$repo" "$branch"; printf '%s' "$wt"; return 0; fi
   if git -C "$src" show-ref --verify --quiet "refs/heads/$base"; then
     git -C "$src" worktree add -b "$branch" "$wt" "$base" >&2 || { _die "worktree add 실패($base)"; return 1; }
   else
@@ -210,6 +236,7 @@ dobby_setup_worktree() {
     git -C "$src" worktree add -b "$branch" "$wt" "origin/$base" >&2 || { _die "worktree add 실패(origin/$base)"; return 1; }
   fi
   git -C "$wt" push -u origin "$branch" >&2 2>/dev/null || true
+  dobby_record_branch "$key" "$repo" "$branch"
   printf '%s' "$wt"
 }
 
