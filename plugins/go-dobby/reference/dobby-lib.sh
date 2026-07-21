@@ -65,6 +65,33 @@ dobby_docs_search() {
   grep -rilE "$kw" "$root" 2>/dev/null | head -20
 }
 
+# dobby_docs_gate KEY "kw1|kw2"  — 착수 docs 게이트(차단·강제). DOCS_ROOT에서 관련 문서를 찾아
+# $META/{key}/docs-refs.md에 결과를 기록하고, 히트 경로를 stdout으로 반환한다.
+# ⛔ 이 파일이 있어야 Explore/분석으로 넘어갈 수 있다. 히트가 있으면 오케스트레이터는 그 문서를 '먼저' 읽는다.
+# 루트 없음/히트 없음도 "확인함"으로 파일에 남겨(조용한 스킵 방지) 게이트를 통과시킨다.
+dobby_docs_gate() {
+  local key="$1" kw="$2" f root hits
+  f="$(_order_dir "$key")/docs-refs.md"; mkdir -p "$(dirname "$f")"
+  root="${ORCHESTRATION_DOCS_ROOT:-${ORCHESTRATION_REPOS_ROOT:-$HOME/work/repos}/docs}"
+  {
+    printf '# %s — 착수 docs 확인\n\n' "$key"
+    printf -- '- **검색 루트**: %s\n' "$root"
+    printf -- '- **키워드**: %s\n\n' "$kw"
+  } > "$f"
+  if [ ! -d "$root" ]; then
+    printf '## 결과\n- DOCS_ROOT 없음 — docs 없이 코드 분석 진행(설정 확인 권장)\n' >> "$f"
+    printf 'dobby-lib: docs 루트 없음(%s) — docs 없이 진행\n' "$root" >&2
+    return 0
+  fi
+  hits="$(dobby_docs_search "$kw")"
+  if [ -z "$hits" ]; then
+    printf '## 결과\n- 히트 없음 — 관련 문서 없음, 코드 분석 진행\n' >> "$f"
+    return 0
+  fi
+  { printf '## 결과 (먼저 읽을 문서)\n'; printf '%s\n' "$hits" | sed 's/^/- /'; } >> "$f"
+  printf '%s\n' "$hits"
+}
+
 # ── 메타 스캐폴딩 ─────────────────────────────────────────────────────
 # dobby_scaffold_meta KEY [TITLE]  — 폴더 + 골격 status.md(없을 때만)
 dobby_scaffold_meta() {

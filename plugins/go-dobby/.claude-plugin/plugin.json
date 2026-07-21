@@ -1,7 +1,7 @@
 {
   "name": "go-dobby",
   "description": "단일 진입점 오케스트레이션 — 모든 이슈/작업을 dobby-order로 시작해 팬아웃(K) 판단으로 착수·구현·리뷰·통합 (work-dobby 재설계)",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "author": {
     "name": "이주열"
   },
