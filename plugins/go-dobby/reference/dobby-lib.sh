@@ -107,19 +107,34 @@ dobby_agent_add() {
 dobby_agent_state() {
   local key="$1" slug="$2" st="$3" rd="${4:-}"
   local f now; f="$(_order_dir "$key")/orchestration.md"; now="$(_now)"
+  # 헤더 인식형: `## 에이전트 상태표` 헤더에서 상태/라운드/착수/갱신 컬럼 위치를 찾아 그 칸만 수정한다.
+  # (오더마다 상태표 스키마가 달라 컬럼 위치를 하드코딩하면 엉뚱한 칸을 덮어써 표가 깨진다.)
   awk -F'|' -v OFS='|' -v slug="$slug" -v st="$st" -v rd="$rd" -v now="$now" '
     function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
-    {
-      if ($0 ~ /^\|/ && NF>=8 && t($2)==slug) {
-        old=t($5); ost=t($7)
-        active=(st=="분석"||st=="구현"||st=="리뷰")
-        if (active && (old=="대기"||old=="완료"||old==""||ost=="")) $7=" " now " "
-        $5=" " st " "
-        if (rd!="") $6=" " rd " "
-        $8=" " now " "
+    BEGIN{ins=0;hdr=0;ci_slug=0;ci_st=0;ci_rd=0;ci_start=0;ci_up=0}
+    /^## / { ins=($0 ~ /에이전트 상태표/)?1:0; hdr=0; print; next }
+    ins==1 && /^\|/ {
+      if (hdr==0) {
+        for(i=1;i<=NF;i++){c=t($i)
+          if(c=="슬러그")ci_slug=i; else if(c=="상태")ci_st=i
+          else if(c=="라운드")ci_rd=i; else if(c=="착수")ci_start=i; else if(c=="갱신")ci_up=i}
+        if(ci_slug>0 && ci_st>0) hdr=1
+        print; next
       }
-      print
-    }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+      issep=1; for(i=2;i<NF;i++){c=t($i); if(c!="" && c !~ /^-+$/){issep=0;break}}
+      if(issep){print;next}
+      if(t($(ci_slug))==slug){
+        old=t($(ci_st)); ost=(ci_start>0)?t($(ci_start)):"x"
+        active=(st=="분석"||st=="구현"||st=="리뷰")
+        if(ci_start>0 && active && (old=="대기"||old=="완료"||old==""||ost=="")) $(ci_start)=" " now " "
+        $(ci_st)=" " st " "
+        if(ci_rd>0 && rd!="") $(ci_rd)=" " rd " "
+        if(ci_up>0) $(ci_up)=" " now " "
+      }
+      print; next
+    }
+    { print }
+  ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
 }
 
 # dobby_event KEY TEXT — 이벤트 로그에 `- {now} TEXT` append(섹션 없으면 만든다).
@@ -231,7 +246,22 @@ dobby_resolve() {
   if [ -f "$of" ]; then
     awk -F'|' -v OFS='|' -v now="$now" '
       function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
-      { if ($0 ~ /^\|/ && NF>=8 && t($2)!="슬러그" && t($2) !~ /^-+$/ && t($5)!="" && t($5)!="완료" && t($5)!="상태") {$5=" 완료 "; $8=" " now " "} print }
+      BEGIN{ins=0;hdr=0;ci_slug=0;ci_st=0;ci_up=0}
+      /^## / { ins=($0 ~ /에이전트 상태표/)?1:0; hdr=0; print; next }
+      ins==1 && /^\|/ {
+        if (hdr==0) {
+          for(i=1;i<=NF;i++){c=t($i)
+            if(c=="슬러그")ci_slug=i; else if(c=="상태")ci_st=i; else if(c=="갱신")ci_up=i}
+          if(ci_st>0) hdr=1
+          print; next
+        }
+        issep=1; for(i=2;i<NF;i++){c=t($i); if(c!="" && c !~ /^-+$/){issep=0;break}}
+        if(issep){print;next}
+        cur=t($(ci_st))
+        if(cur!="" && cur!="완료"){ $(ci_st)=" 완료 "; if(ci_up>0) $(ci_up)=" " now " " }
+        print; next
+      }
+      { print }
     ' "$of" > "$of.tmp" && mv "$of.tmp" "$of"
   fi
   grep -q '^## 해결' "$f" || cat >> "$f" <<EOF
