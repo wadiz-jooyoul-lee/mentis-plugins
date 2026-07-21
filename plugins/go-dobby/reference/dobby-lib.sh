@@ -49,6 +49,22 @@ dobby_check_deps() {
 _meta() { printf '%s' "${ORCHESTRATION_META:?ORCHESTRATION_META 미설정 — dobby_load_config 먼저}"; }
 _order_dir() { printf '%s/%s' "$(_meta)" "$1"; }
 
+# dobby_docs_search "키워드1|키워드2|..."  — 착수 시(Explore·코드 분석 전) 참고 문서 위치를 빠르게 잡는다.
+# $ORCHESTRATION_DOCS_ROOT(없으면 $ORCHESTRATION_REPOS_ROOT/docs)에서 키워드로 grep해 관련 문서 경로만 출력(내용 X, 최대 20개).
+# 히트 없거나 루트가 없으면 조용히 빈 출력(0 반환) — 그대로 코드 분석으로 진행하면 된다.
+dobby_docs_search() {
+  local kw="$1" root
+  root="${ORCHESTRATION_DOCS_ROOT:-${ORCHESTRATION_REPOS_ROOT:-$HOME/work/repos}/docs}"
+  [ -n "$kw" ] || return 0
+  # 루트 폴더 부재(미설정/오설정)면 stderr로 보이게 알린다 — 정상 no-hit(폴더 있음+0건)와 구분.
+  # stdout은 빈 채로, exit 0(흐름은 그대로 코드 분석 진행). 오설정이 조용히 묻히지 않게.
+  if [ ! -d "$root" ]; then
+    printf 'dobby-lib: docs 루트 없음(%s) — 착수 docs 검색 건너뜀. ORCHESTRATION_DOCS_ROOT 확인 권장\n' "$root" >&2
+    return 0
+  fi
+  grep -rilE "$kw" "$root" 2>/dev/null | head -20
+}
+
 # ── 메타 스캐폴딩 ─────────────────────────────────────────────────────
 # dobby_scaffold_meta KEY [TITLE]  — 폴더 + 골격 status.md(없을 때만)
 dobby_scaffold_meta() {
