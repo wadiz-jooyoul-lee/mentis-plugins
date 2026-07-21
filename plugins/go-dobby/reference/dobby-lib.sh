@@ -226,4 +226,50 @@ EOF
   dobby_event "$key" "해결 표시 — status 해결"
 }
 
+# ── 정리(dobby-end) 기계적 조각 ──────────────────────────────────────
+# 판정("제거해도 되나")은 LLM 몫: (status.md 단계 == 해결) AND (dobby_wt_unpushed == 0).
+# 아래 함수는 세기·저장·제거만 한다.
+
+# dobby_subtree_list — subtree 폴더별 "경로<TAB>키" stdout(키는 폴더명 끝의 이슈/작업 키).
+dobby_subtree_list() {
+  local base="$ORCHESTRATION_WORKSPACE/subtree" d name key
+  [ -d "$base" ] || return 0
+  for d in "$base"/*/; do
+    [ -d "$d" ] || continue
+    d="${d%/}"; name="$(basename "$d")"
+    key="$(printf '%s' "$name" | grep -oE '[A-Z][A-Za-z0-9]*-[0-9]+|TASK-[A-Za-z0-9-]+' | tail -1)"
+    printf '%s\t%s\n' "$d" "$key"
+  done
+}
+
+# dobby_wt_unpushed WORKTREE — origin에 안 올라간 커밋 수 stdout(모르면 '?' → 안전하지 않음으로 취급).
+dobby_wt_unpushed() {
+  local wt="$1" n br
+  n="$(git -C "$wt" rev-list --count '@{u}..HEAD' 2>/dev/null)" || n=""
+  if [ -z "$n" ]; then
+    br="$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+    n="$(git -C "$wt" rev-list --count "origin/$br..HEAD" 2>/dev/null)" || n=""
+  fi
+  printf '%s' "${n:-?}"
+}
+
+# dobby_end_snapshot KEY WORKTREE BASE — 제거 전 코드 변경분을 code-changes/에 파일로 저장. 폴더 stdout.
+dobby_end_snapshot() {
+  local key="$1" wt="$2" base="$3" dir repo ref
+  dir="$(_order_dir "$key")/code-changes"; mkdir -p "$dir"
+  repo="$(basename "$wt")"; repo="${repo%-$key}"; repo="${repo%-$key-*}"
+  ref="$base"; git -C "$wt" rev-parse --verify -q "origin/$base" >/dev/null 2>&1 && ref="origin/$base"
+  git -C "$wt" log --oneline "$ref..HEAD" > "$dir/$repo.commits" 2>/dev/null || true
+  git -C "$wt" diff "$ref...HEAD" > "$dir/$repo.diff" 2>/dev/null || true
+  printf '%s' "$dir"
+}
+
+# dobby_end_remove SRCREPO WORKTREE — 워크트리 제거(브랜치는 보존). 거부 시 --force(해결 이슈만).
+# ⛔ rm -rf 등 파괴적 삭제는 하지 않는다(사용자 동의 후 수동).
+dobby_end_remove() {
+  local src="$1" wt="$2"
+  git -C "$src" worktree remove "$wt" 2>/dev/null && return 0
+  git -C "$src" worktree remove --force "$wt"
+}
+
 echo "dobby-lib loaded" >&2
