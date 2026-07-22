@@ -65,6 +65,33 @@ dobby_docs_search() {
   grep -rilE "$kw" "$root" 2>/dev/null | head -20
 }
 
+# dobby_docs_gate KEY "kw1|kw2"  — 착수 docs 게이트(차단·강제). DOCS_ROOT에서 관련 문서를 찾아
+# $META/{key}/docs-refs.md에 결과를 기록하고, 히트 경로를 stdout으로 반환한다.
+# ⛔ 이 파일이 있어야 Explore/분석으로 넘어갈 수 있다. 히트가 있으면 오케스트레이터는 그 문서를 '먼저' 읽는다.
+# 루트 없음/히트 없음도 "확인함"으로 파일에 남겨(조용한 스킵 방지) 게이트를 통과시킨다.
+dobby_docs_gate() {
+  local key="$1" kw="$2" f root hits
+  f="$(_order_dir "$key")/docs-refs.md"; mkdir -p "$(dirname "$f")"
+  root="${ORCHESTRATION_DOCS_ROOT:-${ORCHESTRATION_REPOS_ROOT:-$HOME/work/repos}/docs}"
+  {
+    printf '# %s — 착수 docs 확인\n\n' "$key"
+    printf -- '- **검색 루트**: %s\n' "$root"
+    printf -- '- **키워드**: %s\n\n' "$kw"
+  } > "$f"
+  if [ ! -d "$root" ]; then
+    printf '## 결과\n- DOCS_ROOT 없음 — docs 없이 코드 분석 진행(설정 확인 권장)\n' >> "$f"
+    printf 'dobby-lib: docs 루트 없음(%s) — docs 없이 진행\n' "$root" >&2
+    return 0
+  fi
+  hits="$(dobby_docs_search "$kw")"
+  if [ -z "$hits" ]; then
+    printf '## 결과\n- 히트 없음 — 관련 문서 없음, 코드 분석 진행\n' >> "$f"
+    return 0
+  fi
+  { printf '## 결과 (먼저 읽을 문서)\n'; printf '%s\n' "$hits" | sed 's/^/- /'; } >> "$f"
+  printf '%s\n' "$hits"
+}
+
 # ── 메타 스캐폴딩 ─────────────────────────────────────────────────────
 # dobby_scaffold_meta KEY [TITLE]  — 폴더 + 골격 status.md(없을 때만)
 dobby_scaffold_meta() {
@@ -220,6 +247,27 @@ dobby_record_branch() {
   [ -f "$sf" ] || return 0
   grep -q '^## 브랜치' "$sf" || printf '\n## 브랜치\n' >> "$sf"
   grep -qF "$branch" "$sf" || printf -- '- %s (%s)\n' "$branch" "$repo" >> "$sf"
+}
+
+# dobby_set_title KEY "제목"  — status.md '## 이슈/작업'의 '- **제목**:' 줄을 실제 제목으로 갱신(in-place).
+# 골격 생성 시 넣은 임시 제목(이슈 키 등)을 조회 후 실제 요약으로 덮어쓰는 용도. dobby-start 경유 여부와 무관하게 호출.
+dobby_set_title() {
+  local key="$1" title="$2" f
+  f="$(_order_dir "$key")/status.md"
+  [ -f "$f" ] || return 0
+  [ -n "$title" ] || return 0
+  awk -v t="$title" '
+    /^##/ { insec = ($0 ~ /이슈\/작업/) }
+    { if (insec && $0 ~ /^[ \t]*-[ \t]*\*\*제목\*\*/) { print "- **제목**: " t; next } print }
+  ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+
+# dobby_append KEY FILE "블록"  — 오더 메타의 append-only 문서(decisions.md 등)에 블록을 '읽기 없이' 뒤에 붙인다.
+# 기존 내용을 다시 읽거나 재작성하지 않아 토큰이 안 든다. FILE은 오더 폴더 기준 파일명.
+dobby_append() {
+  local key="$1" file="$2" block="$3" f
+  f="$(_order_dir "$key")/$file"; mkdir -p "$(dirname "$f")"
+  printf '%s\n' "$block" >> "$f"
 }
 
 dobby_setup_worktree() {
