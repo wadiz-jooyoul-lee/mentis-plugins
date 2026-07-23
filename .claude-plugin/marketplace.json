@@ -22,7 +22,7 @@
       "name": "go-dobby",
       "source": "./plugins/go-dobby",
       "description": "단일 진입점 오케스트레이션 — dobby-order로 모든 이슈/작업을 팬아웃(K) 판단으로 착수·구현·리뷰·통합 (work-dobby 재설계)",
-      "version": "0.2.2",
+      "version": "0.2.3",
       "author": { "name": "이주열" },
       "category": "workflow",
       "tags": ["issue", "multi-agent", "orchestration", "go-dobby", "jira"]
