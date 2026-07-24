@@ -1,6 +1,6 @@
 ---
 name: avatar-quips
-description: mentis 대시보드 전용 재미기능. 한 오더의 에이전트들에 배정된 아바타(BTS·프로미스나인·도비)가 상태표의 가벼운 신호(상태·라운드·역할)만 보고 성격대로 소감(만족·불평·환호·고민)을 남겨 대시보드 호버 말풍선·시간별 히스토리 파일을 만든다. 무거운 본문·로그는 읽지 않아 빠르고 토큰이 적다. ⛔ 오케스트레이션(dobby-order 등)에서는 절대 호출하지 않는다 — 대시보드가 페이지 진입 시 백그라운드로만 실행한다. 사용법 /avatar-quips {키} [슬러그...] — 슬러그를 주면 그 에이전트들 소감만 다시 만들어 병합한다(없으면 전체).
+description: mentis 대시보드 전용 재미기능. 한 오더의 에이전트들에 배정된 아바타(BTS·프로미스나인·IVE·도비)가 상태표의 가벼운 신호(상태·라운드·역할)만 보고 성격대로 소감(만족·불평·환호·고민)을 남겨 대시보드 호버 말풍선·시간별 히스토리 파일을 만든다. 무거운 본문·로그는 읽지 않아 빠르고 토큰이 적다. ⛔ 오케스트레이션(dobby-order 등)에서는 절대 호출하지 않는다 — 대시보드가 페이지 진입 시 백그라운드로만 실행한다. 사용법 /avatar-quips {키} [슬러그...] — 슬러그를 주면 그 에이전트들 소감만 다시 만들어 병합한다(없으면 전체).
 ---
 
 # avatar-quips
@@ -34,11 +34,12 @@ description: mentis 대시보드 전용 재미기능. 한 오더의 에이전트
 node -e '
 const BTS=["RM","진","슈가","제이홉","지민","뷔","정국"];
 const FROMIS=["송하영","박지원","이채영","이나경","백지헌"];
+const IVE=["가을","안유진","레이","장원영","리즈","이서"];
 function hash(s){let h=2166136261>>>0;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)>>>0;}return h>>>0;}
 const KEY=process.argv[1]; const slugs=[...new Set(process.argv.slice(2).filter(s=>s&&s!=="-"))].sort();
-const r=hash(KEY)%100, primary=r<40?"bts":r<80?"fromis":"dobby";
-const FILL={bts:["bts","fromis","dobby"],fromis:["fromis","bts","dobby"],dobby:["dobby","bts","fromis"]};
-const order=FILL[primary], pool={bts:BTS,fromis:FROMIS,dobby:[]}, used={bts:0,fromis:0,dobby:0};
+const r=hash(KEY)%100, primary=r<30?"bts":r<60?"fromis":r<80?"ive":"dobby";
+const FILL={bts:["bts","fromis","ive","dobby"],fromis:["fromis","ive","bts","dobby"],ive:["ive","fromis","bts","dobby"],dobby:["dobby","bts","fromis","ive"]};
+const order=FILL[primary], pool={bts:BTS,fromis:FROMIS,ive:IVE,dobby:[]}, used={bts:0,fromis:0,ive:0,dobby:0};
 let gi=0; const map={};
 for(const s of slugs){ while(order[gi]!=="dobby"&&used[order[gi]]>=pool[order[gi]].length)gi++; const g=order[gi]; if(g==="dobby")map[s]={group:"dobby"}; else {map[s]={group:g,member:pool[g][used[g]]}; used[g]++;} }
 console.log(JSON.stringify(map));
@@ -62,6 +63,12 @@ console.log(JSON.stringify(map));
 - **이채영**(댄서·래퍼): 활발·힙·에너지
 - **이나경**(비주얼·분위기메이커): 밝음·상큼
 - **백지헌**(막내·보컬): 씩씩·귀염·에너지
+- **가을**(IVE·메인댄서·리드래퍼): 시크·쿨한 무대 장악력, 속은 다정
+- **안유진**(IVE·리더, "럭키비키"): 초긍정·리더십, 뭐든 좋게 해석하는 행운 아이콘
+- **레이**(IVE·일본·반전 래퍼): 깜찍·마이페이스·엉뚱, 예상 못 한 반전
+- **장원영**(IVE·센터·비주얼): 우아함 뒤의 지독한 완벽주의
+- **리즈**(IVE·메인보컬): 청아·단단·성실한 노력파
+- **이서**(IVE·막내·리드댄서): 씩씩·에너지·도전 정신
 - **도비**(group=dobby): **랜덤 톤**(겸손·충직한 도비 말투 + 매번 무작위 기분). 도비끼리도 조금씩 다르게.
 
 ## 4. 소감 생성 (컨텍스트 3개 · 성격으로 풍부하게 · 매번 다른 뉘앙스)
