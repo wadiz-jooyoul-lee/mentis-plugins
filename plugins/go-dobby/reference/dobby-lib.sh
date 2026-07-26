@@ -95,7 +95,7 @@ dobby_docs_gate() {
 # ── 메타 스캐폴딩 ─────────────────────────────────────────────────────
 # dobby_scaffold_meta KEY [TITLE]  — 폴더 + 골격 status.md(없을 때만)
 dobby_scaffold_meta() {
-  local key="$1" title="${2:-$1}" dir; dir="$(_order_dir "$key")"
+  local key="$1" title="${2:-$1}" kw="${3:-}" dir; dir="$(_order_dir "$key")"
   mkdir -p "$dir/agents" "$dir/reviews" || return 1
   if [ ! -f "$dir/status.md" ]; then
     cat > "$dir/status.md" <<EOF
@@ -108,6 +108,13 @@ dobby_scaffold_meta() {
 - **단계**: 착수
 - **갱신**: $(_now)
 EOF
+  fi
+  # ⛔ docs 게이트 자동 실행(C): 진입 첫 필수 헬퍼에서 키워드가 주어지면 docs-refs.md를
+  # 즉시 생성해, Explore·분석·팬아웃보다 먼저 문서 확인이 이뤄지도록 강제한다.
+  # (키워드 미전달 시엔 파일이 안 생기고, 이후 dobby_setup_worktree(B)에서 차단된다.)
+  if [ -n "$kw" ]; then
+    local hits; hits="$(dobby_docs_gate "$key" "$kw")"
+    [ -n "$hits" ] && printf 'dobby-lib: docs 게이트 히트 — 팬아웃/Explore 전에 먼저 읽으세요:\n%s\n' "$hits" >&2
   fi
 }
 
@@ -271,12 +278,21 @@ dobby_append() {
 }
 
 dobby_setup_worktree() {
-  local repo="$1" key="$2" prefix="$3" base="$4"
+  # $5(rootkey, 선택): docs 게이트를 검사할 루트 키. 에이전트 워크트리(에이전트키≠루트키)면
+  # 루트 키를 넘겨 루트의 docs-refs.md를 검사한다. 미지정 시 $2(=K=1이면 루트=에이전트).
+  local repo="$1" key="$2" prefix="$3" base="$4" gate_key="${5:-$2}"
   local src="$ORCHESTRATION_REPOS_ROOT/$repo" wt branch
   wt="$ORCHESTRATION_WORKSPACE/subtree/$repo-$key"; branch="$prefix/$key"
   [ -d "$src/.git" ] || git -C "$src" rev-parse --git-dir >/dev/null 2>&1 || { _die "소스 repo 없음: $src"; return 1; }
   mkdir -p "$ORCHESTRATION_WORKSPACE/subtree"
   if git -C "$src" worktree list --porcelain 2>/dev/null | grep -qx "worktree $wt"; then dobby_record_branch "$key" "$repo" "$branch"; printf '%s' "$wt"; return 0; fi
+  # ⛔ docs 게이트 차단(B): 새 워크트리 생성 전, 루트의 docs-refs.md가 없으면 중단한다.
+  # docs 게이트를 안 돌리면 구현할 워크트리를 못 만들므로 게이트가 물리적으로 강제된다.
+  # (기존 워크트리 재사용 경로는 위에서 이미 return — 과거 오더는 차단하지 않는다.)
+  if [ ! -f "$(_order_dir "$gate_key")/docs-refs.md" ]; then
+    _die "docs 게이트 미통과 — 워크트리 생성 차단: $(_order_dir "$gate_key")/docs-refs.md 없음. 먼저 'dobby_docs_gate $gate_key \"키워드1|키워드2\"'(또는 dobby_scaffold_meta에 키워드 인자)를 실행해 문서를 확인하세요."
+    return 1
+  fi
   if git -C "$src" show-ref --verify --quiet "refs/heads/$base"; then
     git -C "$src" worktree add -b "$branch" "$wt" "$base" >&2 || { _die "worktree add 실패($base)"; return 1; }
   else

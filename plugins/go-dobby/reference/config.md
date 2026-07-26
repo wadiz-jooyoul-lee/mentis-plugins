@@ -32,11 +32,11 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 
 | 함수 | 언제 | 하는 일 |
 |------|------|---------|
-| `dobby_scaffold_meta KEY [제목]` | 진입 즉시 | 메타 폴더 + 골격 status.md(없을 때만) |
+| `dobby_scaffold_meta KEY [제목] ["kw1\|kw2"]` | 진입 즉시 | 메타 폴더 + 골격 status.md(없을 때만) **+ 키워드 주면 docs 게이트 자동 실행(docs-refs.md 생성)** |
 | `dobby_docs_search "kw1\|kw2"` | 착수(Explore·분석 전 최우선) | `$ORCHESTRATION_DOCS_ROOT`에서 키워드로 관련 문서 경로만 반환(내용 X). 위치·배경 먼저 파악 |
 | `dobby_docs_gate KEY "kw1\|kw2"` | **P1 최초(차단 게이트)** | docs 검색 결과를 `docs-refs.md`에 기록(+경로 stdout). **이 파일 없이 Explore/분석 진행 금지**. 히트 시 그 문서 먼저 읽기 |
 | `dobby_ensure_board KEY` | P0 | orchestration.md 상태표+이벤트로그 골격 |
-| `dobby_setup_worktree REPO KEY PREFIX BASE` | P0 | fetch·워크트리·브랜치·origin push (경로 stdout, base 로컬/원격 자동 감지, 재호출 시 재사용) + **status.md `## 브랜치`에 브랜치 자동 기록**(PR 링크·이력용) |
+| `dobby_setup_worktree REPO KEY PREFIX BASE [루트키]` | P0 | fetch·워크트리·브랜치·origin push (경로 stdout, base 로컬/원격 자동 감지, 재호출 시 재사용) + **status.md `## 브랜치`에 브랜치 자동 기록**(PR 링크·이력용). **⛔ 루트의 `docs-refs.md` 없으면 새 워크트리 생성 거부(docs 게이트 B)** — 하위 에이전트는 5번째로 루트키 전달 |
 | `dobby_agent_add KEY 슬러그 이름 설명 상태 [라운드]` | 스폰 전(선갱신) | 상태표 행 추가(중복 무시, 활성이면 착수=now) |
 | `dobby_agent_state KEY 슬러그 상태 [라운드]` | 전이마다 | 그 행 상태/갱신만 수정(비활성→활성 진입 시 착수 갱신) |
 | `dobby_set_title KEY "제목"` | **이슈 조회 직후(필수)** | status.md 제목을 실제 요약으로 갱신(골격 임시 제목 덮어씀). dobby-start 경유 여부와 무관 |
