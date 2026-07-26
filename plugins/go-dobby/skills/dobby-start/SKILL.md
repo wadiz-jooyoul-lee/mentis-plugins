@@ -20,7 +20,7 @@ description: dobby-order가 각 에이전트(단일 이슈든 하위이슈든)�
 
 ## 설정 (첫 실행 시 확인)
 
-작업을 시작하기 전에 **`${CLAUDE_PLUGIN_ROOT}/reference/config.md`의 "설정 절차"를 그대로 따른다**: `~/.config/go-dobby/config.env`를 source 해 환경 변수를 **읽기만** 한다. ⛔ **이 스킬은 config.env를 저장·수정·생성하지 않는다**(값 변경은 `dobby-init` 전용 — config.md '비파괴 원칙'). config.env 파일이 아예 없으면 멈추고 `/dobby-init`을 먼저 실행하도록 안내한다. 메타 루트 `ORCHESTRATION_META`, 변수 목록·기본값, 폴더 배치(워크트리 `$ORCHESTRATION_WORKSPACE/subtree/` · 메타 `$ORCHESTRATION_META/`)는 모두 그 문서에 있다. 이하 메타 경로는 `$ORCHESTRATION_META` 기준. **공용 헬퍼(config.md '공용 헬퍼', 이미 source됨)**: 결정론 단계는 손으로 하지 말고 함수로 — 워크트리 생성은 `dobby_setup_worktree REPO 키 PREFIX BASE`, status 초기 스캐폴딩은 `dobby_scaffold_meta`, 현재 단계 전이는 `dobby_phase 키 착수`/`dobby_phase 키 분석완료`.
+작업을 시작하기 전에 **`${CLAUDE_PLUGIN_ROOT}/reference/config.md`의 "설정 절차"를 그대로 따른다**: `~/.config/go-dobby/config.env`를 source 해 환경 변수를 **읽기만** 한다. ⛔ **이 스킬은 config.env를 저장·수정·생성하지 않는다**(값 변경은 `dobby-init` 전용 — config.md '비파괴 원칙'). config.env 파일이 아예 없으면 멈추고 `/dobby-init`을 먼저 실행하도록 안내한다. 메타 루트 `ORCHESTRATION_META`, 변수 목록·기본값, 폴더 배치(워크트리 `$ORCHESTRATION_WORKSPACE/subtree/` · 메타 `$ORCHESTRATION_META/`)는 모두 그 문서에 있다. 이하 메타 경로는 `$ORCHESTRATION_META` 기준. **공용 헬퍼(config.md '공용 헬퍼', 이미 source됨)**: 결정론 단계는 손으로 하지 말고 함수로 — 워크트리 생성은 `dobby_setup_worktree REPO 키 PREFIX BASE [루트키]`(하위 에이전트는 루트키를 5번째로 넘겨 루트 docs 게이트를 검사), status 초기 스캐폴딩은 `dobby_scaffold_meta`, 현재 단계 전이는 `dobby_phase 키 착수`/`dobby_phase 키 분석완료`.
 
 ## 입력
 
@@ -43,6 +43,7 @@ description: dobby-order가 각 에이전트(단일 이슈든 하위이슈든)�
 - 버그 → `bugfix/{키}`, 그 외(작업 등) → `feature/{키}`. 이 값이 **전체 브랜치명**이다(예: `bugfix/QA-22370`).
 
 ### 4. 워크트리 + 브랜치 생성
+- **⛔ docs 게이트(강제)**: 새 워크트리를 만들려면 **루트의 `docs-refs.md`가 있어야 한다**. `dobby_setup_worktree`로 만들 때는 **5번째 인자로 루트 키를 넘겨** 루트 게이트를 검사하게 한다: `dobby_setup_worktree {repo} {키} {prefix} {base} {루트키}`(에이전트키≠루트키인 하위 에이전트 필수, K=1이면 키=루트키라 생략 가능). 게이트가 없으면 헬퍼가 생성을 거부하므로, 그 경우 오케스트레이터(dobby-order)가 먼저 docs 게이트를 돌려야 한다.
 - **소스 루트**: `$ORCHESTRATION_REPOS_ROOT/{repo}`(없으면 `git rev-parse --show-toplevel`). 이후 모든 git 명령은 소스 루트에서(`cd {sourceRoot}`).
 - 워크트리는 `$ORCHESTRATION_WORKSPACE/subtree/{repo}-{키}`(없으면 `mkdir -p $ORCHESTRATION_WORKSPACE/subtree`). 한 이슈가 여러 repo면 repo별로 각각 생성한다.
 - **중복 확인**: `git worktree list`·`git branch --list {prefix}`. 이미 있으면 메타(`$ORCHESTRATION_META/{키}/status.md`) 존재로 갈라 처리 — 있으면 중단하고 사용자 확인, 없으면 기존 워크트리 재사용 + 분석/메타만 채움(fetch/worktree add 건너뜀).
