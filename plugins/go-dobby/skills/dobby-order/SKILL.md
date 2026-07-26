@@ -117,7 +117,7 @@ dobby-order — 이슈/작업을 분석해 개발·리뷰·통합까지 자동 �
 **팬아웃 판단·Explore·워크트리 생성보다 먼저**, 대상에서 루트 키를 정하는 즉시 최소 골격 `status.md`를 남긴다. 대시보드 목록 등장 조건은 `$ORCHESTRATION_META/{루트키}/`에 `status.md`(또는 `orchestration.md`)가 있는 것뿐이므로, 이 한 파일만 있으면 **바로** 목록에 뜬다. 이게 없으면 팬아웃 분석·워크트리·origin 푸시가 다 끝나는 P0까지(수 분) 목록에 안 떠서 "시작이 안 된 것처럼" 보인다.
 
 - 루트 키: 이슈 키/URL이면 그 키. 문서 전용이면 위 `TASK-{slug}` 규칙으로 제목만 보고 **즉시** 생성한다(Jira 조회 불필요).
-- `mkdir -p $ORCHESTRATION_META/{루트키}` 후 `status.md`에 **아는 것만** 최소로 기록한다(조회 전이므로 제목은 대상 원문이라도 무방). **→ 헬퍼 `dobby_scaffold_meta {루트키} "{제목}"`**(폴더+골격 status.md):
+- `mkdir -p $ORCHESTRATION_META/{루트키}` 후 `status.md`에 **아는 것만** 최소로 기록한다(조회 전이므로 제목은 대상 원문이라도 무방). **→ 헬퍼 `dobby_scaffold_meta {루트키} "{제목}" "{kw1|kw2}"`**(폴더+골격 status.md **+ docs 게이트 자동 실행**). **⛔ 세 번째 인자로 핵심 키워드(기능명·화면·컴포넌트·URL·도메인 용어)를 반드시 넘긴다** — 그러면 이 헬퍼가 진입 즉시 `dobby_docs_gate`를 대신 돌려 `docs-refs.md`를 만들고, 팬아웃·Explore 전에 docs 확인이 강제된다(아래 "docs 게이트"). 키워드를 안 넘기면 `docs-refs.md`가 안 생겨 **P0 워크트리 생성이 차단**되므로, 결국 게이트를 돌릴 수밖에 없다.
 
   ```markdown
   # {루트키}
@@ -137,9 +137,10 @@ dobby-order — 이슈/작업을 분석해 개발·리뷰·통합까지 자동 �
 
 이슈 타입이 아니라 **코드 범위(파일 오너십)**로 판단한다. 타입·하위이슈는 강한 힌트일 뿐이다.
 
-> **⛔ docs 게이트 (P1 최우선·차단 — 강제, →C6):** 조회·Explore·팬아웃 판단을 시작하기 **전에**, 가장 먼저 **`dobby_docs_gate {루트키} "kw1|kw2"`**(config.md '공용 헬퍼')를 실행한다. 이 헬퍼가 `$ORCHESTRATION_META/{루트키}/docs-refs.md`를 생성하고 관련 문서 경로를 반환한다.
+> **⛔ docs 게이트 (P1 최우선·차단 — 코드로 강제, →C6):** 조회·Explore·팬아웃 판단을 시작하기 **전에**, 가장 먼저 docs 게이트로 `docs-refs.md`를 만든다. **진입 즉시 `dobby_scaffold_meta {루트키} "{제목}" "{kw1|kw2}"`에 키워드를 넘겼다면 이미 자동 실행됐다.** (직접 돌리려면 `dobby_docs_gate {루트키} "kw1|kw2"`.) 이 헬퍼가 `$ORCHESTRATION_META/{루트키}/docs-refs.md`를 생성하고 관련 문서 경로를 반환한다.
 > - **히트가 있으면 → 그 문서를 반드시 먼저 읽어** 기본 위치·배경·플로우·API 계약을 파악한 뒤에만 Explore/분석/팬아웃으로 진행한다. 읽은 문서 경로·요지를 이후 **모든 Explore/분석 에이전트 프롬프트에 실어** 보낸다(analysis-discipline 원칙 0).
 > - 히트가 없거나 DOCS_ROOT가 없어도 `docs-refs.md`에 "확인함"으로 기록돼 게이트를 통과한다(조용한 스킵 방지).
+> - **⛔ 코드 강제(B): `docs-refs.md`가 없으면 `dobby_setup_worktree`가 워크트리 생성을 거부한다.** 즉 게이트를 건너뛰면 구현할 워크트리 자체가 안 만들어진다 — 문구가 아니라 실행이 막힌다. (기존 워크트리 재사용은 차단하지 않는다.)
 > - **⛔ `docs-refs.md`가 생성되기 전에는 Explore·분석·팬아웃·P4로 넘어가지 않는다.** dobby-start를 거치지 않고 pre-Explore를 직접 띄우는 경로에서도 예외 없다.
 
 1. 이슈/문서 조회 + 하위이슈 탐색(`parent = {상위}` JQL) + (멀티 repo면) repo별 **읽기 전용 Explore 에이전트**로 범위를 사실 기준으로 분석한다.
@@ -168,7 +169,7 @@ dobby-order — 이슈/작업을 분석해 개발·리뷰·통합까지 자동 �
 
 ### P0. 셋업
 - 소스 루트에서 `git fetch origin {base}`.
-- **루트 브랜치·워크트리 생성** + origin 푸시. **→ 헬퍼 `dobby_setup_worktree {repo} {루트키} {prefix} {base}`**(base 로컬/원격 자동 감지·재사용·경로 반환) + **`dobby_ensure_board {루트키}`**(상태표·이벤트로그 골격). (→C2)
+- **루트 브랜치·워크트리 생성** + origin 푸시. **→ 헬퍼 `dobby_setup_worktree {repo} {루트키} {prefix} {base}`**(base 로컬/원격 자동 감지·재사용·경로 반환) + **`dobby_ensure_board {루트키}`**(상태표·이벤트로그 골격). (→C2) **⛔ 이 헬퍼는 `docs-refs.md`가 없으면 워크트리 생성을 거부한다(docs 게이트 B). 여기서 거부되면 위 docs 게이트를 먼저 돌려라.**
 - **메타 루트는 항상 동일**: 루트 키 폴더 `$ORCHESTRATION_META/{루트키}/`에 `orchestration.md`·`agents/`·`reviews/`를 **항상** 둔다(→C2, 규격은 아래 "오케스트레이션 메타"). 하위 에이전트 키가 따로 있으면 그 키 폴더(`$ORCHESTRATION_META/{에이전트키}/`)에는 work 파일이 들어간다.
 - **멀티 repo면 저장소마다 위를 반복.** base는 저장소마다 다를 수 있다(예: FE master, BE develop).
 
@@ -263,7 +264,7 @@ dobby-order — 이슈/작업을 분석해 개발·리뷰·통합까지 자동 �
 |------|-------------------|:----:|
 | 진입 → 계획 확정 | 이슈/문서 + 하위이슈 탐색 + 범위 분석 | ✅ 초기 1회 |
 | P0 → P1 | 브랜치·워크트리 생성됨 | 자동 |
-| **P1 docs 게이트** | `dobby_docs_gate`로 `docs-refs.md` 생성(히트 시 문서 먼저 읽음) | ✅ **`docs-refs.md` 없이 Explore·분석·팬아웃 진행 금지** |
+| **P1 docs 게이트** | `dobby_scaffold_meta`(키워드 인자)/`dobby_docs_gate`로 `docs-refs.md` 생성(히트 시 문서 먼저 읽음) | ✅ **코드 강제: 없으면 `dobby_setup_worktree`가 워크트리 생성 거부** |
 | **P1 활성 경로 확정** | 대상이 실행되는 앱/엔트리/라우트를 마운트·URL매칭으로 증명 | ✅ **확정 못하면 중단·보고** |
 | P1 → P2 | 모든 에이전트 `analysis.md` 산출 | 자동 |
 | P2 → P3 | 분석이 기획·Jira/문서와 일치 | 자동(순수 제품/디자인 미결만 확인) |
