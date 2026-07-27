@@ -45,6 +45,12 @@ description: 서브 에이전트가 자기 워크트리에서 이슈/작업을 �
 ### 3. 구현
 - **허용 범위 안에서만** 구현한다. 범위 밖이 필요하면 임의로 건드리지 말고 메인에 요청한다(충돌 방지의 핵심). 기존 코드 패턴·`CLAUDE.md` 규약을 따르고, 요청되지 않은 리팩터링·기능 추가는 하지 않는다.
 - **⛔ 기존 데이터 수집 보존 확인(회귀 방지 — 필수)**: 마크업·DOM 구조나 이벤트 요소를 **바꾸거나 옮기거나 나누거나 교체**할 때(앵커/버튼 분리·래핑 변경·요소 교체 등), 원래 요소에 붙어 있던 **데이터 수집·추적·로깅 장치가 모든 상호작용 경로에 그대로 남아 있는지** 반드시 확인한다 — GA 속성(`data-ec-*`·`gaData` spread)·`onClick`/추적 핸들러·`dataLayer` push·`data-*` 트래킹·로깅 호출 등. **이런 누락은 화면 변화도 에러도 없어 조용히 회귀**한다(실제 사례 FE1-1279: 이미지 앵커를 콘텐츠 앵커와 분리하며 `{...item.gaData}`를 콘텐츠 쪽에만 남겨 이미지 클릭 수집이 누락됨). 확인 방법: (a) 변경 전 요소가 갖던 추적 속성/핸들러를 목록화하고, (b) 변경 후 **클릭 가능한/추적 대상 요소마다** 동일 장치가 부착됐는지 대조하며, (c) 애매하면 회귀 이전 커밋(`git show`)이나 형제 컴포넌트(동일 패턴)와 비교해 사실로 확인한다.
+- **⛔ 데이터 트래킹(GA 이벤트) 추가·마이그레이션은 `@wadiz/event-tracker`로 (wadiz-frontend)**: GA 이벤트를 **새로 심거나** 기존 인라인 수집(`data-ec-*`·`gaData`·`dataLayer` push 등)을 **옮길 때**, 컴포넌트에 직접 박지 말고 **`packages/event-tracker`의 tracker 함수**로 구현한다(마케팅 데이터 수집 단일 창구). 착수 전 `packages/event-tracker/README.md`와 대상 기능의 `*.tracker.ts`를 읽어 실제 패턴을 확인한다(추측 금지).
+  - **파일·등록**: 기능별 `src/{lower-kebab}.tracker.ts`. 없으면 새로 만들고 `src/index.ts`에 `export * as {feature}Tracker from './{kebab}.tracker'` 추가.
+  - **함수**: `export const tracking{Target}{Event} = (...args) => trackingCustomTag({ category, action, label });` (`import { trackingCustomTag } from '@wadiz/metrics'`). `{Event}`=`Click`|`Impression`, 요소명은 이벤트 앞에(`...CloseButtonClick`, `...Click` 아님). 동적 값(projectType·isKorea·id·keyword 등)은 **함수 인자로 받아** category/action/label에 넣는다. `trackingCustomTag({ ... })` 인자는 **한 줄**. 파일/섹션 주석은 **블록주석 `/* */`**(JSDoc `/** */` 금지)로, 가능하면 GA 스펙 시트 URL을 함께 남기고 **함수별 주석은 달지 않는다**.
+  - **스키마**: `CustomTag = { category: string; action?: string(기본 '클릭'); label?: string|null }` → `trackingEvent('ga.custom.tag', { GACategory, GAAction, GALabel })`로 dataLayer에 push.
+  - **컴포넌트 사용**: 노출은 `const { ref } = useTrackingEventRef({ impressionCallback: {feature}Tracker.tracking...Impression })` 후 그 `ref`를 대상 요소에 부착(뷰 50%·1초 이상 시 수집, `shouldTrackImpressionOnce`로 1회 제한). 클릭은 핸들러에서 `{feature}Tracker.tracking...Click()` 직접 호출(또는 `clickCallback`).
+  - **⛔ 마이그레이션 시 수집 스펙 보존**: 기존 인라인 수집을 tracker로 옮길 땐 **category/action/label 값을 원본 그대로** 유지한다(값이 바뀌면 데이터가 단절돼 지표가 끊긴다). 옮긴 뒤 위 "기존 데이터 수집 보존 확인"으로 **모든 상호작용 경로**에 누락이 없는지 대조한다.
 - **docs 참조(필수)**: 애매하거나 확인이 필요한데 현재 코드로 확인 불가하면 → `$ORCHESTRATION_DOCS_ROOT/{repo}.md`(파일) 또는 `$ORCHESTRATION_DOCS_ROOT/{repo}/`(폴더) 문서 → 없으면 `$ORCHESTRATION_REPOS_ROOT/{repo}` 실제 소스를 읽어 확인하고 **반드시 사실 기반으로만** 구현한다. 추측 금지.
 
 ### 4. 검증 + 리뷰 요청 (커밋 전 — B안)
