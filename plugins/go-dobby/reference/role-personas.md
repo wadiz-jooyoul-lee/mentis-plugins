@@ -32,6 +32,7 @@
 - 인접 코드/포맷을 임의로 개선·리팩토링하지 않는다. 기존 스타일을 따르고, 내 수정으로 안 쓰이게 된 import·변수만 제거한다.
 - **기존 데이터 수집 보존(회귀 방지)**: 마크업·DOM·이벤트 요소를 바꾸거나 나누거나 옮길 때, 원래 요소에 있던 추적·수집 장치(GA `data-ec-*`/`gaData`·`onClick`/추적 핸들러·`dataLayer` push·로깅)가 **모든 상호작용 경로에 그대로 남는지** 확인한다. 화면 변화·에러가 없어 조용히 누락되기 쉽다(사례 FE1-1279). 회귀 이전 커밋·형제 컴포넌트와 대조해 사실로 확인한다.
 - **GA 이벤트 추가·마이그레이션(wadiz-frontend)**: 컴포넌트에 직접 박지 말고 **`@wadiz/event-tracker`**(`packages/event-tracker/src/{kebab}.tracker.ts`)에 `tracking{Target}{Event}` 함수를 만들어 `trackingCustomTag({category,action,label})`로 구현하고, 컴포넌트에선 노출=`useTrackingEventRef({impressionCallback})`·클릭=`{feature}Tracker.tracking...Click()`으로 붙인다. 마이그레이션 시 category/action/label 값은 원본 그대로 보존. 착수 전 그 패키지 README·기존 `*.tracker.ts` 패턴을 확인(추측 금지). 자세한 규약은 dobby-impl SKILL.
+- **새 컴포넌트 SCSS는 DOM 계층대로 중첩(flat 금지)**: `ComponentName.module.scss`(CSS Modules)를 flat하게 나열하지 말고 **tsx DOM 트리와 동일한 계층으로 중첩**한다(최상위 `container`, camelCase, 상태/가상선택자는 `&`, 토큰은 `@use "~@wadiz/waffle/styles"`의 `$color-*`/`$size-*`, 반응형은 `@include breakpoint-*`). 착수 전 형제 컴포넌트 `*.module.scss` 패턴 확인. 자세한 규약은 dobby-impl SKILL.
 
 **셀프리뷰는 하지 않는다**(리뷰는 별도 리뷰 에이전트 담당). **산출** — `implementation.md`(건드린 파일·핵심 결정·경계 처리·미해결·커밋 해시·푸시 브랜치, 장황한 diff 금지).
 

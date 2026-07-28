@@ -44,6 +44,12 @@ description: 서브 에이전트가 자기 워크트리에서 이슈/작업을 �
 
 ### 3. 구현
 - **허용 범위 안에서만** 구현한다. 범위 밖이 필요하면 임의로 건드리지 말고 메인에 요청한다(충돌 방지의 핵심). 기존 코드 패턴·`CLAUDE.md` 규약을 따르고, 요청되지 않은 리팩터링·기능 추가는 하지 않는다.
+- **⛔ 새 컴포넌트 SCSS는 DOM 계층 그대로 중첩(flat 금지 — wadiz-frontend)**: 새 컴포넌트의 `ComponentName.module.scss`(CSS Modules, `module` 키워드 필수)를 작성할 때, 모든 클래스를 최상위에 나열하는 **flat 구조로 쓰지 말고**, 셀렉터를 **컴포넌트 DOM 트리와 동일한 계층으로 중첩**한다. 근거: repo `NAMING_CONVENTIONS.md` "컴포넌트 스타일 클래스 이름 — `ComponentName.tsx`와 동일한 계층 구조로 구성".
+  - 부모 클래스 블록 **안에** 자식 클래스를 중첩한다 — 예: `.container { .header { .title {…} } .content {…} }` (tsx의 중첩 구조와 1:1로 매칭).
+  - 최상위 요소 클래스는 `container`(그 안에서 한 번 더 래핑이 필요하면 `inner`), 클래스명은 **camelCase**, 비즈니스 이름을 넣지 않는다.
+  - 상태·수정자·가상선택자는 **`&`로 중첩**한다: `&.active`, `&:hover`, `&::-webkit-scrollbar`.
+  - 디자인 토큰은 `@use "~@wadiz/waffle/styles" as *;` 후 `$color-*`·`$size-*`·`@include font(...)`를 쓴다(값 하드코딩 지양). 반응형은 `@include breakpoint-desktop { … }`(필요 시 `breakpoint-mobile`/`breakpoint-medium`)로 **같은 계층을 다시 중첩**한다.
+  - 착수 전 **형제 컴포넌트의 `*.module.scss` 실제 패턴을 확인**해 그대로 따른다(추측 금지).
 - **⛔ 기존 데이터 수집 보존 확인(회귀 방지 — 필수)**: 마크업·DOM 구조나 이벤트 요소를 **바꾸거나 옮기거나 나누거나 교체**할 때(앵커/버튼 분리·래핑 변경·요소 교체 등), 원래 요소에 붙어 있던 **데이터 수집·추적·로깅 장치가 모든 상호작용 경로에 그대로 남아 있는지** 반드시 확인한다 — GA 속성(`data-ec-*`·`gaData` spread)·`onClick`/추적 핸들러·`dataLayer` push·`data-*` 트래킹·로깅 호출 등. **이런 누락은 화면 변화도 에러도 없어 조용히 회귀**한다(실제 사례 FE1-1279: 이미지 앵커를 콘텐츠 앵커와 분리하며 `{...item.gaData}`를 콘텐츠 쪽에만 남겨 이미지 클릭 수집이 누락됨). 확인 방법: (a) 변경 전 요소가 갖던 추적 속성/핸들러를 목록화하고, (b) 변경 후 **클릭 가능한/추적 대상 요소마다** 동일 장치가 부착됐는지 대조하며, (c) 애매하면 회귀 이전 커밋(`git show`)이나 형제 컴포넌트(동일 패턴)와 비교해 사실로 확인한다.
 - **⛔ 데이터 트래킹(GA 이벤트) 추가·마이그레이션은 `@wadiz/event-tracker`로 (wadiz-frontend)**: GA 이벤트를 **새로 심거나** 기존 인라인 수집(`data-ec-*`·`gaData`·`dataLayer` push 등)을 **옮길 때**, 컴포넌트에 직접 박지 말고 **`packages/event-tracker`의 tracker 함수**로 구현한다(마케팅 데이터 수집 단일 창구). 착수 전 `packages/event-tracker/README.md`와 대상 기능의 `*.tracker.ts`를 읽어 실제 패턴을 확인한다(추측 금지).
   - **파일·등록**: 기능별 `src/{lower-kebab}.tracker.ts`. 없으면 새로 만들고 `src/index.ts`에 `export * as {feature}Tracker from './{kebab}.tracker'` 추가.
