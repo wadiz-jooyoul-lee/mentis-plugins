@@ -28,7 +28,9 @@ description: mentis 대시보드 전용 재미기능. 한 오더의 에이전트
 각 슬러그 신호 = `{ 상태, 라운드, 역할 }` 뿐이다. **신호가 없거나 빈약하면 억지로 더 캐지 말고 3번의 성격으로 내용을 풍부하게 채운다.**
 
 ## 2. 아바타 배정 (대시보드와 동일 — 반드시 일치)
-대시보드 `src/lib/avatarAssign.ts`와 **완전히 같은 알고리즘**으로 슬러그→멤버를 정한다. 정확성을 위해 아래 node 스니펫을 그대로 실행해 계산한다(직접 암산 금지). `{키}`와 슬러그 목록만 넣는다.
+**⛔ 우선순위: `$ORCHESTRATION_META/{키}/avatars.json`을 먼저 읽는다.** 대시보드가 슬러그별 아바타를 **핀 고정**해 이 파일에 저장하므로(에이전트 추가돼도 불변), 있으면 **그대로 읽어** `{슬러그: {group, member}}`로 쓴다 — 그래야 소감 페르소나가 화면에 뜨는 아바타와 **100% 일치**한다. `__orchestrator__` 항목도 여기 들어 있다.
+
+`avatars.json`이 아직 없을 때만(브랜드뉴 최초 등) 아래 node 스니펫으로 계산한다(폴백). 대시보드 `src/lib/avatarAssign.ts`와 같은 알고리즘이며 `{키}`와 슬러그 목록만 넣는다(직접 암산 금지).
 
 ```bash
 node -e '
@@ -37,7 +39,7 @@ const FROMIS=["송하영","박지원","이채영","이나경","백지헌"];
 const IVE=["가을","안유진","레이","장원영","리즈","이서"];
 function hash(s){let h=2166136261>>>0;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)>>>0;}return h>>>0;}
 const KEY=process.argv[1]; const slugs=[...new Set(process.argv.slice(2).filter(s=>s&&s!=="-"))].sort();
-const r=hash(KEY)%100, primary=r<30?"bts":r<60?"fromis":r<80?"ive":"dobby";
+const r=hash(KEY)%100, primary=r<25?"bts":r<50?"fromis":r<75?"ive":"dobby";
 const FILL={bts:["bts","fromis","ive","dobby"],fromis:["fromis","ive","bts","dobby"],ive:["ive","fromis","bts","dobby"],dobby:["dobby","bts","fromis","ive"]};
 const order=FILL[primary], pool={bts:BTS,fromis:FROMIS,ive:IVE,dobby:[]}, used={bts:0,fromis:0,ive:0,dobby:0};
 let gi=0; const map={};
@@ -83,10 +85,20 @@ console.log(JSON.stringify(map));
 
 각 소감 = `{ "mood": <happy|cheer|complain|ponder|chill|tired|bored>, "text": "..." }`.
 
+## 4-1. 오케스트레이터 브리핑 (`__orchestrator__` 슬러그 — 특수)
+`__orchestrator__`는 개별 작업자가 아니라 **오더 전체를 지휘하는 메인 세션**이다. 대상 슬러그에 포함되면(대개 항상) 이 슬러그만은 **개별 상태#라운드가 아니라 오더 집계**로 소감을 만든다.
+- **아바타·성격**: `avatars.json`의 `__orchestrator__` 배정 멤버(그룹/멤버)로, 3번 성격을 그대로 적용한다.
+- **집계 신호(상태표만 근거 — 본문 X)**: 활성 수(분석·구현·리뷰), 완료 수, 리뷰 라운드 최대, 정체 여부(활성인데 `갱신` 후 30분↑). 이 신호만으로 브리핑한다.
+- **board 소감 = "오더 전체 한 줄 브리핑"**: 페르소나 톤으로 오더 상황을 지휘자 시점으로 요약. 예) *"3명이 달리고 리뷰 1건 대기 중, 순항이에요 😎"* / *"1건이 좀 늘어져서 신경 쓰이네요 🤔"*. mood: 순항/완료 많음=chill·cheer, 정체·수정 많음=ponder·tired.
+- **changes/reviews는 만들지 않아도 된다**(대시보드는 오케스트레이터의 board 소감만 쓴다). `board`·`agents`·`history`만 채운다.
+- **⛔ sig(재생성 서명)는 다른 슬러그와 공식이 다르다** — 대시보드 `orchestratorSig`와 반드시 일치: **`sig = "<모든 에이전트 상태를 정렬해 | 로 조인>#r<최대 라운드>"`**. 예: 상태가 `구현,리뷰,완료`이고 최대 라운드 2면 `구현|리뷰|완료#r2`. (에이전트 추가·상태 전이·라운드 증가 때마다 바뀌어 브리핑이 다시 생성된다. 개별 에이전트 상태 목록만으로 계산 — 시간 계산 불필요.)
+
 ## 5. 에이전트별 작업 지문(agents) 기록
-대상 각 슬러그에 대해 **작업 지문** `sig = "<상태>#<라운드>"`를 구한다. 대시보드가 이 값으로 "소감 만든 뒤 추가 작업했는지"를 판단한다(달라지면 다음 새로고침 대상).
-- **상태**: orchestration.md 상태표의 그 슬러그 상태 칸(대기/분석/구현/리뷰/완료 — 5상태). 단, `deliverables/{슬러그}.md` 또는 `deliverables/{슬러그}/`가 있으면 상태를 **완료**로 본다(대시보드 보정과 일치).
-- **라운드**: 상태표의 라운드 칸 문자열(없으면 빈 문자열). 예: `완료#1`, `구현#`.
+대상 각 슬러그에 대해 **작업 지문** `sig`를 구한다. 대시보드가 이 값으로 "소감 만든 뒤 추가 작업했는지"를 판단한다(달라지면 다음 새로고침 대상).
+- **일반 에이전트**: `sig = "<상태>#<라운드>"`.
+  - **상태**: orchestration.md 상태표의 그 슬러그 상태 칸(대기/분석/구현/리뷰/완료 — 5상태). 단, `deliverables/{슬러그}.md` 또는 `deliverables/{슬러그}/`가 있으면 상태를 **완료**로 본다(대시보드 보정과 일치).
+  - **라운드**: 상태표의 라운드 칸 문자열(없으면 빈 문자열). 예: `완료#1`, `구현#`.
+- **`__orchestrator__`**: 위 4-1의 집계 서명(`<상태들 정렬 | 조인>#r<최대라운드>`)을 쓴다.
 
 ## 6. 저장 (원자적 · 병합 · 격리)
 `$ORCHESTRATION_META/.mentis-quips/`가 없으면 `mkdir -p`.
