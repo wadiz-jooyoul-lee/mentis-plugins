@@ -13,6 +13,53 @@ _now() { printf '%s' "${DOBBY_NOW:-$(date '+%Y-%m-%d %H:%M')}"; }
 _ts()  { printf '%s' "${DOBBY_TS:-$(date '+%Y%m%d-%H%M%S')}"; }
 _die() { printf 'dobby-lib: %s\n' "$*" >&2; return 1; }
 
+# ── 상태 어휘 정본(대시보드 파서와 동일 규칙) ─────────────────────────
+# 상태 표기가 스킬·실행마다 흔들리지 않도록, 값을 적는 함수(dobby_phase·dobby_agent_state·
+# dobby_agent_add)가 들어온 단어를 아래 정본으로 자동 교정한다. 규칙·순서는 대시보드
+# (parseOrchestration.ts normAgentState / parseOrderStatus.ts phaseKey)와 정확히 일치시켜,
+# 기록 파일 자체가 항상 대시보드가 읽는 값과 같게 유지한다.
+#   · 에이전트 상태(orchestration.md 상태표): 대기·분석·구현·리뷰·완료 (5)
+#   · 오더 단계(status.md 현재 단계):         착수·분석·구현·리뷰·통합·검증·해결·종료 (8)
+# 막지 않고 조용히 접되(파이프라인 비차단), 교정이 일어나면 stderr에 경고 한 줄을 남긴다.
+DOBBY_STATES="대기 분석 구현 리뷰 완료"
+DOBBY_PHASES="착수 분석 구현 리뷰 통합 검증 해결 종료"
+
+_trim() { printf '%s' "${1//\*/}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'; }
+
+# dobby_norm_state VALUE — 에이전트 상태값을 5정본으로 접는다(정본이면 그대로).
+dobby_norm_state() {
+  local s out; s="$(_trim "$1")"
+  case "$s" in
+    *완료*|*재통합*) out=완료 ;;
+    *수정*|*반영*)   out=구현 ;;
+    *리뷰*)          out=리뷰 ;;
+    *산출*|*구현*)   out=구현 ;;
+    *분석*|*진행*)   out=분석 ;;
+    *대기*)          out=대기 ;;
+    *)               out="${s%%[(（]*}"; out="$(_trim "$out")"; out="${out:-미상}" ;;
+  esac
+  [ "$out" != "$s" ] && printf 'dobby-lib: 상태값 교정 "%s" → "%s"\n' "$s" "$out" >&2
+  printf '%s' "$out"
+}
+
+# dobby_norm_phase VALUE — 오더 단계값을 8정본으로 접는다(모르는 값은 원문 유지).
+dobby_norm_phase() {
+  local s out; s="$(_trim "$1")"
+  case "$s" in
+    *종료*)        out=종료 ;;
+    *해결*)        out=해결 ;;
+    *검증*)        out=검증 ;;
+    *통합*)        out=통합 ;;
+    *리뷰*|*수정*) out=리뷰 ;;
+    *구현*|*산출*) out=구현 ;;
+    *분석*)        out=분석 ;;
+    *착수*)        out=착수 ;;
+    *)             out="$s" ;;
+  esac
+  [ -n "$s" ] && [ "$out" != "$s" ] && printf 'dobby-lib: 단계값 교정 "%s" → "%s"\n' "$s" "$out" >&2
+  printf '%s' "$out"
+}
+
 # ── 환경 로드 (읽기 전용) ─────────────────────────────────────────────
 dobby_load_config() {
   local cfg="$HOME/.config/go-dobby/config.env"
@@ -136,7 +183,8 @@ EOF
 # ── 상태표(orchestration.md) ─────────────────────────────────────────
 # dobby_agent_add KEY SLUG NAME DESC STATE [ROUND] — 행 append(있으면 무시). 활성상태면 착수=now.
 dobby_agent_add() {
-  local key="$1" slug="$2" name="$3" desc="$4" st="$5" rd="${6:-1}"
+  local key="$1" slug="$2" name="$3" desc="$4" st rd="${6:-1}"
+  st="$(dobby_norm_state "$5")"
   local f now; f="$(_order_dir "$key")/orchestration.md"; now="$(_now)"
   dobby_ensure_board "$key"
   # 이미 존재하면 no-op
@@ -155,7 +203,8 @@ dobby_agent_add() {
 
 # dobby_agent_state KEY SLUG STATE [ROUND] — 그 행 상태/갱신만 수정. 비활성→활성 진입 시 착수 갱신.
 dobby_agent_state() {
-  local key="$1" slug="$2" st="$3" rd="${4:-}"
+  local key="$1" slug="$2" st rd="${4:-}"
+  st="$(dobby_norm_state "$3")"
   local f now; f="$(_order_dir "$key")/orchestration.md"; now="$(_now)"
   # 헤더 인식형: `## 에이전트 상태표` 헤더에서 상태/라운드/착수/갱신 컬럼 위치를 찾아 그 칸만 수정한다.
   # (오더마다 상태표 스키마가 달라 컬럼 위치를 하드코딩하면 엉뚱한 칸을 덮어써 표가 깨진다.)
@@ -219,7 +268,8 @@ dobby_log() {
 # ── status.md 단계 ───────────────────────────────────────────────────
 # dobby_phase KEY PHASE — 현재 단계/갱신 갱신.
 dobby_phase() {
-  local key="$1" ph="$2" f now; f="$(_order_dir "$key")/status.md"; now="$(_now)"
+  local key="$1" ph f now; ph="$(dobby_norm_phase "$2")"
+  f="$(_order_dir "$key")/status.md"; now="$(_now)"
   [ -f "$f" ] || return 1
   awk -v ph="$ph" -v now="$now" '
     /^## / { insec = ($0 ~ /현재 단계/) }
@@ -373,12 +423,13 @@ EOF
 dobby_subtree_list() {
   local base="$ORCHESTRATION_WORKSPACE/subtree" d name key
   [ -d "$base" ] || return 0
-  for d in "$base"/*/; do
-    [ -d "$d" ] || continue
-    d="${d%/}"; name="$(basename "$d")"
+  # find 사용 — 매칭 없는 glob("$base"/*/)이 zsh에서 오류(no matches found)로 중단되는 것을 피한다.
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    name="$(basename "$d")"
     key="$(printf '%s' "$name" | grep -oE '[A-Z][A-Za-z0-9]*-[0-9]+|TASK-[A-Za-z0-9-]+' | tail -1)"
     printf '%s\t%s\n' "$d" "$key"
-  done
+  done < <(find "$base" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
 }
 
 # dobby_wt_unpushed WORKTREE — origin에 안 올라간 커밋 수 stdout(모르면 '?' → 안전하지 않음으로 취급).
@@ -409,6 +460,212 @@ dobby_end_remove() {
   local src="$1" wt="$2"
   git -C "$src" worktree remove "$wt" 2>/dev/null && return 0
   git -C "$src" worktree remove --force "$wt"
+}
+
+# ── 작명·콘텐츠 스캐폴딩 헬퍼 ────────────────────────────────────────
+# 슬러그·요약 문서 구조·카드 블록을 스킬·실행마다 다르게 쓰지 않도록 형식을 고정한다.
+# (값·본문 "내용"은 여전히 LLM이 채운다 — 여기선 틀과 경계만 보장한다.)
+
+# _slug_taken OFILE SLUG — orchestration.md 상태표 슬러그 칸에 SLUG가 이미 있으면 0(있음).
+_slug_taken() {
+  awk -v want="$2" '
+    function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);gsub(/\*/,"",x);return x}
+    /^## /{ins=($0 ~ /에이전트 상태표/)?1:0;hdr=0;next}
+    ins==1 && /^\|/{
+      n=split($0,a,"|")
+      if(hdr==0){for(i=1;i<=n;i++){c=t(a[i]);if(c=="슬러그"||c=="에이전트")cs=i}if(cs)hdr=1;next}
+      if(cs && t(a[cs])==want){found=1}
+    }
+    END{exit(found?0:1)}' "$1"
+}
+
+# dobby_slug KEY "원하는 이름" — 슬러그를 안전한 영문 kebab로 정리하고, 상태표의 기존 슬러그와
+# 겹치면 -2·-3…으로 고유화해 stdout으로 돌려준다. 슬러그는 agents/·reviews/·agent-logs.json·
+# avatars.json의 조인 키라 공백·/·특수문자가 들어가면 매칭이 깨진다. 영문/숫자/하이픈만 남긴다.
+# 정리 후 비면(예: 한글만) 'agent'로 대체하고 경고한다.
+dobby_slug() {
+  local key="$1" want="$2" base slug n=2 of
+  base="$(printf '%s' "$want" | tr '[:upper:]' '[:lower:]' \
+        | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')"
+  if [ -z "$base" ]; then
+    base="agent"
+    printf 'dobby-lib: 슬러그로 쓸 영문이 없어 "%s"→"agent"로 대체(영문 kebab 권장)\n' "$want" >&2
+  fi
+  slug="$base"; of="$(_order_dir "$key")/orchestration.md"
+  if [ -f "$of" ]; then
+    while _slug_taken "$of" "$slug"; do slug="$base-$n"; n=$((n+1)); done
+  fi
+  printf '%s' "$slug"
+}
+
+# dobby_scaffold_doc KEY analysis|implementation|produce [슬러그] — 요약 문서에 고정 섹션 틀을
+# 깐다(없을 때만·비파괴). 세 문서의 목차를 통일해 구조가 스킬·실행마다 달라지는 것을 막는다.
+# AI는 각 헤더 아래 내용만 채운다. 슬러그를 주면 fan-out 파일명({type}-{slug}.md).
+dobby_scaffold_doc() {
+  local key="$1" type="$2" slug="${3:-}" dir f fname="$2"
+  dir="$(_order_dir "$key")"; mkdir -p "$dir"
+  [ -n "$slug" ] && fname="$type-$slug"
+  f="$dir/$fname.md"
+  [ -f "$f" ] && return 0
+  case "$type" in
+    analysis) cat > "$f" <<EOF
+# $key 분석${slug:+ · $slug}
+
+## 원인
+(원인 위치 \`파일:라인\`)
+
+## 활성 경로
+(실제 실행되는 코드 경로 증명)
+
+## 수정 설계
+(어디를 어떻게 — 대안 포함)
+
+## 대안·더 단순한 방법
+
+## 미해결·확인 필요
+EOF
+      ;;
+    implementation) cat > "$f" <<EOF
+# $key 구현${slug:+ · $slug}
+
+## 건드린 파일
+
+## 핵심 설계 결정
+
+## 경계·공용 파일 처리
+
+## 미해결
+
+## 커밋·브랜치
+EOF
+      ;;
+    produce) cat > "$f" <<EOF
+# $key 산출${slug:+ · $slug}
+
+## 산출 대상
+
+## 구성
+
+## 핵심 결정
+
+## 근거·출처
+
+## 미해결
+EOF
+      ;;
+    *) _die "dobby_scaffold_doc: 알 수 없는 종류 '$type' (analysis|implementation|produce)"; return 2 ;;
+  esac
+}
+
+# dobby_card KEY FILE "제목행" "본문" — 카드형 문서(decisions.md·side-effects.md·test-guide.md)에
+# `## 제목행` 블록을 앞뒤 빈 줄과 함께 append한다(읽기 없이). 대시보드가 `## ` 단위로 카드를
+# 쪼개므로 이 경계만 지키면 카드가 안 깨진다. 본문의 필드 라벨은 자유(파서가 요구하지 않음).
+dobby_card() {
+  local key="$1" file="$2" header="$3" body="$4"
+  dobby_append "$key" "$file" "$(printf '\n## %s\n\n%s\n' "$header" "$body")"
+}
+
+# ── 메타 검사기(대시보드 계약 점검) ──────────────────────────────────
+# dobby_lint KEY — 완성된 오더 메타가 대시보드 파서 계약에 맞는지 점검한다.
+# ⛔ 비차단: 문제를 ⚠ 목록으로 알려주기만 하고 항상 0으로 끝난다(파이프라인을 멈추지 않는다).
+# 단계 전이 게이트마다 호출해 "안 깨지지만 화면에 안 뜨는" 실패를 미리 잡는다.
+# 점검 항목: 오더 키 형식 · 필수 파일 · 표 --- 구분선 · 상태/단계 정본 · 슬러그 위생·조인
+#           (계약/리뷰) · 이벤트 로그 날짜 형식 · mermaid 라벨 따옴표.
+dobby_lint() {
+  local key="$1" dir w=0
+  [ -n "$key" ] || { _die "dobby_lint: KEY 필요 (사용법: dobby_lint FE1-1234)"; return 2; }
+  dir="$(_order_dir "$key")"
+  local sf="$dir/status.md" of="$dir/orchestration.md"
+  _w() { printf '⚠ %s\n' "$*"; w=$((w+1)); }
+
+  printf '── dobby_lint %s ──\n' "$key"
+
+  # 1) 오더 키 형식(대시보드 목록 인식 조건)
+  printf '%s' "$key" | grep -qE '^([A-Za-z][A-Za-z0-9]*-[0-9]+|TASK-[A-Za-z0-9-]+)$' \
+    || _w "오더 키 형식 벗어남 \"$key\" — 대시보드 목록에서 안 보일 수 있음(FE1-1234·TASK-slug 형식)"
+
+  [ -d "$dir" ] || { _die "dobby_lint: 폴더 없음 $dir"; return 2; }
+
+  # 2) 필수 파일: status.md 또는 orchestration.md 중 하나는 있어야 목록에 뜬다
+  [ -f "$sf" ] || [ -f "$of" ] \
+    || _w "status.md·orchestration.md 둘 다 없음 — 대시보드 목록에서 사라짐"
+
+  # 3) 오더 단계 정본(status.md 현재 단계)
+  if [ -f "$sf" ]; then
+    local praw pnorm
+    praw="$(grep -m1 '\*\*단계\*\*' "$sf" 2>/dev/null | sed -E 's/.*\*\*단계\*\*[[:space:]]*[:：][[:space:]]*//; s/[[:space:]]*$//; s/\*//g')"
+    if [ -n "$praw" ]; then
+      case " $DOBBY_PHASES " in
+        *" $praw "*) printf '✓ 단계값 8정본 OK (%s)\n' "$praw" ;;
+        *) pnorm="$(dobby_norm_phase "$praw" 2>/dev/null)"; _w "단계값 '$praw' 정본 아님 — '$pnorm' 권장(헬퍼 dobby_phase 사용)" ;;
+      esac
+    fi
+  fi
+
+  # 4) 에이전트 상태표(orchestration.md): 표 구분선·상태 정본·슬러그 위생·조인
+  local slugset=" " state_bad=0
+  if [ -f "$of" ]; then
+    # 4a) 표 --- 구분선(없으면 대시보드가 표로 인식 못 함)
+    if grep -q '^## 에이전트 상태표' "$of"; then
+      awk '/^## 에이전트 상태표/{ins=1;next} /^## /{ins=0} ins&&/^\|[- |]+\|[[:space:]]*$/{f=1} END{exit(f?0:1)}' "$of" \
+        || _w "orchestration.md: 상태표에 --- 구분선 없음 — 대시보드가 표로 인식 못 함(헤더 아래 |---|---| 줄 필요)"
+    fi
+    # 4b) 슬러그<TAB>상태 추출
+    local rows slug st
+    rows="$(awk '
+      /^## /{ins=($0 ~ /에이전트 상태표/)?1:0; hdr=0; next}
+      ins==1 && /^\|/{
+        n=split($0,a,"|")
+        if(hdr==0){for(i=1;i<=n;i++){c=a[i];gsub(/^[ \t]+|[ \t]+$/,"",c);gsub(/\*/,"",c);if(c=="슬러그"||c=="에이전트")cs=i;if(c=="상태")ct=i}
+          if(cs&&ct)hdr=1; next}
+        issep=1; for(i=2;i<n;i++){c=a[i];gsub(/[ \t-]/,"",c);if(c!=""){issep=0;break}}
+        if(issep)next
+        slug=a[cs];st=a[ct];gsub(/^[ \t]+|[ \t]+$/,"",slug);gsub(/^[ \t]+|[ \t]+$/,"",st);gsub(/\*/,"",st)
+        if(slug!="")print slug "\t" st
+      }' "$of" 2>/dev/null)"
+    while IFS="$(printf '\t')" read -r slug st; do
+      [ -n "$slug" ] || continue
+      slugset="$slugset$slug "
+      case "$slug" in *" "*|*/*|*"*"*|*"("*) _w "슬러그 '$slug' 공백/특수문자 포함 — 계약·리뷰·로그·아바타 매칭 실패 위험" ;; esac
+      case " $DOBBY_STATES " in *" $st "*) : ;; *) _w "상태값 '$st'(슬러그 $slug) 5정본 아님 — 대기·분석·구현·리뷰·완료 중 하나"; state_bad=1 ;; esac
+    done <<EOF
+$rows
+EOF
+    [ "$state_bad" = 0 ] && [ "$slugset" != " " ] && printf '✓ 상태값 5정본 OK\n'
+  fi
+
+  # 5) 슬러그 조인: 리뷰·계약 파일이 상태표 슬러그와 맞는지(고아 파일 탐지)
+  # find 사용 — 매칭 없는 glob이 zsh에서 오류(no matches found)로 중단되는 것을 피한다.
+  local fpath b
+  while IFS= read -r fpath; do
+    [ -n "$fpath" ] || continue
+    b="$(basename "$fpath" .md)"
+    case "$slugset" in *" $b "*) : ;; *) _w "${fpath#"$dir"/} 있으나 상태표에 슬러그 '$b' 없음 — 리뷰가 에이전트에 안 붙음" ;; esac
+  done < <(find "$dir/reviews" -type f -name '*.md' 2>/dev/null)
+  while IFS= read -r fpath; do
+    [ -n "$fpath" ] || continue
+    b="$(basename "$fpath" .md)"
+    case "$b" in *review*|*리뷰*) continue ;; esac
+    case "$slugset" in *" $b "*) : ;; *) _w "agents/$b.md 계약 있으나 상태표에 슬러그 '$b' 없음 — 표에 행을 추가하세요" ;; esac
+  done < <(find "$dir/agents" -type f -name '*.md' 2>/dev/null)
+
+  # 6) 이벤트 로그 날짜 형식(`- YYYY-MM-DD …`가 아니면 타임라인에서 누락)
+  if [ -f "$of" ]; then
+    local bad_ev
+    bad_ev="$(awk '/^## 이벤트 로그/{ins=1;next} /^## /{ins=0} ins&&/^- /&&!/^- [0-9]{4}-[0-9]{2}-[0-9]{2}/{n++} END{print n+0}' "$of")"
+    [ "${bad_ev:-0}" -gt 0 ] 2>/dev/null && _w "이벤트 로그 ${bad_ev}줄이 '- YYYY-MM-DD …' 형식이 아님 — 타임라인에서 누락됨"
+  fi
+
+  # 7) mermaid 라벨 따옴표(explainer.md 등): 특수문자 라벨이 따옴표 밖이면 렌더 실패
+  for fpath in "$dir"/explainer.md "$dir"/retro.md; do
+    [ -f "$fpath" ] || continue
+    local badm
+    badm="$(awk '/^```mermaid/{m=1;next} /^```/{m=0} m&&/\[[^]"]*[(\/][^]"]*\]/{n++} END{print n+0}' "$fpath")"
+    [ "${badm:-0}" -gt 0 ] 2>/dev/null && _w "$(basename "$fpath") mermaid 라벨 ${badm}곳이 따옴표 없이 ( 또는 / 포함 — 'Syntax error'로 안 그려질 수 있음([\"라벨(x)\"]로)"
+  done
+
+  printf '(%d warnings, 0 errors)\n' "$w"
+  return 0
 }
 
 echo "dobby-lib loaded" >&2
