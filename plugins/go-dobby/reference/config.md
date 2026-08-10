@@ -28,7 +28,7 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 
 ## 공용 헬퍼 (dobby-lib.sh)
 
-판단이 필요 없는 **결정론적 단계**(git·파일·메타 갱신)는 손으로 하지 말고 **`${CLAUDE_PLUGIN_ROOT}/reference/dobby-lib.sh`의 함수**로 실행한다. 매번 동일하게 돌아 일관성이 오르고, **상태 파일 전체 통독 없이 append·부분수정**이라 토큰을 아낀다. ⛔ 이 함수들은 **기계적 작업만** 한다 — 분석·구현·리뷰·문서 "내용"은 절대 만들지 않는다(그건 LLM 몫). 값(이름/설명/커밋 메시지 등)은 전부 인자로 넘긴다.
+판단이 필요 없는 **결정론적 단계**(git·파일·메타 갱신)는 손으로 하지 말고 **`${CLAUDE_PLUGIN_ROOT}/reference/dobby-lib.sh`의 함수**로 실행한다. 매번 동일하게 돌아 일관성이 오르고, **상태 파일 전체 통독 없이 append·부분수정**이라 토큰을 아낀다. ⛔ 이 함수들은 **기계적 작업만** 한다 — 분석·구현·리뷰·문서 "내용"은 절대 만들지 않는다(그건 LLM 몫). 값(이름/설명/커밋 메시지 등)은 전부 인자로 넘긴다. **틀·헬퍼는 형식만 고정한다(하한선)** — 문서 내용의 길이·상세도를 제한하지 않으며, 틀에 맞추려고 내용을 줄이지 않는다.
 
 | 함수 | 언제 | 하는 일 |
 |------|------|---------|
@@ -36,7 +36,11 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 | `dobby_docs_search "kw1\|kw2"` | 착수(Explore·분석 전 최우선) | `$ORCHESTRATION_DOCS_ROOT`에서 키워드로 관련 문서 경로만 반환(내용 X). 위치·배경 먼저 파악 |
 | `dobby_docs_gate KEY "kw1\|kw2"` | **P1 최초(차단 게이트)** | docs 검색 결과를 `docs-refs.md`에 기록(+경로 stdout). **이 파일 없이 Explore/분석 진행 금지**. 히트 시 그 문서 먼저 읽기 |
 | `dobby_ensure_board KEY` | P0 | orchestration.md 상태표+이벤트로그 골격 |
-| `dobby_setup_worktree REPO KEY PREFIX BASE [루트키]` | P0 | fetch·워크트리·브랜치·origin push (경로 stdout, base 로컬/원격 자동 감지, 재호출 시 재사용) + **status.md `## 브랜치`에 브랜치 자동 기록**(PR 링크·이력용). **⛔ 루트의 `docs-refs.md` 없으면 새 워크트리 생성 거부(docs 게이트 B)** — 하위 에이전트는 5번째로 루트키 전달 |
+| `dobby_setup_worktree REPO KEY PREFIX BASE [루트키]` | P0 | fetch·워크트리·브랜치·origin push (경로 stdout, base 로컬/원격 자동 감지, 재호출 시 재사용) + **status.md `## 워크트리 / 브랜치` 표에 자동 기록**(경로 포함 — 대시보드 PR 링크·정리 감지용). **⛔ 루트의 `docs-refs.md` 없으면 새 워크트리 생성 거부(docs 게이트 B)** — 하위 에이전트는 5번째로 루트키 전달 |
+| `dobby_bootstrap KEY "제목" 종류 "kw1\|kw2" [CWD]` | **진입 즉시 1회** | 폴더·골격 status.md·제목·종류·세션·docs 게이트를 한 번에(내부: scaffold_meta+set_title+set_kind+set_session) |
+| `dobby_record_branch KEY REPO 브랜치 [경로]` | 워크트리 없이 브랜치만 채택 시(continue 등) | status.md `## 워크트리 / 브랜치` 표에 행 추가(중복 무시). setup_worktree가 자동 호출하므로 대개 직접 쓸 일 없음 |
+| `dobby_set_session KEY [CWD]` | 부트스트랩 미경유 흐름에서 | status.md `## 세션`에 세션 ID·작업 경로 기록(cwd 인코딩·최신 전사 탐색 포함 — 손 계산 금지). 대시보드 "이어가기" 근거 |
+| `dobby_set_kind KEY 종류` | (d) 종류 확인 진입 시 | status.md `- **종류**:` 기록/갱신(정본 개발·산출물·작업 정리로 자동 교정) |
 | `dobby_agent_add KEY 슬러그 이름 설명 상태 [라운드]` | 스폰 전(선갱신) | 상태표 행 추가(중복 무시, 활성이면 착수=now) |
 | `dobby_agent_state KEY 슬러그 상태 [라운드]` | 전이마다 | 그 행 상태/갱신만 수정(비활성→활성 진입 시 착수 갱신) |
 | `dobby_set_title KEY "제목"` | **이슈 조회 직후(필수)** | status.md 제목을 실제 요약으로 갱신(골격 임시 제목 덮어씀). dobby-start 경유 여부와 무관 |
@@ -45,14 +49,22 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 | `dobby_log KEY 슬러그 로그경로 [라운드]` | 스폰 직후 | agent-logs.json 기록(라운드는 하위키 병합) |
 | `dobby_phase KEY 단계` | 단계 전이 | status.md 현재 단계/갱신 |
 | `dobby_review_path KEY 라운드 슬러그` | P5 | reviews/round-N/{슬러그}.md 경로(폴더 생성) |
-| `dobby_testrun_new KEY 회차` | dobby-test | test-runs/{시각}/ + result.md 골격 |
-| `dobby_commit_push 워크트리 브랜치 "메시지"` | P6 통과 후 | commit --no-verify + push |
+| `dobby_blocking KEY 라운드` | P6 전이 판정 | reviews/round-N의 `## [blocker\|major]` 카드 헤더 집계(숫자 stdout). 카드 형식 없는 파일은 경고 — 그 파일만 직접 읽어 판정 |
+| `dobby_testrun_new KEY [전체시나리오수]` | dobby-test 시작 | 회차 자동 계산 + test-runs/{시각}/ + result.md 골격 + status.md 이력 표 행 추가(경로 stdout) |
+| `dobby_testrun_update KEY 폴더시각 상태 [성공/실패/skip]` | 시나리오마다·마감 | 이력 표의 그 회차 행만 상태·집계 수정(통독 없음) |
+| `dobby_commit_push 워크트리 브랜치 "메시지"` | P6 통과 후 | commit --no-verify + push. **⛔ 메시지에 내부 용어(`round-N`·리뷰 반영·슬러그)·금지 서명(Co-Authored-By 등) 감지 시 거부**(코드 강제) |
+| `dobby_bootstrap_inline KEY "제목" 종류 슬러그 "이름" "설명" [상태] [CWD]` | P4-L·P4-C·P4-W 인라인 분기 | status 골격+제목+종류+세션+상태표 1행+agent-logs(메인 세션 전사)를 한 번에 |
+| `dobby_quips_sig KEY 슬러그` | avatar-quips | 소감 재생성 서명 계산(대시보드 공식과 자동 일치 — `__orchestrator__` 포함, 직접 암산 금지) |
+| `dobby_quips_last KEY` | avatar-quips | 슬러그별 직전 board 소감만 추출(뉘앙스 다양화 신호 — 파일 통독 대체) |
+| `dobby_quips_merge KEY 새소감파일` | avatar-quips 저장 | 기존 JSON 병합·history append·원자적 저장(직접 읽기/쓰기 금지) |
 | `dobby_merge_root 워크트리 루트 에이전트` | P7 | 에이전트 브랜치 → 루트 머지·push |
 | `dobby_resolve KEY [undo]` | dobby-resolve | 단계 해결↔통합 + ## 해결 골격 + 미완료 에이전트 완료 |
 | `dobby_subtree_list` | dobby-end | subtree 폴더별 `경로<TAB>키` 목록 |
 | `dobby_wt_unpushed WORKTREE` | dobby-end 판정 | origin 미푸시 커밋 수(모르면 `?`) |
 | `dobby_end_snapshot KEY WORKTREE BASE` | dobby-end | 제거 전 code-changes/{repo}.commits·.diff 저장 |
 | `dobby_end_remove SRCREPO WORKTREE` | dobby-end | 워크트리 제거(브랜치 보존, 거부 시 --force). rm -rf는 안 함 |
+| `dobby_repair KEY` | 게이트 실패 시(자동) | 손으로 어긋난 메타를 헬퍼로 다시 찍어 정규화(비파괴 — 단계·상태·상태표 골격) |
+| `dobby_gate KEY 다음단계 [interactive\|auto]` | **단계 전이마다** | strict 검사 → 실패 시 dobby_repair 자동 복구 → 재검사. interactive=치명 남으면 차단, auto=needs-attention.md 기록 후 계속 |
 
 - **여전히 LLM 몫(스크립트가 안 함)**: 팬아웃 K·활성경로 증명·범위 배분·이름/설명/슬러그 값 결정·커밋 메시지 문구·리뷰 findings·분석/문서 본문 서술·Jira 상태 전환(MCP)·base 모호 시 확정.
 - 값에 `|`·개행이 들어가면 안 된다(표 깨짐). 이름의 `/`는 허용(슬러그엔 금지 — dobby-lib이 그대로 기록만 함).

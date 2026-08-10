@@ -290,23 +290,108 @@ dobby_review_path() {
   printf '%s/%s.md' "$dir" "$3"
 }
 
-# dobby_testrun_new KEY N — test-runs/{ts}/ + result.md 골격. 폴더 경로 stdout.
+# dobby_blocking KEY ROUND — reviews/round-N/*.md에서 카드 헤더(`## [blocker|major] …`)를 세어
+# blocking 수를 stdout으로 낸다(P6→통합 전이 판정용). 카드 형식이 하나도 없는 리뷰 파일이 있으면
+# stderr에 경고를 남긴다 — 그 파일만은 직접 읽어 판정하라(폴백: 형식 미준수가 통과로 오인되지 않게).
+dobby_blocking() {
+  local key="$1" rd="$2" dir n=0 f c
+  dir="$(_order_dir "$key")/reviews/round-$rd"
+  if [ ! -d "$dir" ]; then
+    printf 'dobby-lib: 리뷰 폴더 없음(%s) — blocking 판정 불가\n' "$dir" >&2
+    printf '0'; return 0
+  fi
+  for f in "$dir"/*.md; do
+    [ -f "$f" ] || continue
+    if ! grep -qE '^## \[(blocker|major|minor|nit)\]' "$f"; then
+      printf 'dobby-lib: ⚠ %s 에 심각도 카드 헤더(## [blocker|major|minor|nit] …)가 없음 — 이 파일은 직접 읽어 blocking을 판정하세요\n' "$(basename "$f")" >&2
+    fi
+    c="$(grep -cE '^## \[(blocker|major)\]' "$f" 2>/dev/null)" || c=0
+    n=$((n + c))
+  done
+  printf '%s' "$n"
+}
+
+# dobby_testrun_new KEY [총시나리오수] — 회차를 자동 계산(기존 test-runs/ 폴더 수 + 1)하고
+# test-runs/{ts}/ + result.md 골격을 만든 뒤, status.md '## 테스트 실행 이력' 표에
+# 이번 회차 행(상태 테스트중·집계 0/0/0)을 추가한다. 폴더 경로 stdout.
+# (집계 칸의 "(전체 N)"은 참고 표기 — 대시보드는 앞 숫자 3개(성공/실패/skip)만 읽는다.)
 dobby_testrun_new() {
-  local key="$1" n="$2" dir; dir="$(_order_dir "$key")/test-runs/$(_ts)"; mkdir -p "$dir"
+  local key="$1" total="${2:-}" n dir sf now
+  n="$(find "$(_order_dir "$key")/test-runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
+  n=$((n + 1))
+  dir="$(_order_dir "$key")/test-runs/$(_ts)"; mkdir -p "$dir"
   [ -f "$dir/result.md" ] || printf '# %s 테스트 결과 — 회차 %s\n\n(진행 중)\n' "$key" "$n" > "$dir/result.md"
+  sf="$(_order_dir "$key")/status.md"; now="$(_now)"
+  if [ -f "$sf" ]; then
+    _table_row_append "$sf" "테스트 실행 이력" \
+      "| 회차 | 시작 | 상태 | 성공/실패/skip | 폴더 |" "|------|------|------|----------------|------|" \
+      "| $n | $now | 테스트중 | 0/0/0${total:+ (전체 $total)} | $dir |"
+  fi
   printf '%s' "$dir"
+}
+
+# dobby_testrun_update KEY 폴더시각 상태 [성공/실패/skip] — 이력 표에서 폴더 칸에 그 시각이 포함된
+# 행의 상태·집계만 수정한다(통독 없음). 상태 예: 테스트중·완료·완료(이슈 있음)·중단. 집계 예: "3/1/0".
+dobby_testrun_update() {
+  local key="$1" ts="$2" st="$3" counts="${4:-}" sf
+  sf="$(_order_dir "$key")/status.md"
+  [ -f "$sf" ] || return 1
+  awk -F'|' -v OFS='|' -v ts="$ts" -v st="$st" -v counts="$counts" '
+    function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
+    BEGIN{ins=0;hdr=0;ci_st=0;ci_c=0}
+    /^## /{ins=(index($0,"테스트 실행 이력")>0)?1:0; hdr=0; print; next}
+    ins==1 && /^\|/ {
+      if(hdr==0){
+        for(i=1;i<=NF;i++){c=t($i)
+          if(c=="상태")ci_st=i
+          else if(index(c,"성공")>0||index(c,"집계")>0)ci_c=i}
+        if(ci_st>0)hdr=1
+        print; next
+      }
+      if(index($0,ts)>0 && ci_st>0){
+        $(ci_st)=" " st " "
+        if(ci_c>0 && counts!="") $(ci_c)=" " counts " "
+      }
+      print; next
+    }
+    {print}
+  ' "$sf" > "$sf.tmp" && mv "$sf.tmp" "$sf"
 }
 
 # ── 워크트리/커밋/통합 ───────────────────────────────────────────────
 # dobby_setup_worktree REPO KEY PREFIX BASE — 워크트리 생성(재사용 시 그대로) + origin push. 경로 stdout.
-# dobby_record_branch KEY REPO BRANCH  — status.md '## 브랜치' 섹션에 (브랜치, repo) 한 줄을 중복 없이 남긴다.
-# 오케스트레이터가 status.md에 브랜치를 깜빡 안 남겨도 PR 링크·이력이 유지되게 하는 결정론 기록(대시보드 prTargets가 읽음).
+# _table_row_append FILE 섹션제목 헤더행 구분행 ROW — 그 `## 섹션`의 표 마지막 행 뒤에 ROW를 붙인다.
+# 섹션·표가 없으면 만들고, 섹션이 문서 중간이어도(뒤에 다른 ## 섹션·`## 해결` 등) 표 안에 정확히 삽입한다.
+_table_row_append() {
+  local f="$1" sec="$2" hdr="$3" sep="$4" row="$5"
+  if ! grep -qF "## $sec" "$f"; then
+    printf '\n## %s\n%s\n%s\n%s\n' "$sec" "$hdr" "$sep" "$row" >> "$f"
+    return 0
+  fi
+  awk -v sec="$sec" -v hdr="$hdr" -v sep="$sep" -v row="$row" '
+    BEGIN{ins=0}
+    ins==0 && substr($0,1,3)=="## " && index($0,sec)>0 {inblk=1; print; next}
+    inblk==1 && /^\|/ {print; seen=1; next}
+    inblk==1 && (seen==1 || substr($0,1,3)=="## ") {
+      if(seen==0){print hdr; print sep}
+      print row; ins=1; inblk=0; print; next
+    }
+    {print}
+    END{ if(inblk==1 && ins==0){ if(seen==0){print hdr; print sep} print row } }
+  ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+
+# dobby_record_branch KEY REPO BRANCH [워크트리경로] — status.md '## 워크트리 / 브랜치' 표에 행을 중복 없이 남긴다.
+# 대시보드 계약: parseWorktrees는 `| repo | 브랜치 | 경로 |` 표를 읽고(경로 칸 필수), 경로 실존 여부로
+# 워크트리 정리(worktreeRemoved)를 판정하며 prTargets가 브랜치를 읽는다 — 경로까지 꼭 넘겨라.
 dobby_record_branch() {
-  local key="$1" repo="$2" branch="$3" sf
+  local key="$1" repo="$2" branch="$3" wt="${4:-}" sf
   sf="$(_order_dir "$key")/status.md"
   [ -f "$sf" ] || return 0
-  grep -q '^## 브랜치' "$sf" || printf '\n## 브랜치\n' >> "$sf"
-  grep -qF "$branch" "$sf" || printf -- '- %s (%s)\n' "$branch" "$repo" >> "$sf"
+  grep -qF "| $branch |" "$sf" && return 0
+  _table_row_append "$sf" "워크트리 / 브랜치" \
+    "| repo | 브랜치 | 경로 |" "|------|--------|------|" \
+    "| $repo | $branch | $wt |"
 }
 
 # dobby_set_title KEY "제목"  — status.md '## 이슈/작업'의 '- **제목**:' 줄을 실제 제목으로 갱신(in-place).
@@ -338,7 +423,7 @@ dobby_setup_worktree() {
   wt="$ORCHESTRATION_WORKSPACE/subtree/$repo-$key"; branch="$prefix/$key"
   [ -d "$src/.git" ] || git -C "$src" rev-parse --git-dir >/dev/null 2>&1 || { _die "소스 repo 없음: $src"; return 1; }
   mkdir -p "$ORCHESTRATION_WORKSPACE/subtree"
-  if git -C "$src" worktree list --porcelain 2>/dev/null | grep -qx "worktree $wt"; then dobby_record_branch "$key" "$repo" "$branch"; printf '%s' "$wt"; return 0; fi
+  if git -C "$src" worktree list --porcelain 2>/dev/null | grep -qx "worktree $wt"; then dobby_record_branch "$key" "$repo" "$branch" "$wt"; printf '%s' "$wt"; return 0; fi
   # ⛔ docs 게이트 차단(B): 새 워크트리 생성 전, 루트의 docs-refs.md가 없으면 중단한다.
   # docs 게이트를 안 돌리면 구현할 워크트리를 못 만들므로 게이트가 물리적으로 강제된다.
   # (기존 워크트리 재사용 경로는 위에서 이미 return — 과거 오더는 차단하지 않는다.)
@@ -353,13 +438,21 @@ dobby_setup_worktree() {
     git -C "$src" worktree add -b "$branch" "$wt" "origin/$base" >&2 || { _die "worktree add 실패(origin/$base)"; return 1; }
   fi
   git -C "$wt" push -u origin "$branch" >&2 2>/dev/null || true
-  dobby_record_branch "$key" "$repo" "$branch"
+  dobby_record_branch "$key" "$repo" "$branch" "$wt"
   printf '%s' "$wt"
 }
 
 # dobby_commit_push WORKTREE BRANCH MSG — 리뷰 통과 후 커밋(--no-verify)·푸시.
+# ⛔ 메시지 게이트(코드 강제): 오케스트레이션 내부 용어·금지 서명이 메시지에 있으면 커밋 전에 거부한다
+# (P5 루브릭 D를 코드로 강제 — "지시 준수"에 의존하지 않음). 정말 필요한 예외만 DOBBY_FORCE=1 로 우회.
 dobby_commit_push() {
   local wt="$1" br="$2" msg="$3"
+  if [ "${DOBBY_FORCE:-0}" != "1" ]; then
+    if printf '%s' "$msg" | grep -qEi 'round-[0-9]|리뷰 반영|리뷰 피드백|슬러그|Co-Authored-By|Generated with'; then
+      _die "커밋 메시지에 내부 용어/금지 서명 감지 — 그 수정이 '코드에 한 일'로 다시 쓰세요(우회: DOBBY_FORCE=1): $msg"
+      return 1
+    fi
+  fi
   git -C "$wt" add -A >&2 || return 1
   git -C "$wt" commit --no-verify -m "$msg" >&2 || return 1
   git -C "$wt" push origin "$br" >&2 2>/dev/null || git -C "$wt" push -u origin "$br" >&2
@@ -568,13 +661,95 @@ dobby_card() {
   dobby_append "$key" "$file" "$(printf '\n## %s\n\n%s\n' "$header" "$body")"
 }
 
+# ── 아바타 소감(avatar-quips) 결정론 조각 ────────────────────────────
+# 소감 "내용"은 LLM 몫. 여기서는 서명(sig) 계산·직전 소감 추출·JSON 병합만 한다.
+
+# _board_rows OFILE — 상태표에서 "슬러그<TAB>상태<TAB>라운드"를 줄 단위로 출력(구분선 제외).
+_board_rows() {
+  awk '
+    function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);gsub(/\*/,"",x);return x}
+    /^## /{ins=(index($0,"에이전트 상태표")>0)?1:0; hdr=0; next}
+    ins==1 && /^\|/{
+      n=split($0,a,"|")
+      if(hdr==0){for(i=1;i<=n;i++){c=t(a[i]);if(c=="슬러그"||c=="에이전트")cs=i;if(c=="상태")ct=i;if(c=="라운드")cr=i}
+        if(cs&&ct)hdr=1; next}
+      issep=1; for(i=2;i<n;i++){c=a[i];gsub(/[ \t-]/,"",c);if(c!=""){issep=0;break}}
+      if(issep)next
+      s=t(a[cs]); st=t(a[ct]); rd=(cr>0)?t(a[cr]):""
+      if(s!="")print s "\t" st "\t" rd
+    }' "$1"
+}
+
+# dobby_quips_sig KEY SLUG — 소감 재생성 서명(sig)을 계산해 stdout으로 낸다(직접 암산 금지).
+# ⛔ 대시보드 공식과 정확히 일치(orchestration.ts agentSigs/orchestratorSig):
+#  · 일반 슬러그: "<상태>#<라운드>"  (deliverables/{슬러그}.md 또는 폴더가 있으면 상태=완료 보정)
+#  · __orchestrator__: "<모든 에이전트 상태를 정렬해 | 조인>#r<최대 라운드>" (정렬은 코드포인트 순 = LC_ALL=C)
+dobby_quips_sig() {
+  local key="$1" slug="$2" of dir rows
+  of="$(_order_dir "$key")/orchestration.md"; dir="$(_order_dir "$key")"
+  [ -f "$of" ] || { _die "orchestration.md 없음: $of"; return 1; }
+  rows="$(_board_rows "$of")"
+  if [ "$slug" = "__orchestrator__" ]; then
+    local states maxr
+    states="$(printf '%s\n' "$rows" | awk -F'\t' 'NF{print $2}' | LC_ALL=C sort | paste -sd'|' -)"
+    maxr="$(printf '%s\n' "$rows" | awk -F'\t' '$3 ~ /^[0-9]+$/ {if($3+0>m)m=$3+0} END{print m+0}')"
+    printf '%s#r%s' "$states" "$maxr"
+    return 0
+  fi
+  local st rd
+  st="$(printf '%s\n' "$rows" | awk -F'\t' -v s="$slug" '$1==s{print $2; exit}')"
+  rd="$(printf '%s\n' "$rows" | awk -F'\t' -v s="$slug" '$1==s{print $3; exit}')"
+  { [ -e "$dir/deliverables/$slug.md" ] || [ -d "$dir/deliverables/$slug" ]; } && st="완료"
+  printf '%s#%s' "$st" "$rd"
+}
+
+# dobby_quips_last KEY — 기존 소감 파일에서 슬러그별 "직전 board 소감"만 "슬러그<TAB>텍스트"로 추린다.
+# 같은 상태여도 직전과 다른 뉘앙스로 쓰기 위한 최소 신호 — 히스토리 전체 통독을 대체한다
+# (⛔ 품질 신호는 유지하고 토큰만 줄이는 함수. 이 신호 없이 쓰면 소감이 매번 비슷해진다).
+dobby_quips_last() {
+  local f="$(_meta)/.mentis-quips/$1.json"
+  [ -f "$f" ] || return 0
+  command -v jq >/dev/null 2>&1 || { dobby_check_deps; return 0; }
+  jq -r '. as $r | (($r.board // {}) | keys[]) as $s
+         | ((((($r.history // {})[$s] // []) | last | .text?) // $r.board[$s].text // "") ) as $t
+         | $s + "\t" + $t' "$f" 2>/dev/null
+}
+
+# dobby_quips_merge KEY 새소감JSON파일 — 새 소감(대상 슬러그만 담김)을 기존 {키}.json에 병합하고
+# board 소감을 history에 append한 뒤 원자적으로(tmp→rename) 저장한다. 다른 슬러그의 기존 값은 보존.
+# 새 파일 스키마: { "agents":{슬러그:{sig}}, "board":{...}, "changes":{...}, "reviews":{...} } (있는 것만).
+# history 항목의 state는 agents[슬러그].sig의 `#` 앞부분에서 얻는다. 시각은 DOBBY_ISO로 덮어쓰기 가능.
+dobby_quips_merge() {
+  local key="$1" newf="$2" dir f now
+  command -v jq >/dev/null 2>&1 || { dobby_check_deps; _die "jq 없음 — quips 병합 불가"; return 1; }
+  [ -f "$newf" ] || { _die "새 소감 파일 없음: $newf"; return 1; }
+  dir="$(_meta)/.mentis-quips"; f="$dir/$key.json"; mkdir -p "$dir"
+  [ -f "$f" ] || echo '{}' > "$f"
+  now="${DOBBY_ISO:-$(date -u '+%Y-%m-%dT%H:%M:%SZ')}"
+  jq --slurpfile nv "$newf" --arg at "$now" '
+    ($nv[0]) as $n
+    | .generatedAt = $at
+    | .agents  = ((.agents  // {}) + ($n.agents  // {}))
+    | .board   = ((.board   // {}) + ($n.board   // {}))
+    | .changes = ((.changes // {}) + ($n.changes // {}))
+    | .reviews = ((.reviews // {}) + ($n.reviews // {}))
+    | .history = (reduce (($n.board // {}) | keys[]) as $s ((.history // {});
+        .[$s] = ((.[$s] // []) + [{
+          at: $at,
+          state: (((($n.agents // {})[$s].sig) // "") | split("#")[0]),
+          mood: $n.board[$s].mood,
+          text: $n.board[$s].text }])))
+  ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+
 # ── 메타 검사기(대시보드 계약 점검) ──────────────────────────────────
 # dobby_lint KEY [strict] — 완성된 오더 메타가 대시보드 파서 계약에 맞는지 점검한다.
 #   기본  : 문제를 목록으로 알려주고 항상 0으로 끝난다(비차단 — 기존과 동일).
 #   strict: 치명 오류(⛔ = 대시보드에서 조용히 사라짐) 개수를 반환한다(0이면 통과).
 #           → 단계 전이 게이트(dobby_gate)가 이 반환값으로 진행/차단을 정한다.
 # 치명(⛔): 필수 파일 부재 · 상태표 --- 구분선 부재 · 상태 5정본 위반 · 슬러그 위생 위반.
-# 경고(⚠): 오더 키 형식 · 단계값(쓸 때 자동교정) · 고아 파일 · 이벤트 날짜 · mermaid · 분기-산출 정합성.
+# 경고(⚠): 오더 키 형식 · 단계값(쓸 때 자동교정) · 고아 파일 · 이벤트 날짜 · mermaid · 분기-산출 정합성 ·
+#          이름(롤) 어휘 · 단계-산출물 정합 · agent-logs 하위 키 정본 · 틀 자리표시 잔존.
 dobby_lint() {
   local key="$1" strict="${2:-}" dir w=0 e=0
   [ -n "$key" ] || { _die "dobby_lint: KEY 필요 (사용법: dobby_lint FE1-1234 [strict])"; return 2; }
@@ -670,11 +845,12 @@ EOF
   done
 
   # 8) 분기-산출 정합성(status.md '종류'와 실제 산출 파일이 맞나) — 경고
+  # find 사용 — 매칭 없는 glob이 zsh에서 오류(no matches found)로 중단되는 것을 피한다.
   if [ -f "$sf" ]; then
     local kind
     kind="$(grep -m1 '\*\*종류\*\*' "$sf" 2>/dev/null | sed -E 's/.*\*\*종류\*\*[[:space:]]*[:：][[:space:]]*//; s/[[:space:]]*$//; s/\*//g')"
     case "$kind" in
-      *산출*) ls "$dir"/implementation*.md >/dev/null 2>&1 \
+      *산출*) find "$dir" -maxdepth 1 -type f -name 'implementation*.md' 2>/dev/null | grep -q . \
         && _w "종류=산출물인데 implementation*.md 있음 — 비소스는 produce.md여야 함(분기 불일치)" ;;
     esac
     case "$kind" in
@@ -682,6 +858,52 @@ EOF
         || _w "종류=작업정리인데 explainer.md 없음 — '작업 내용' 탭이 빈다" ;;
     esac
   fi
+
+  # 9) 이름(롤) 어휘: 분석|개발자|산출자|리뷰어 (+ `·영역` 구분, `/` 겸직 — 예 분석/개발자·개발자·FE) — 경고
+  if [ -f "$of" ]; then
+    local names nm
+    names="$(awk '
+      function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);gsub(/\*/,"",x);return x}
+      /^## /{ins=(index($0,"에이전트 상태표")>0)?1:0; hdr=0; next}
+      ins==1 && /^\|/{
+        n=split($0,a,"|")
+        if(hdr==0){for(i=1;i<=n;i++){c=t(a[i]);if(c=="이름")ci=i}
+          if(!ci){print "__NO_NAME_COL__"; exit} hdr=1; next}
+        issep=1; for(i=2;i<n;i++){c=a[i];gsub(/[ \t-]/,"",c);if(c!=""){issep=0;break}}
+        if(issep)next
+        v=t(a[ci]); if(v!="")print v
+      }' "$of")"
+    while IFS= read -r nm; do
+      [ -n "$nm" ] || continue
+      if [ "$nm" = "__NO_NAME_COL__" ]; then _w "상태표에 이름 컬럼 없음 — 고정 스키마(슬러그·이름·설명·상태·라운드·착수·갱신) 확인"; continue; fi
+      printf '%s' "$nm" | grep -qE '^(분석|개발자|산출자|리뷰어)([·/].+)?$' \
+        || _w "이름 '$nm' 롤 정본 아님 — 분석·개발자·산출자·리뷰어(+·영역, /겸직 예 분석/개발자) 중에서"
+    done <<EOF
+$names
+EOF
+  fi
+
+  # 10) 단계-산출물 정합: 구현/산출 요약이 있는데 단계가 아직 착수면 갱신 누락 — 경고
+  if [ -n "${praw:-}" ] && [ "$praw" = "착수" ]; then
+    find "$dir" -maxdepth 1 -type f \( -name 'implementation*.md' -o -name 'produce*.md' \) 2>/dev/null | grep -q . \
+      && _w "구현/산출 요약이 있는데 단계가 '착수' — dobby_phase로 단계를 올리세요"
+  fi
+
+  # 11) agent-logs.json 하위 키 정본: round-N(라운드) · analysis|impl(단계)만 — 경고
+  local alog="$dir/agent-logs.json" badk
+  if [ -f "$alog" ] && command -v jq >/dev/null 2>&1; then
+    badk="$(jq -r '[to_entries[] | select(.value|type=="object") | .value | keys[]
+                    | select(test("^(round-[0-9]+|analysis|impl)$")|not)] | unique | join(", ")' "$alog" 2>/dev/null)"
+    [ -n "$badk" ] && _w "agent-logs.json 하위 키 '$badk' — 정본은 round-N(또는 analysis·impl). 새 슬러그·임의 키 금지"
+  fi
+
+  # 12) 틀 자리표시 잔존: 스캐폴드 틀 문구가 안 채워진 채 남으면 대시보드에 그대로 노출됨 — 경고
+  local ph f2
+  while IFS= read -r f2; do
+    [ -n "$f2" ] || continue
+    ph="$(grep -cE '^\((원인 위치|실제 실행되는 코드 경로 증명|어디를 어떻게)' "$f2" 2>/dev/null)" || ph=0
+    [ "${ph:-0}" -gt 0 ] 2>/dev/null && _w "$(basename "$f2") 틀 자리표시 ${ph}곳이 안 채워짐 — 헤더 아래 내용을 채우세요"
+  done < <(find "$dir" -maxdepth 1 -type f \( -name 'analysis*.md' -o -name 'implementation*.md' -o -name 'produce*.md' \) 2>/dev/null)
 
   printf '(치명 %d, 경고 %d)\n' "$e" "$w"
   [ -n "$strict" ] && return "$e"
@@ -741,6 +963,23 @@ dobby_bootstrap() {
   dobby_set_title    "$key" "$title"            # 임시 제목 → 실제 제목
   [ -n "$kind" ] && dobby_set_kind "$key" "$kind"
   dobby_set_session  "$key" "$cwd"
+}
+
+# dobby_bootstrap_inline KEY "제목" 종류 슬러그 "이름" "설명" [상태] [CWD]
+# 인라인 분기(P4-L light·P4-C continue·P4-W 작업정리)의 대시보드 호환 메타를 한 번에 깐다
+# (빠지면 상세 페이지가 조용히 빈다): dobby_bootstrap(골격+제목+종류+세션) 위에
+# orchestration.md 보드+에이전트 1행 · agent-logs(슬러그→메인 세션 전사)까지 추가한다.
+# 상태 기본 `구현`(작업 정리는 `완료`로 넘긴다). analysis/implementation/explainer "내용"은 LLM 몫.
+dobby_bootstrap_inline() {
+  local key="$1" title="$2" kind="$3" slug="$4" name="$5" desc="$6" st="${7:-구현}" cwd="${8:-$PWD}"
+  dobby_bootstrap "$key" "$title" "$kind" "" "$cwd" || return 1
+  dobby_ensure_board "$key"
+  dobby_agent_add "$key" "$slug" "$name" "$desc" "$st"
+  local enc tr
+  enc="$(printf '%s' "$cwd" | sed 's#[/.]#-#g')"
+  tr="$(ls -t "$HOME/.claude/projects/$enc"/*.jsonl 2>/dev/null | head -1)"
+  if [ -n "$tr" ]; then dobby_log "$key" "$slug" "$tr"
+  else printf 'dobby-lib: 메인 세션 전사 없음 — agent-logs 기록 생략(콘솔 탭이 비게 됨)\n' >&2; fi
 }
 
 # ── 자동 이벤트(상태/단계 전이 시) ──────────────────────────────────

@@ -13,7 +13,7 @@ description: 구현한 내용이 실제 환경에서 정상 동작하는지 chro
 
 ## 설정 (첫 실행 시 확인)
 
-작업을 시작하기 전에 **`${CLAUDE_PLUGIN_ROOT}/reference/config.md`의 "설정 절차"를 그대로 따른다**: `~/.config/go-dobby/config.env`를 source 해 환경 변수를 **읽기만** 한다. ⛔ **이 스킬은 config.env를 저장·수정·생성하지 않는다**(값 변경은 `dobby-init` 전용 — config.md '비파괴 원칙'). config.env 파일이 아예 없으면 멈추고 `/dobby-init`을 먼저 실행하도록 안내한다. 메타 루트 `ORCHESTRATION_META`, 변수 목록·기본값, 폴더 배치(워크트리 `$ORCHESTRATION_WORKSPACE/subtree/` · 메타 `$ORCHESTRATION_META/`)는 모두 그 문서에 있다. 이하 메타 경로는 `$ORCHESTRATION_META` 기준. **공용 헬퍼(config.md '공용 헬퍼', 이미 source됨)**: 회차 폴더·result.md 골격은 `dobby_testrun_new 키 회차`(경로 반환), 현재 단계 전이는 `dobby_phase 키 검증`.
+작업을 시작하기 전에 **`${CLAUDE_PLUGIN_ROOT}/reference/config.md`의 "설정 절차"를 그대로 따른다**: `~/.config/go-dobby/config.env`를 source 해 환경 변수를 **읽기만** 한다. ⛔ **이 스킬은 config.env를 저장·수정·생성하지 않는다**(값 변경은 `dobby-init` 전용 — config.md '비파괴 원칙'). config.env 파일이 아예 없으면 멈추고 `/dobby-init`을 먼저 실행하도록 안내한다. 메타 루트 `ORCHESTRATION_META`, 변수 목록·기본값, 폴더 배치(워크트리 `$ORCHESTRATION_WORKSPACE/subtree/` · 메타 `$ORCHESTRATION_META/`)는 모두 그 문서에 있다. 이하 메타 경로는 `$ORCHESTRATION_META` 기준. **공용 헬퍼(config.md '공용 헬퍼', 이미 source됨)**: 회차 시작은 `dobby_testrun_new 키 [전체시나리오수]`(회차 자동 계산 + 폴더/result.md 골격 + status.md 이력 표 행 추가, 폴더 경로 반환), 회차 행 갱신은 `dobby_testrun_update 키 {폴더시각} {상태} [성공/실패/skip]`(그 행만 수정 — status.md 통독 금지), 현재 단계 전이는 `dobby_phase 키 검증`.
 
 ## 산출물 (단일 이슈 폴더)
 
@@ -51,19 +51,19 @@ description: 구현한 내용이 실제 환경에서 정상 동작하는지 chro
 
 ### 6. 테스트 수행
 #### 6-0. 시작 전 준비 (조작 전에 반드시 먼저)
-1. **결과 폴더 생성**: `date '+%Y%m%d-%H%M%S'`로 `$ORCHESTRATION_META/{키}/test-runs/{YYYYMMDD-HHMMSS}/`를 `mkdir -p`(기존 폴더 안 덮음).
-2. **status.md 갱신**: 현재 단계 `검증`, `테스트 실행 이력` 표에 이번 회차 행 추가(회차 = 기존 `test-runs/` 폴더 수 + 1, 상태 `테스트중`, 진행률 `0/N`).
-3. **result.md 골격 생성**: 위 폴더에 시나리오 표 행을 미리 깔아둔다(결과·판정 빈칸).
+1. **결과 폴더·이력 행·골격 생성**: **→ 헬퍼 `dobby_testrun_new {키} {전체 시나리오 수}`** — 회차 자동 계산(기존 폴더 수+1)·`test-runs/{시각}/`+`result.md` 골격 생성·status.md `테스트 실행 이력` 표에 이번 회차 행(상태 `테스트중`·집계 `0/0/0`) 추가까지 한 번에 한다. 반환된 폴더 경로를 이후 단계에 쓴다.
+2. **현재 단계 전이**: `dobby_phase {키} 검증`.
+3. **result.md 시나리오 표 준비**: 반환된 폴더의 result.md에 시나리오 표 행을 미리 깔아둔다(결과·판정 빈칸 — 표 내용·서술은 LLM 작성, 상세도 제한 없음).
 
 #### 6-1. 시나리오 루프 (각 시나리오 4스텝 한 세트)
 1. **조작**: `navigate_page`·`take_snapshot`·`click`/`fill`. 리다이렉트·상태코드는 `list_network_requests`(`includePreservedRequests: true`)로 확인. 화면은 `take_screenshot`으로 결과 폴더에 저장.
 2. **판정**: 기대 vs 실제 → PASS/FAIL/SKIP.
 3. **result.md 갱신**: 해당 행에 실제값·판정·근거.
-4. **status.md 갱신**: 진행률(X/N)·집계·실패 시 한 줄 요약을 **즉시** 반영.
+4. **이력 행 갱신**: **→ 헬퍼 `dobby_testrun_update {키} {폴더시각} 테스트중 {성공}/{실패}/{skip}`** — 시나리오가 끝날 때마다 집계를 **즉시** 반영한다(그 행만 수정하므로 status.md를 다시 읽지 않는다). 실패 상세·근거 서술은 result.md에 그대로 자세히 남긴다(3번 — 상세도 유지).
 
 ### 7. 결과 마감
 - **result.md 완성**: "한눈 요약 → 실패 상세 → 전체 표 → 근거" 순(결론 먼저). 어떤 test-plan으로 실행했는지 명시.
-- **status.md 마감**: `테스트 실행 이력` 표의 이번 회차 상태를 `완료`(실패 시 `완료(이슈 있음)`, 중단 시 `중단`)로, 최종 진행률·집계·결과 폴더 경로 확정. 현재 단계는 **`검증완료`**로 둔다.
+- **status.md 마감**: **→ 헬퍼 `dobby_testrun_update {키} {폴더시각} {완료|완료(이슈 있음)|중단} {최종 성공/실패/skip}`**. 현재 단계는 `검증` 그대로 둔다(6-0에서 전이됨 — 정본 8단계에 "검증완료"는 없고, 해결 승격은 dobby-resolve 담당).
 - **⛔ 상태를 자동으로 `해결`로 올리지 않는다.** 검증은 여기까지다. `해결` 승격은 **`dobby-resolve`**가 단독으로 담당한다. (테스트가 전부 PASS여도 dobby-resolve를 호출해야 해결로 표시된다.)
 - 같은 요약을 화면(응답)에도 출력한다.
 
