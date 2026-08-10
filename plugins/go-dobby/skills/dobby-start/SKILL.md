@@ -66,7 +66,7 @@ description: dobby-order가 각 에이전트(단일 이슈든 하위이슈든)�
   - **애매하면 docs로 추가 분석**: 확인이 필요한데 현재 코드로 확인 불가하면 docs 참조로 확인하고, **반드시 사실 기반으로만** 설계한다.
 
 ### 6. 결과 정리 + 수정 설계 → analysis.md
-- 분석 결과(원인·`파일:라인`)와 수정 설계(어디를 어떻게, 대안·더 단순한 방법 포함)를 쉬운 말로 정리해 분석 파일에 상세히 기록한다(나중에 이 파일만 읽어도 재분석 없이 이어갈 수 있을 만큼). **경로**: 단일/루트면 `$ORCHESTRATION_META/{루트키}/analysis.md`, **fan-out 하위면 `$ORCHESTRATION_META/{루트키}/analysis-{슬러그}.md`**(루트 폴더에 슬러그 접미사). 단계 전이는 단일/루트면 status.md를, 하위면 **루트 orchestration.md 상태표 행**을 `분석완료`/`분석`으로 갱신한다.
+- 먼저 **`dobby_scaffold_doc {루트키} analysis [슬러그]`로 고정 섹션 틀을 깔고**(원인·활성 경로·수정 설계·대안·미해결), 그 헤더 아래에 내용을 채운다. 분석 결과(원인·`파일:라인`)와 수정 설계(어디를 어떻게, 대안·더 단순한 방법 포함)를 쉬운 말로 정리해 분석 파일에 상세히 기록한다(나중에 이 파일만 읽어도 재분석 없이 이어갈 수 있을 만큼). **경로**: 단일/루트면 `$ORCHESTRATION_META/{루트키}/analysis.md`, **fan-out 하위면 `$ORCHESTRATION_META/{루트키}/analysis-{슬러그}.md`**(루트 폴더에 슬러그 접미사). 단계 전이는 단일/루트면 status.md를, 하위면 **루트 orchestration.md 상태표 행**을 `분석완료`/`분석`으로 갱신한다.
 
 ### 7. 테스트 목록 초안 → test-plan.md
 - 수정 설계에서 "무엇이 어떻게 바뀌어야 정상인지"를 시나리오(S1, S2…)로 테스트 계획 파일에 self-contained하게 작성한다(대상 페이지/URL·사전조건·조작 단계·기대 결과·검증 방법). **경로**: 단일/루트면 `$ORCHESTRATION_META/{루트키}/test-plan.md`, **fan-out 하위면 `$ORCHESTRATION_META/{루트키}/test-plan-{슬러그}.md`**.
