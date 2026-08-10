@@ -28,8 +28,8 @@ description: 서브 에이전트가 코드 구현이 아닌 산출물(문서·�
 
 ## 사전 조건
 
-- **`dobby-start`의 산출물이 있어야 한다**: `$ORCHESTRATION_META/{키}/analysis.md`, `status.md`. 없으면 "먼저 dobby-start로 착수·분석하라"고 알리고 중단한다.
-- 산출물이 repo에 들어가는 경우 status.md의 **워크트리 경로**가 존재해야 한다. repo 밖 산출(리포트 등)이면 워크트리가 없어도 된다.
+- **`dobby-start`의 산출물이 있어야 한다**: `analysis.md`. 없으면 "먼저 dobby-start로 착수·분석하라"고 알리고 중단한다.
+- **⛔ 메타 경로 규칙(fan-out)**: 메타 폴더는 **루트 키 하나뿐**이다. **fan-out 하위 에이전트(슬러그 ≠ 루트키)** 면 아래의 `analysis.md`·`produce.md`는 **루트의 슬러그 접미사 파일**(`$ORCHESTRATION_META/{루트키}/analysis-{슬러그}.md`·`produce-{슬러그}.md`), meta 산출물은 `$ORCHESTRATION_META/{루트키}/deliverables/{슬러그}/…`, "**status.md 단계 전환**"은 **루트 `orchestration.md` 상태표의 이 에이전트 행**(별도 하위 status.md를 만들지 않음)을 뜻한다. **단일/루트**면 접미사 없이 루트에.
 
 ## 산출물 위치 (두 모드 — analysis.md로 판별)
 

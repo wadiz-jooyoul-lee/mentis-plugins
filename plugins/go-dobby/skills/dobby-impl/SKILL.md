@@ -26,8 +26,9 @@ description: 서브 에이전트가 자기 워크트리에서 이슈/작업을 �
 
 ## 사전 조건
 
-- **`dobby-start`의 산출물이 있어야 한다**: `$ORCHESTRATION_META/{키}/analysis.md`, `status.md`. 없으면 "먼저 dobby-start로 착수·분석하라"고 알리고 중단한다.
-- status.md의 **워크트리 경로**가 실제로 존재해야 한다. 없으면(정리됨) 사용자/메인에 알리고 재생성 여부를 확인한다.
+- **`dobby-start`의 산출물이 있어야 한다**: `analysis.md`. 없으면 "먼저 dobby-start로 착수·분석하라"고 알리고 중단한다.
+- **⛔ 메타 경로 규칙(fan-out)**: 메타 폴더는 **루트 키 하나뿐**이다. **fan-out 하위 에이전트(슬러그 ≠ 루트키)** 면 아래 절차의 `analysis.md`·`implementation.md`는 **루트의 슬러그 접미사 파일**(`$ORCHESTRATION_META/{루트키}/analysis-{슬러그}.md`·`implementation-{슬러그}.md`)을 뜻하고, "**status.md 단계 전환**"은 **별도 하위 status.md가 아니라 루트 `orchestration.md` 상태표의 이 에이전트 행**을 갱신하는 것이다(`dobby_agent_state {루트키} {슬러그} 구현` 등 — 오케스트레이터가 관리하므로 하위 status.md를 새로 만들지 않는다). **단일/루트(슬러그 = 루트키)** 면 접미사 없이 루트의 `analysis.md`·`implementation.md`·`status.md`를 그대로 쓴다.
+- 워크트리 경로가 실제로 존재해야 한다. 없으면(정리됨) 사용자/메인에 알리고 재생성 여부를 확인한다.
 
 ## 절차
 
