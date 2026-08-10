@@ -234,6 +234,8 @@ dobby_agent_state() {
     }
     { print }
   ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  # 상태 전이는 타임라인 사건 → 전이할 때마다 이벤트 자동 기록(밀도 일관화, 끄기: DOBBY_AUTO_EVENT=0)
+  _dobby_autoevent "$key" "$slug → $st${rd:+ (라운드 $rd)}"
 }
 
 # dobby_event KEY TEXT — 이벤트 로그에 `- {now} TEXT` append(섹션 없으면 만든다).
@@ -278,6 +280,7 @@ dobby_phase() {
       if (insec && $0 ~ /^[ \t]*-[ \t]*\*\*갱신\*\*/) { print "- **갱신**: " now; next }
       print
     }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  _dobby_autoevent "$key" "단계 → $ph"
 }
 
 # ── 리뷰/검증 경로 ───────────────────────────────────────────────────
@@ -566,31 +569,33 @@ dobby_card() {
 }
 
 # ── 메타 검사기(대시보드 계약 점검) ──────────────────────────────────
-# dobby_lint KEY — 완성된 오더 메타가 대시보드 파서 계약에 맞는지 점검한다.
-# ⛔ 비차단: 문제를 ⚠ 목록으로 알려주기만 하고 항상 0으로 끝난다(파이프라인을 멈추지 않는다).
-# 단계 전이 게이트마다 호출해 "안 깨지지만 화면에 안 뜨는" 실패를 미리 잡는다.
-# 점검 항목: 오더 키 형식 · 필수 파일 · 표 --- 구분선 · 상태/단계 정본 · 슬러그 위생·조인
-#           (계약/리뷰) · 이벤트 로그 날짜 형식 · mermaid 라벨 따옴표.
+# dobby_lint KEY [strict] — 완성된 오더 메타가 대시보드 파서 계약에 맞는지 점검한다.
+#   기본  : 문제를 목록으로 알려주고 항상 0으로 끝난다(비차단 — 기존과 동일).
+#   strict: 치명 오류(⛔ = 대시보드에서 조용히 사라짐) 개수를 반환한다(0이면 통과).
+#           → 단계 전이 게이트(dobby_gate)가 이 반환값으로 진행/차단을 정한다.
+# 치명(⛔): 필수 파일 부재 · 상태표 --- 구분선 부재 · 상태 5정본 위반 · 슬러그 위생 위반.
+# 경고(⚠): 오더 키 형식 · 단계값(쓸 때 자동교정) · 고아 파일 · 이벤트 날짜 · mermaid · 분기-산출 정합성.
 dobby_lint() {
-  local key="$1" dir w=0
-  [ -n "$key" ] || { _die "dobby_lint: KEY 필요 (사용법: dobby_lint FE1-1234)"; return 2; }
+  local key="$1" strict="${2:-}" dir w=0 e=0
+  [ -n "$key" ] || { _die "dobby_lint: KEY 필요 (사용법: dobby_lint FE1-1234 [strict])"; return 2; }
   dir="$(_order_dir "$key")"
   local sf="$dir/status.md" of="$dir/orchestration.md"
   _w() { printf '⚠ %s\n' "$*"; w=$((w+1)); }
+  _e() { printf '⛔ %s\n' "$*"; e=$((e+1)); }
 
-  printf '── dobby_lint %s ──\n' "$key"
+  printf '── dobby_lint %s%s ──\n' "$key" "${strict:+ (strict)}"
 
-  # 1) 오더 키 형식(대시보드 목록 인식 조건)
+  # 1) 오더 키 형식(대시보드 목록 인식 조건) — 경고
   printf '%s' "$key" | grep -qE '^([A-Za-z][A-Za-z0-9]*-[0-9]+|TASK-[A-Za-z0-9-]+)$' \
     || _w "오더 키 형식 벗어남 \"$key\" — 대시보드 목록에서 안 보일 수 있음(FE1-1234·TASK-slug 형식)"
 
   [ -d "$dir" ] || { _die "dobby_lint: 폴더 없음 $dir"; return 2; }
 
-  # 2) 필수 파일: status.md 또는 orchestration.md 중 하나는 있어야 목록에 뜬다
+  # 2) 필수 파일: status.md 또는 orchestration.md 중 하나는 있어야 목록에 뜬다 — 치명
   [ -f "$sf" ] || [ -f "$of" ] \
-    || _w "status.md·orchestration.md 둘 다 없음 — 대시보드 목록에서 사라짐"
+    || _e "status.md·orchestration.md 둘 다 없음 — 대시보드 목록에서 사라짐"
 
-  # 3) 오더 단계 정본(status.md 현재 단계)
+  # 3) 오더 단계 정본(status.md 현재 단계) — 경고(쓸 때 dobby_phase가 자동교정)
   if [ -f "$sf" ]; then
     local praw pnorm
     praw="$(grep -m1 '\*\*단계\*\*' "$sf" 2>/dev/null | sed -E 's/.*\*\*단계\*\*[[:space:]]*[:：][[:space:]]*//; s/[[:space:]]*$//; s/\*//g')"
@@ -605,10 +610,10 @@ dobby_lint() {
   # 4) 에이전트 상태표(orchestration.md): 표 구분선·상태 정본·슬러그 위생·조인
   local slugset=" " state_bad=0
   if [ -f "$of" ]; then
-    # 4a) 표 --- 구분선(없으면 대시보드가 표로 인식 못 함)
+    # 4a) 표 --- 구분선(없으면 대시보드가 표로 인식 못 함) — 치명
     if grep -q '^## 에이전트 상태표' "$of"; then
       awk '/^## 에이전트 상태표/{ins=1;next} /^## /{ins=0} ins&&/^\|[- |]+\|[[:space:]]*$/{f=1} END{exit(f?0:1)}' "$of" \
-        || _w "orchestration.md: 상태표에 --- 구분선 없음 — 대시보드가 표로 인식 못 함(헤더 아래 |---|---| 줄 필요)"
+        || _e "orchestration.md: 상태표에 --- 구분선 없음 — 대시보드가 표로 인식 못 함(헤더 아래 |---|---| 줄 필요)"
     fi
     # 4b) 슬러그<TAB>상태 추출
     local rows slug st
@@ -626,8 +631,8 @@ dobby_lint() {
     while IFS="$(printf '\t')" read -r slug st; do
       [ -n "$slug" ] || continue
       slugset="$slugset$slug "
-      case "$slug" in *" "*|*/*|*"*"*|*"("*) _w "슬러그 '$slug' 공백/특수문자 포함 — 계약·리뷰·로그·아바타 매칭 실패 위험" ;; esac
-      case " $DOBBY_STATES " in *" $st "*) : ;; *) _w "상태값 '$st'(슬러그 $slug) 5정본 아님 — 대기·분석·구현·리뷰·완료 중 하나"; state_bad=1 ;; esac
+      case "$slug" in *" "*|*/*|*"*"*|*"("*) _e "슬러그 '$slug' 공백/특수문자 포함 — 계약·리뷰·로그·아바타 매칭 실패 위험" ;; esac
+      case " $DOBBY_STATES " in *" $st "*) : ;; *) _e "상태값 '$st'(슬러그 $slug) 5정본 아님 — 대기·분석·구현·리뷰·완료 중 하나"; state_bad=1 ;; esac
     done <<EOF
 $rows
 EOF
@@ -664,8 +669,143 @@ EOF
     [ "${badm:-0}" -gt 0 ] 2>/dev/null && _w "$(basename "$fpath") mermaid 라벨 ${badm}곳이 따옴표 없이 ( 또는 / 포함 — 'Syntax error'로 안 그려질 수 있음([\"라벨(x)\"]로)"
   done
 
-  printf '(%d warnings, 0 errors)\n' "$w"
+  # 8) 분기-산출 정합성(status.md '종류'와 실제 산출 파일이 맞나) — 경고
+  if [ -f "$sf" ]; then
+    local kind
+    kind="$(grep -m1 '\*\*종류\*\*' "$sf" 2>/dev/null | sed -E 's/.*\*\*종류\*\*[[:space:]]*[:：][[:space:]]*//; s/[[:space:]]*$//; s/\*//g')"
+    case "$kind" in
+      *산출*) ls "$dir"/implementation*.md >/dev/null 2>&1 \
+        && _w "종류=산출물인데 implementation*.md 있음 — 비소스는 produce.md여야 함(분기 불일치)" ;;
+    esac
+    case "$kind" in
+      *정리*) [ -f "$dir/explainer.md" ] \
+        || _w "종류=작업정리인데 explainer.md 없음 — '작업 내용' 탭이 빈다" ;;
+    esac
+  fi
+
+  printf '(치명 %d, 경고 %d)\n' "$e" "$w"
+  [ -n "$strict" ] && return "$e"
   return 0
+}
+
+# ── 진입 부트스트랩 · 분류 · 세션 (스킬 중복 기술을 함수 하나로) ──────────
+# 스킬마다 제각각 적던 "제목·종류·세션·docs 게이트"를 진입 즉시 1회 호출로 모은다.
+# 판단(제목/종류/키워드)만 AI가 인자로 넘기고, 파일에 '어떻게 적히나'는 전부 여기서 고정한다.
+
+# dobby_set_kind KEY 개발|산출물|작업정리 — status.md '## 현재 단계'에 '- **종류**:' 한 줄(정본으로 접음).
+# 대시보드 파서(parseOrderStatus.ts)는 /개발/·/산출/·/작업\s*정리|정리/로 부분 일치하므로 공백 유무는 무관.
+# 대시보드가 이 값으로 개발/비개발 집계·상세 탭 구성을 정한다.
+dobby_set_kind() {
+  local key="$1" kind f; kind="$(_trim "$2")"
+  case "$kind" in
+    *개발*)         kind=개발 ;;
+    *산출*|*비소스*) kind=산출물 ;;
+    *정리*)         kind="작업 정리" ;;
+  esac
+  f="$(_order_dir "$key")/status.md"; [ -f "$f" ] || return 1
+  if grep -q '\*\*종류\*\*' "$f"; then          # 이미 있으면 그 줄만 교체
+    awk -v k="$kind" '
+      /^## / { insec = ($0 ~ /현재 단계/) }
+      { if (insec && $0 ~ /\*\*종류\*\*/) { print "- **종류**: " k; next } print }
+    ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  else                                          # 없으면 '단계' 줄 바로 아래 삽입
+    awk -v k="$kind" '
+      /^## / { insec = ($0 ~ /현재 단계/) }
+      { print; if (insec && $0 ~ /^[ \t]*-[ \t]*\*\*단계\*\*/) print "- **종류**: " k }
+    ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  fi
+}
+
+# dobby_set_session KEY [CWD] — status.md '## 세션'에 세션 ID·경로 기록(대시보드 '이어가기'의 근거).
+# 세션 ID는 손으로 적지 않는다 — cwd로 전사 파일명을 계산한다(스킬 여러 곳의 복붙을 이 함수로 대체).
+dobby_set_session() {
+  local key="$1" cwd="${2:-$(pwd)}" f enc sid
+  f="$(_order_dir "$key")/status.md"; [ -f "$f" ] || return 1
+  enc="$(printf '%s' "$cwd" | sed 's#[/.]#-#g')"          # 인코딩cwd: '/'·'.' → '-'
+  sid="$(basename "$(ls -t "$HOME/.claude/projects/$enc"/*.jsonl 2>/dev/null | head -1)" .jsonl 2>/dev/null)"
+  [ -n "$sid" ] || { printf 'dobby-lib: 세션 전사 못 찾음(%s) — 세션 기록 건너뜀\n' "$enc" >&2; return 0; }
+  grep -q '^## 세션' "$f" && return 0                     # 이미 있으면 유지(비파괴)
+  cat >> "$f" <<EOF
+
+## 세션
+- **세션 ID**: $sid
+- **작업 경로**: $cwd
+EOF
+}
+
+# dobby_bootstrap KEY TITLE KIND "kw1|kw2" [CWD] — 진입 즉시 1회. 폴더·골격·제목·종류·세션·docs 게이트를 한 번에.
+# ⛔ Jira 상태 전환은 MCP(판단)라 여기 없다 — 부트스트랩 직후 오케스트레이터가 이어서 한다.
+dobby_bootstrap() {
+  local key="$1" title="$2" kind="$3" kw="${4:-}" cwd="${5:-$(pwd)}"
+  dobby_scaffold_meta "$key" "$title" "$kw"     # 폴더+골격 status.md+docs 게이트
+  dobby_set_title    "$key" "$title"            # 임시 제목 → 실제 제목
+  [ -n "$kind" ] && dobby_set_kind "$key" "$kind"
+  dobby_set_session  "$key" "$cwd"
+}
+
+# ── 자동 이벤트(상태/단계 전이 시) ──────────────────────────────────
+# _dobby_autoevent KEY TEXT — 전이 때마다 이벤트를 남겨 타임라인 밀도를 일관화한다.
+#   · 보드(orchestration.md)가 아직 없으면 조용히 건너뛴다(부트스트랩 중 조기 생성 방지).
+#   · DOBBY_AUTO_EVENT=0 으로 끌 수 있다(복구·테스트 시).
+_dobby_autoevent() {
+  [ "${DOBBY_AUTO_EVENT:-1}" = 0 ] && return 0
+  [ -f "$(_order_dir "$1")/orchestration.md" ] || return 0
+  dobby_event "$1" "$2"
+}
+
+# ── 자동 복구 · 단계 전이 게이트 ─────────────────────────────────────
+# dobby_repair KEY — 손으로 어긋나게 적힌 메타를 헬퍼로 '다시 찍어' 정규화(비파괴, 내용 보존).
+#   흔한 형식 오류(단계·상태 비정본, 상태표 헤더/구분선 누락, 골격 부재)는 대부분 여기서 자동 복구된다.
+dobby_repair() {
+  local key="$1" dir sf of; dir="$(_order_dir "$key")"
+  sf="$dir/status.md"; of="$dir/orchestration.md"
+  [ ! -f "$sf" ] && [ ! -f "$of" ] && dobby_scaffold_meta "$key"          # 골격 부재 → 재생성
+  [ -f "$of" ] && dobby_ensure_board "$key"                               # 상태표 헤더·구분선 보정
+  if [ -f "$sf" ]; then                                                   # 단계값 재정규화(예: 검증완료→검증)
+    local praw
+    praw="$(grep -m1 '\*\*단계\*\*' "$sf" 2>/dev/null | sed -E 's/.*\*\*단계\*\*[[:space:]]*[:：][[:space:]]*//; s/[[:space:]]*$//; s/\*//g')"
+    [ -n "$praw" ] && DOBBY_AUTO_EVENT=0 dobby_phase "$key" "$praw"
+  fi
+  if [ -f "$of" ]; then                                                   # 상태표 상태 칸 재정규화(각 행 다시 찍기)
+    local rows slug st
+    rows="$(awk '
+      /^## /{ins=($0 ~ /에이전트 상태표/)?1:0; hdr=0; next}
+      ins==1 && /^\|/{
+        n=split($0,a,"|")
+        if(hdr==0){for(i=1;i<=n;i++){c=a[i];gsub(/^[ \t]+|[ \t]+$/,"",c);gsub(/\*/,"",c);if(c=="슬러그"||c=="에이전트")cs=i;if(c=="상태")ct=i}
+          if(cs&&ct)hdr=1; next}
+        issep=1; for(i=2;i<n;i++){c=a[i];gsub(/[ \t-]/,"",c);if(c!=""){issep=0;break}}
+        if(issep)next
+        slug=a[cs];st=a[ct];gsub(/^[ \t]+|[ \t]+$/,"",slug);gsub(/^[ \t]+|[ \t]+$/,"",st);gsub(/\*/,"",st)
+        if(slug!="")print slug "\t" st
+      }' "$of" 2>/dev/null)"
+    while IFS="$(printf '\t')" read -r slug st; do
+      [ -n "$slug" ] || continue
+      case " $DOBBY_STATES " in *" $st "*) : ;; *) DOBBY_AUTO_EVENT=0 dobby_agent_state "$key" "$slug" "$st" ;; esac
+    done <<EOF
+$rows
+EOF
+  fi
+}
+
+# dobby_gate KEY NEXTPHASE [MODE]  MODE: interactive(기본) | auto
+#   검사 → (실패) 자동 복구 → 재검사 → interactive면 멈춤(비0) / auto면 기록하고 계속(0).
+#   대화형(모드 A)은 interactive, 자율(모드 B/Workflow)은 auto로 호출한다.
+dobby_gate() {
+  local key="$1" next="${2:-}" mode="${3:-interactive}"
+  dobby_lint "$key" strict >/dev/null 2>&1 && return 0                    # 통과
+  printf 'dobby-lib: %s 게이트(%s) 형식 오류 — 자동 복구 시도\n' "$key" "$next" >&2
+  dobby_repair "$key"
+  dobby_lint "$key" strict >/dev/null 2>&1 && { printf 'dobby-lib: %s 자동 복구 완료 — 통과\n' "$key" >&2; return 0; }
+  if [ "$mode" = auto ]; then                                            # 자율: 멈추지 않고 기록만
+    dobby_event  "$key" "게이트($next): 자동복구 후에도 형식 오류 — 계속 진행(검토 필요)"
+    dobby_append "$key" "needs-attention.md" "$(printf -- '- %s [%s→%s] 자동복구 실패 — dobby_lint %s strict 로 확인' "$(_now)" "$key" "$next" "$key")"
+    printf 'dobby-lib: %s 자율 통과(오류는 needs-attention.md에 기록)\n' "$key" >&2
+    return 0
+  fi
+  printf '\n⛔ 게이트 멈춤 (%s → %s): 아래 치명 오류를 고쳐야 다음 단계로 갑니다\n' "$key" "$next" >&2
+  dobby_lint "$key" strict >&2
+  return 1
 }
 
 echo "dobby-lib loaded" >&2
