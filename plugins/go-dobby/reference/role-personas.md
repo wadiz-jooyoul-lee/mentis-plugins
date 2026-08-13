@@ -31,6 +31,7 @@
 - 가장 적은 코드로 푼다. 요청 안 된 기능·추상화·설정 가능성을 추가하지 않는다. 50줄로 될 일을 200줄로 짜지 않는다.
 - 인접 코드/포맷을 임의로 개선·리팩토링하지 않는다. 기존 스타일을 따르고, 내 수정으로 안 쓰이게 된 import·변수만 제거한다.
 - **기존 데이터 수집 보존(회귀 방지)**: 마크업·DOM·이벤트 요소를 바꾸거나 나누거나 옮길 때, 원래 요소에 있던 추적·수집 장치(GA `data-ec-*`/`gaData`·`onClick`/추적 핸들러·`dataLayer` push·로깅)가 **모든 상호작용 경로에 그대로 남는지** 확인한다. 화면 변화·에러가 없어 조용히 누락되기 쉽다(사례 FE1-1279). 회귀 이전 커밋·형제 컴포넌트와 대조해 사실로 확인한다.
+- **산출 데이터 계약 — 소스 통째 흘리기 금지**: 저장·전송돼 다른 계층/저장소가 소비하는 산출물(폼 저장 payload·transformer 출력·DTO/요청 바디·직렬화 결과)을 만들 때, 소스 객체를 통째로 스프레드/dump하지 않고(`{...전체}`·`Object.assign`·antd `getFieldsValue(true)`·`...params` 등) **계약 스키마의 필드만 명시적으로 조립**한다. 소스→산출 필드 매핑을 명시하고, 렌더/노출 안 되지만 저장돼야 하는 값도 명시 모델에 포함한다(우회 dump 금지). 화면 변화·에러가 없어 payload 오염이 조용히 누적된다(사례 FE1-1573: 폼 저장소 전체 병합으로 영역 `projects`가 카드에 중첩 저장). 자세한 규율은 `analysis-discipline` 원칙 5.
 - **GA 이벤트 추가·마이그레이션(wadiz-frontend)**: 컴포넌트에 직접 박지 말고 **`@wadiz/event-tracker`**(`packages/event-tracker/src/{kebab}.tracker.ts`)에 `tracking{Target}{Event}` 함수를 만들어 `trackingCustomTag({category,action,label})`로 구현하고, 컴포넌트에선 노출=`useTrackingEventRef({impressionCallback})`·클릭=`{feature}Tracker.tracking...Click()`으로 붙인다. 마이그레이션 시 category/action/label 값은 원본 그대로 보존. 착수 전 그 패키지 README·기존 `*.tracker.ts` 패턴을 확인(추측 금지). 자세한 규약은 dobby-impl SKILL.
 - **새 컴포넌트 SCSS는 DOM 계층대로 중첩(flat 금지)**: `ComponentName.module.scss`(CSS Modules)를 flat하게 나열하지 말고 **tsx DOM 트리와 동일한 계층으로 중첩**한다(최상위 `container`, camelCase, 상태/가상선택자는 `&`, 토큰은 `@use "~@wadiz/waffle/styles"`의 `$color-*`/`$size-*`, 반응형은 `@include breakpoint-*`). 착수 전 형제 컴포넌트 `*.module.scss` 패턴 확인. 자세한 규약은 dobby-impl SKILL.
 - **디자인 값의 출처를 분리한다(스크린샷 눈대중 금지)**: 색(hex)·spacing·gap·radius·shadow·hug/fill 같은 **정밀 시각값은 Figma `design_context`(get_design_context)로 값표를 1회 선확정**한 뒤 구현한다 — 테크스펙엔 정밀값이 없다(Figma 링크로 위임). 반대로 **상태별 동작·CTA·원천 데이터·요건은 테크스펙**에서 확정한다. 스크린샷은 색·간격·정렬(hug/fill)이 안 드러나 라운드마다 재교정을 부른다. Figma 노드는 배경/아트보드가 아니라 **카드 인스턴스 노드(상태별 mo/pc)** 를 대상으로 하고, 가능하면 테크스펙 화면정의 표의 노드 ID를 정본으로 쓴다.
@@ -62,7 +63,7 @@ lint/build/브라우저 테스트는 하지 않는다(검증은 오케스트레�
 - "확인된 결함"과 "의심"을 분리한다. 확신 없으면 심각도를 낮추고 근거를 밝힌다.
 - 심각도로 우선순위를 매긴다. 동작을 깨는 blocker/major부터 잡고, 취향·nit에 리뷰를 소모하지 않는다.
 
-루브릭 A~E(정확성/품질·규약·CI 규칙·커밋 메시지·범위 준수)는 dobby-order P5를 따른다. 비소스면 A~E 대신 내용 리뷰 기준(정확성·완결성·요청 부합·근거 명시·규약). **산출** — `reviews/round-{n}/{슬러그}.md`(심각도·`파일:라인`·수정 제안).
+루브릭 A~F(정확성/품질·규약·CI 규칙·커밋 메시지·범위 준수·출력/지속 계약)는 dobby-order P5를 따른다. 비소스면 A~E 대신 내용 리뷰 기준(정확성·완결성·요청 부합·근거 명시·규약). **산출** — `reviews/round-{n}/{슬러그}.md`(심각도·`파일:라인`·수정 제안).
 
 ---
 
