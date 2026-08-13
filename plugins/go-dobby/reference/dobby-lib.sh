@@ -381,6 +381,25 @@ _table_row_append() {
   ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
 }
 
+# _wt_row_exists FILE REPO BRANCH — '## 워크트리 …' 표에 (repo, 브랜치) 행이 이미 있으면 0(있음).
+# ⛔ (repo, 브랜치) 쌍으로 본다: 멀티 repo 오더는 저장소가 달라도 브랜치명이 같을 수 있고(예 FE·BE 모두
+# feature/{키}), 브랜치 문자열만 비교하면 두 번째 저장소 행이 조용히 누락된다. 또 이 표 밖(옛 `## 에이전트`
+# 표 등)에 같은 브랜치가 적혀 있어도 중복으로 오판하지 않도록 이 섹션 안만 검사한다.
+_wt_row_exists() {
+  awk -v want_repo="$2" -v want_br="$3" '
+    function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);gsub(/`|\*/,"",x);return x}
+    /^## /{ins=(index($0,"워크트리")>0)?1:0; hdr=0; next}
+    ins==1 && /^\|/{
+      n=split($0,a,"|")
+      if(hdr==0){for(i=1;i<=n;i++){c=t(a[i]); if(c=="repo")cr=i; if(c=="브랜치")cb=i}
+        if(cr&&cb)hdr=1; next}
+      issep=1; for(i=2;i<n;i++){c=a[i];gsub(/[ \t-]/,"",c);if(c!=""){issep=0;break}}
+      if(issep)next
+      if(t(a[cr])==want_repo && t(a[cb])==want_br){found=1}
+    }
+    END{exit(found?0:1)}' "$1"
+}
+
 # dobby_record_branch KEY REPO BRANCH [워크트리경로] — status.md '## 워크트리 / 브랜치' 표에 행을 중복 없이 남긴다.
 # 대시보드 계약: parseWorktrees는 `| repo | 브랜치 | 경로 |` 표를 읽고(경로 칸 필수), 경로 실존 여부로
 # 워크트리 정리(worktreeRemoved)를 판정하며 prTargets가 브랜치를 읽는다 — 경로까지 꼭 넘겨라.
@@ -388,7 +407,7 @@ dobby_record_branch() {
   local key="$1" repo="$2" branch="$3" wt="${4:-}" sf
   sf="$(_order_dir "$key")/status.md"
   [ -f "$sf" ] || return 0
-  grep -qF "| $branch |" "$sf" && return 0
+  _wt_row_exists "$sf" "$repo" "$branch" && return 0
   _table_row_append "$sf" "워크트리 / 브랜치" \
     "| repo | 브랜치 | 경로 |" "|------|--------|------|" \
     "| $repo | $branch | $wt |"
@@ -404,6 +423,24 @@ dobby_set_title() {
   awk -v t="$title" '
     /^##/ { insec = ($0 ~ /이슈\/작업/) }
     { if (insec && $0 ~ /^[ \t]*-[ \t]*\*\*제목\*\*/) { print "- **제목**: " t; next } print }
+  ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+
+# dobby_set_scope KEY "한 줄" — status.md '## 이슈/작업'에 '- **닫히는 조건**: …'를 upsert(범위 경계).
+# "이 오더가 어디까지 하면 끝인가"를 착수 때 한 줄로 못박는 값. 있으면 갱신, 없으면 '- **제목**:' 바로 뒤에 삽입.
+# dobby-order P8이 후속 요청을 이 값과 대조해 "같은 오더 편입 vs 새 오더 분리"를 판단한다.
+dobby_set_scope() {
+  local key="$1" scope="$2" f
+  f="$(_order_dir "$key")/status.md"
+  [ -f "$f" ] || return 0
+  [ -n "$scope" ] || return 0
+  awk -v s="$scope" '
+    /^##/ { insec = ($0 ~ /이슈\/작업/) }
+    {
+      if (insec && $0 ~ /^[ \t]*-[ \t]*\*\*닫히는 조건\*\*/) { if (!done) { print "- **닫히는 조건**: " s; done=1 } next }
+      print
+      if (insec && !done && $0 ~ /^[ \t]*-[ \t]*\*\*제목\*\*/) { print "- **닫히는 조건**: " s; done=1 }
+    }
   ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
 }
 
@@ -505,7 +542,7 @@ dobby_resolve() {
 
 ## 해결
 - **처리 일시**: $now
-- **근거**: (리뷰 클린·테스트 결과·통합 브랜치)
+- **근거**: 리뷰 round-{n}(blocking 0) · 테스트 {YYYY-MM-DD HH:MM} {env} 회차 {i}(성공 {x}/실패 0/skip {z}) · 통합 커밋 {해시7}  ← ⛔ {} 를 실제 값으로 채울 것(못 채우면 해결 금지). 마지막 검증 이후 변경이 있으면 뒤에 " · ⚠️ 미검증 변경: {건수}건({날짜} 이후)" 추가
 - **비고**: 워크트리·메타 유지. 추가 수정 시 dobby-order P8 재개.
 EOF
   dobby_event "$key" "해결 표시 — status 해결"
@@ -612,6 +649,9 @@ dobby_scaffold_doc() {
 
 ## 활성 경로
 (실제 실행되는 코드 경로 증명)
+
+## 이 앱에 없는 것
+(레거시·별도 번들 앱이면 필수 — i18n 초기화 여부 / same-origin 도달 API 경로 / 공용 패키지 컴포넌트 사용 가능 여부. 일반 앱이면 "해당 없음")
 
 ## 수정 설계
 (어디를 어떻게 — 대안 포함)
