@@ -1,0 +1,19 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(*git *)|Bash(*gh pr*)|Bash(*rm *)|Bash(*rmdir *)",
+            "command": "bash",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/pre-bash.sh"],
+            "timeout": 5,
+            "statusMessage": "go-dobby 안전 검사"
+          }
+        ]
+      }
+    ]
+  }
+}
