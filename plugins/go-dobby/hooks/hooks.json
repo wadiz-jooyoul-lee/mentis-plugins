@@ -6,7 +6,31 @@
         "hooks": [
           {
             "type": "command",
-            "if": "Bash(*git *)|Bash(*gh pr*)|Bash(*rm *)|Bash(*rmdir *)",
+            "if": "Bash(git *)",
+            "command": "bash",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/pre-bash.sh"],
+            "timeout": 5,
+            "statusMessage": "go-dobby 안전 검사"
+          },
+          {
+            "type": "command",
+            "if": "Bash(gh pr *)",
+            "command": "bash",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/pre-bash.sh"],
+            "timeout": 5,
+            "statusMessage": "go-dobby 안전 검사"
+          },
+          {
+            "type": "command",
+            "if": "Bash(rm *)",
+            "command": "bash",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/pre-bash.sh"],
+            "timeout": 5,
+            "statusMessage": "go-dobby 안전 검사"
+          },
+          {
+            "type": "command",
+            "if": "Bash(rmdir *)",
             "command": "bash",
             "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/pre-bash.sh"],
             "timeout": 5,
