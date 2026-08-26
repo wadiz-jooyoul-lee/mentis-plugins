@@ -68,20 +68,18 @@ mkdir -p ~/.config/go-dobby
    - 기존 내용(다른 훅·권한·설정)은 **한 글자도 건드리지 않고**, `hooks.PreToolUse` 배열에
      go-dobby 항목만 병합한다(jq 병합 권장).
    - go-dobby 항목의 식별 기준은 **args 경로에 `go-dobby/hooks/pre-bash.sh` 포함 여부**다.
-     이미 있으면 그대로 두고(등록 완료 상태), 없을 때만 아래를 추가한다.
-   - `${CLAUDE_PLUGIN_ROOT}`는 settings.json에서 치환되지 않으므로 **홈을 풀어 쓴 절대 경로**를 쓴다:
+     이미 있으면 아래 최신 형식과 같은지 확인하고 다르면 go-dobby 항목만 교체한다. 없으면 추가한다.
+   - `${CLAUDE_PLUGIN_ROOT}`는 settings.json에서 치환되지 않으므로 **홈을 풀어 쓴 절대 경로**를 쓴다.
+   - ⚠️ `if`에는 **권한 규칙 하나만** 쓸 수 있다(`|` 알터네이션·선행 `*` 불가 — HOOKS.md "if 문법"
+     참조). 그래서 같은 스크립트를 부르는 항목을 규칙별로 나열한다:
    ```json
    {
      "matcher": "Bash",
      "hooks": [
-       {
-         "type": "command",
-         "if": "Bash(*git *)|Bash(*gh pr*)|Bash(*rm *)|Bash(*rmdir *)",
-         "command": "bash",
-         "args": ["/Users/{사용자}/.config/go-dobby/hooks/pre-bash.sh"],
-         "timeout": 5,
-         "statusMessage": "go-dobby 안전 검사"
-       }
+       { "type": "command", "if": "Bash(git *)",   "command": "bash", "args": ["/Users/{사용자}/.config/go-dobby/hooks/pre-bash.sh"], "timeout": 5, "statusMessage": "go-dobby 안전 검사" },
+       { "type": "command", "if": "Bash(gh pr *)", "command": "bash", "args": ["/Users/{사용자}/.config/go-dobby/hooks/pre-bash.sh"], "timeout": 5, "statusMessage": "go-dobby 안전 검사" },
+       { "type": "command", "if": "Bash(rm *)",    "command": "bash", "args": ["/Users/{사용자}/.config/go-dobby/hooks/pre-bash.sh"], "timeout": 5, "statusMessage": "go-dobby 안전 검사" },
+       { "type": "command", "if": "Bash(rmdir *)", "command": "bash", "args": ["/Users/{사용자}/.config/go-dobby/hooks/pre-bash.sh"], "timeout": 5, "statusMessage": "go-dobby 안전 검사" }
      ]
    }
    ```
