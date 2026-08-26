@@ -4,6 +4,28 @@
 스킬 프롬프트는 어겨질 수 있지만 훅은 하네스가 실행하므로 우회가 안 된다 — **마지막 방어선**이다.
 새 훅을 추가할 때는 반드시 이 문서의 원칙을 따른다.
 
+## ⚠️ 전달 경로 — 플러그인 훅 버그 우회 (2026-08 기준, 반드시 읽기)
+
+**플러그인 hooks.json의 PreToolUse/PostToolUse *command* 훅은 Claude Code가 로딩 시 조용히
+드랍한다** — [anthropics/claude-code#34573](https://github.com/anthropics/claude-code/issues/34573)
+(closed as not planned). prompt 훅과 라이프사이클(SessionStart·Stop 등) command 훅은 정상 발화한다.
+v2.1.246에서 실측 확인: 설치본 스크립트를 수동 실행하면 deny JSON이 정확히 나오지만,
+실제 세션의 Bash 호출에는 훅이 아예 스폰되지 않았다.
+
+그래서 현재 전달 경로는 다음과 같다:
+
+- **pre-bash.sh(G1·G5·G6)는 `dobby-init`이 배포한다**: `~/.config/go-dobby/hooks/`로 복사 후
+  사용자 `~/.claude/settings.json`의 `hooks.PreToolUse`에 등록(dobby-init SKILL.md "안전 훅 등록").
+  settings.json 훅은 정상 발화한다.
+- **이 폴더의 hooks.json PreToolUse 항목은 일부러 남겨 둔다**(현재는 드랍되어 무해).
+  버그가 고쳐지면 그대로 살아나므로, 그때 settings.json 등록·복사본만 제거하면 원복 완료다
+  (둘 다 살아 있으면 같은 검사가 두 번 돌 뿐 오동작은 없지만, 중복 스폰 비용이 있으니 제거한다).
+- **session-start.sh(SessionStart, 플러그인에서 정상 발화)** 가 세션 시작마다 "config.env는 있는데
+  settings.json 미등록" 또는 "복사본이 플러그인 최신본과 다름"을 감지해 `/dobby-init` 실행을
+  안내한다. 이미 설치한 사용자도 플러그인 업데이트만 받으면 다음 세션에 자동으로 알게 된다.
+- **훅 스크립트를 수정하면**: 플러그인 버전 배포 → 사용자 세션에서 session-start.sh가 버전 차이를
+  감지 → `/dobby-init` 재실행으로 복사본 갱신. (자동 갱신이 아니라는 점을 기억하라.)
+
 ## 왜 이렇게 만들었나 (조사한 최적화 프랙티스 → 우리 적용)
 
 훅은 도구 호출마다 동기로 실행돼 **훅 실행 시간이 그대로 대화 지연**이 된다.
@@ -93,14 +115,18 @@
 5. `jq . hooks/hooks.json`으로 스키마 확인 → 플러그인 **버전 patch +1**(CLAUDE.md 버전 규칙 —
    plugin.json과 marketplace.json 두 곳) → 커밋.
 6. 배포 후 `/hooks` 메뉴에서 등록 확인, `claude --debug-file`로 발화 확인.
+7. **PreToolUse/PostToolUse command 훅이면**: 위 "전달 경로" 섹션대로 플러그인 등록만으로는
+   발화하지 않는다(#34573). dobby-init의 "안전 훅 등록" 단계가 새 스크립트를 함께 복사·등록하도록
+   갱신하고, 사용자에게 `/dobby-init` 재실행이 필요함을 릴리스 노트에 적는다.
 
 ## 현재 구현된 규칙
 
-| ID | 규칙 | 이벤트 | 처리 | 근거 스킬 |
-|----|------|--------|------|-----------|
-| G1 | 정식 배포 베이스(master)로 push·merge·PR 금지 | PreToolUse·Bash | deny | dobby-order C1 |
-| G5 | subtree 밖 워크트리 제거·rm 금지 | PreToolUse·Bash | deny | dobby-end 안전 경계 |
-| G6 | 메타 폴더($ORCHESTRATION_META) 삭제 금지 | PreToolUse·Bash | deny | 비파괴 원칙 |
+| ID | 규칙 | 이벤트 | 처리 | 전달 경로 | 근거 스킬 |
+|----|------|--------|------|-----------|-----------|
+| G1 | 정식 배포 베이스(master)로 push·merge·PR 금지 | PreToolUse·Bash | deny | settings.json(dobby-init 등록 — #34573 우회) | dobby-order C1 |
+| G5 | subtree 밖 워크트리 제거·rm 금지 | PreToolUse·Bash | deny | settings.json(상동) | dobby-end 안전 경계 |
+| G6 | 메타 폴더($ORCHESTRATION_META) 삭제 금지 | PreToolUse·Bash | deny | settings.json(상동) | 비파괴 원칙 |
+| — | 안전 훅 미등록·구버전 감지 안내 | SessionStart | 안내 출력 | 플러그인 hooks.json(라이프사이클 훅은 정상 발화) | dobby-init |
 
 ## 로드맵 (다음 단계 후보 — 분석 완료, 미구현)
 

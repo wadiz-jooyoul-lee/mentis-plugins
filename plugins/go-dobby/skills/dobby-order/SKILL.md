@@ -30,7 +30,7 @@ description: go-dobby의 유일한 진입점 오케스트레이터. 모든 이�
 
 ## 설정 (첫 실행 시 확인)
 
-작업을 시작하기 전에 **`${CLAUDE_PLUGIN_ROOT}/reference/config.md`의 "설정 절차"를 그대로 따른다**: `~/.config/go-dobby/config.env`를 source 해 환경 변수를 **읽기만** 한다. ⛔ **이 스킬은 config.env를 저장·수정·생성하지 않는다**(값 변경은 `dobby-init` 전용 — config.md '비파괴 원칙'). config.env 파일이 아예 없으면 멈추고 `/dobby-init`을 먼저 실행하도록 안내한다. 메타 루트 `ORCHESTRATION_META`, 변수 목록·기본값, 폴더 배치(워크트리 `$ORCHESTRATION_WORKSPACE/subtree/` · 메타 `$ORCHESTRATION_META/`)는 모두 그 문서에 있다. 이하 메타 경로는 `$ORCHESTRATION_META` 기준.
+작업을 시작하기 전에 **`${CLAUDE_PLUGIN_ROOT}/reference/config.md`의 "설정 절차"를 그대로 따른다**: `~/.config/go-dobby/config.env`를 source 해 환경 변수를 **읽기만** 한다. ⛔ **이 스킬은 config.env를 저장·수정·생성하지 않는다**(값 변경은 `dobby-init` 전용 — config.md '비파괴 원칙'). config.env 파일이 아예 없으면 멈추고 `/dobby-init`을 먼저 실행하도록 안내한다. config.env는 있는데 `~/.claude/settings.json`에 go-dobby 안전 훅(`go-dobby/hooks/pre-bash.sh` 경로 포함 항목)이 없으면, 안전 훅 없이 진행됨을 알리고 `/dobby-init` 재실행을 권한다(진행 자체는 막지 않는다 — 훅 등록은 dobby-init 전용, `hooks/HOOKS.md` "전달 경로" 참조). 메타 루트 `ORCHESTRATION_META`, 변수 목록·기본값, 폴더 배치(워크트리 `$ORCHESTRATION_WORKSPACE/subtree/` · 메타 `$ORCHESTRATION_META/`)는 모두 그 문서에 있다. 이하 메타 경로는 `$ORCHESTRATION_META` 기준.
 
 ## 스킬 관계 (building block)
 
