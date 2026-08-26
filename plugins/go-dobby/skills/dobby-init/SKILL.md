@@ -53,8 +53,45 @@ mkdir -p ~/.config/go-dobby
   ```
 - 저장 전 **변경 요약(diff)** 을 보여주고 확인받는다: `유지 N개 / 변경 M개 / 추가 K개`. **삭제는 사용자가 명시적으로 요청한 경우에만** 표시·수행한다.
 
-### 4. 안내
-- 저장된 최종 설정을 요약해 보여주고(메타 경로가 어디로 정해졌는지 명확히), 이제 `/dobby-order {키}` 등 작업 스킬을 실행하면 된다고 안내한다.
+### 4. 안전 훅 등록 (settings.json)
+
+플러그인 hooks.json의 PreToolUse command 훅은 Claude Code 버그(anthropics/claude-code#34573)로
+**조용히 드랍되어 발화하지 않는다.** 그래서 go-dobby 안전 훅(G1·G5·G6 — `hooks/HOOKS.md` 참조)은
+이 단계에서 **사용자 settings.json에 등록해야만 동작한다.**
+
+1. **스크립트 복사** (플러그인 업데이트 반영은 이 스킬 재실행으로 이뤄진다):
+   ```bash
+   mkdir -p ~/.config/go-dobby/hooks
+   cp "${CLAUDE_PLUGIN_ROOT}/hooks/pre-bash.sh" ~/.config/go-dobby/hooks/pre-bash.sh
+   ```
+2. **`~/.claude/settings.json`에 등록** — 비파괴 원칙을 settings.json에도 그대로 적용한다:
+   - 기존 내용(다른 훅·권한·설정)은 **한 글자도 건드리지 않고**, `hooks.PreToolUse` 배열에
+     go-dobby 항목만 병합한다(jq 병합 권장).
+   - go-dobby 항목의 식별 기준은 **args 경로에 `go-dobby/hooks/pre-bash.sh` 포함 여부**다.
+     이미 있으면 아래 최신 형식과 같은지 확인하고 다르면 go-dobby 항목만 교체한다. 없으면 추가한다.
+   - `${CLAUDE_PLUGIN_ROOT}`는 settings.json에서 치환되지 않으므로 **홈을 풀어 쓴 절대 경로**를 쓴다.
+   - ⚠️ `if`에는 **권한 규칙 하나만** 쓸 수 있다(`|` 알터네이션·선행 `*` 불가 — HOOKS.md "if 문법"
+     참조). 그래서 같은 스크립트를 부르는 항목을 규칙별로 나열한다:
+   ```json
+   {
+     "matcher": "Bash",
+     "hooks": [
+       { "type": "command", "if": "Bash(git *)",   "command": "bash", "args": ["/Users/{사용자}/.config/go-dobby/hooks/pre-bash.sh"], "timeout": 5, "statusMessage": "go-dobby 안전 검사" },
+       { "type": "command", "if": "Bash(gh pr *)", "command": "bash", "args": ["/Users/{사용자}/.config/go-dobby/hooks/pre-bash.sh"], "timeout": 5, "statusMessage": "go-dobby 안전 검사" },
+       { "type": "command", "if": "Bash(rm *)",    "command": "bash", "args": ["/Users/{사용자}/.config/go-dobby/hooks/pre-bash.sh"], "timeout": 5, "statusMessage": "go-dobby 안전 검사" },
+       { "type": "command", "if": "Bash(rmdir *)", "command": "bash", "args": ["/Users/{사용자}/.config/go-dobby/hooks/pre-bash.sh"], "timeout": 5, "statusMessage": "go-dobby 안전 검사" }
+     ]
+   }
+   ```
+   - 저장 전 `jq . ~/.claude/settings.json`으로 **파싱 확인**(스키마 오류 하나면 그 파일의 훅
+     전체가 조용히 꺼진다), 변경 요약을 보여주고 확인받는다.
+3. **적용 시점 안내**: settings.json 훅 변경은 **새 세션부터** 적용된다고 알린다.
+4. **원복(버그가 고쳐진 뒤)**: #34573이 수정되면 플러그인 hooks.json의 훅이 그대로 살아난다.
+   그때 사용자가 요청하면 settings.json의 go-dobby 항목과 `~/.config/go-dobby/hooks/` 복사본을
+   제거한다(중복 발화 방지). 그 전에는 임의로 지우지 않는다.
+
+### 5. 안내
+- 저장된 최종 설정을 요약해 보여주고(메타 경로가 어디로 정해졌는지 명확히, 안전 훅 등록 여부 포함), 이제 `/dobby-order {키}` 등 작업 스킬을 실행하면 된다고 안내한다.
 
 ## 주의
 
