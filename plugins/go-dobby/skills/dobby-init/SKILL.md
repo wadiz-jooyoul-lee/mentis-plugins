@@ -87,7 +87,7 @@ mkdir -p ~/.config/go-dobby
      ]
    }
    ```
-   - **스폰 훅(G7)** — 유령 에이전트 원천 차단. `matcher`는 도구 이름이라 `if` 없이 등록한다:
+   - **스폰 훅(G10)** — 유령 에이전트 원천 차단. `matcher`는 도구 이름이라 `if` 없이 등록한다:
    ```json
    "PreToolUse":  [{ "matcher": "Agent|Task", "hooks": [{ "type": "command", "command": "bash",
                      "args": ["/Users/{사용자}/.config/go-dobby/hooks/pre-agent.sh"],
