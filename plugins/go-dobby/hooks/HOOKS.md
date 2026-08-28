@@ -140,6 +140,7 @@ v2.1.246에서 실측 확인: 설치본 스크립트를 수동 실행하면 deny
 | G1 | 정식 배포 베이스(master)로 push·merge·PR 금지 | PreToolUse·Bash | deny | settings.json(dobby-init 등록 — #34573 우회) | dobby-order C1 |
 | G5 | subtree 밖 워크트리 제거·rm 금지 | PreToolUse·Bash | deny | settings.json(상동) | dobby-end 안전 경계 |
 | G6 | 메타 폴더($ORCHESTRATION_META) 삭제 금지 | PreToolUse·Bash | deny | settings.json(상동) | 비파괴 원칙 |
+| G10 | 스폰 시 상태표 자동 등록 + 로그 자동 기록 (유령 에이전트 차단) | PreToolUse·PostToolUse·Agent\|Task | 자동등록/자동기록(형식 없으면 deny) | settings.json(dobby-init 등록) | dobby-order C4 |
 | — | 안전 훅 미등록·구버전 감지 안내 | SessionStart | 안내 출력 | 플러그인 hooks.json(라이프사이클 훅은 정상 발화) | dobby-init |
 
 ## 로드맵 (다음 단계 후보 — 분석 완료, 미구현)
@@ -152,3 +153,24 @@ v2.1.246에서 실측 확인: 설치본 스크립트를 수동 실행하면 deny
   아티팩트 외부 호스트·jira-enrich 내부 용어 누출·`## 세션` 섹션.
 - **3단계 (스킬 frontmatter 훅)**: 백그라운드 잡 쓰기 범위(avatar-quips는 `.mentis-quips/`만,
   explain/retro/share/jira-tab은 자기 산출 파일만) + dobby-init의 config.env 쓰기 허용 예외.
+
+## 스폰 훅(G10) — 검증 기록 (2026-08-28)
+
+실제 `Agent` 스폰에 탐침 훅을 걸어 확인한 사실이다(추측 아님).
+
+- **PreToolUse·PostToolUse 둘 다 발화한다**(`matcher: Agent|Task`, 도구 이름은 `Agent`).
+- PreToolUse 입력: `tool_input.description`·`prompt`·`subagent_type` + `session_id`·`cwd`·`transcript_path`.
+- **PostToolUse `tool_response.outputFile`에 서브 전사 경로가 들어온다** → 손으로 `dobby_log`를 칠 필요가 없다.
+  단 그 값은 `/tmp/claude-*/…/tasks/*.output` **심볼릭 링크**이므로 실체(`~/.claude/projects/…`)로 바꿔 기록한다.
+
+### 개입 범위(중요)
+오더 세션에서만 동작한다 — `session_id`로 `$ORCHESTRATION_META/*/status.md`를 역추적해 **정확히 1개** 오더가
+걸릴 때만 개입하고, 그 외(일반 Agent 사용·여러 오더 매칭)는 조용히 통과한다. 오더 진행 중이라도
+`description`이 `[skip-dobby]`로 시작하면 건너뛴다.
+
+### 형식
+```
+description = "{슬러그}: {한 줄 설명}"        예) impl-fe: 관심사 태그 제거
+              "{슬러그}#{라운드}: {설명}"      예) review-fe#6: 6라운드 리뷰
+```
+`impl-fe-r6`처럼 라운드를 슬러그에 붙이면 거절한다(유령 에이전트의 원점 — 사례 FE1-1301).

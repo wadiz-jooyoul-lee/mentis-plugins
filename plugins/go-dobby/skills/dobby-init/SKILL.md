@@ -62,8 +62,12 @@ mkdir -p ~/.config/go-dobby
 1. **스크립트 복사** (플러그인 업데이트 반영은 이 스킬 재실행으로 이뤄진다):
    ```bash
    mkdir -p ~/.config/go-dobby/hooks
-   cp "${CLAUDE_PLUGIN_ROOT}/hooks/pre-bash.sh" ~/.config/go-dobby/hooks/pre-bash.sh
+   cp "${CLAUDE_PLUGIN_ROOT}/hooks/pre-bash.sh"   ~/.config/go-dobby/hooks/pre-bash.sh
+   cp "${CLAUDE_PLUGIN_ROOT}/hooks/pre-agent.sh"  ~/.config/go-dobby/hooks/pre-agent.sh
+   cp "${CLAUDE_PLUGIN_ROOT}/hooks/post-agent.sh" ~/.config/go-dobby/hooks/post-agent.sh
+   cp "${CLAUDE_PLUGIN_ROOT}/reference/dobby-lib.sh" ~/.config/go-dobby/hooks/dobby-lib.sh
    ```
+   (스폰 훅은 `dobby_agent_add`·`dobby_log`를 불러 쓰므로 `dobby-lib.sh` 사본이 함께 필요하다.)
 2. **`~/.claude/settings.json`에 등록** — 비파괴 원칙을 settings.json에도 그대로 적용한다:
    - 기존 내용(다른 훅·권한·설정)은 **한 글자도 건드리지 않고**, `hooks.PreToolUse` 배열에
      go-dobby 항목만 병합한다(jq 병합 권장).
@@ -82,6 +86,15 @@ mkdir -p ~/.config/go-dobby
        { "type": "command", "if": "Bash(rmdir *)", "command": "bash", "args": ["/Users/{사용자}/.config/go-dobby/hooks/pre-bash.sh"], "timeout": 5, "statusMessage": "go-dobby 안전 검사" }
      ]
    }
+   ```
+   - **스폰 훅(G7)** — 유령 에이전트 원천 차단. `matcher`는 도구 이름이라 `if` 없이 등록한다:
+   ```json
+   "PreToolUse":  [{ "matcher": "Agent|Task", "hooks": [{ "type": "command", "command": "bash",
+                     "args": ["/Users/{사용자}/.config/go-dobby/hooks/pre-agent.sh"],
+                     "timeout": 5, "statusMessage": "go-dobby 스폰 등록" }] }],
+   "PostToolUse": [{ "matcher": "Agent|Task", "hooks": [{ "type": "command", "command": "bash",
+                     "args": ["/Users/{사용자}/.config/go-dobby/hooks/post-agent.sh"],
+                     "timeout": 5, "statusMessage": "go-dobby 스폰 기록" }] }]
    ```
    - 저장 전 `jq . ~/.claude/settings.json`으로 **파싱 확인**(스키마 오류 하나면 그 파일의 훅
      전체가 조용히 꺼진다), 변경 요약을 보여주고 확인받는다.

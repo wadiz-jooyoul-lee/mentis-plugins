@@ -8,7 +8,9 @@
             "type": "command",
             "if": "Bash(git *)",
             "command": "bash",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/pre-bash.sh"],
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/pre-bash.sh"
+            ],
             "timeout": 5,
             "statusMessage": "go-dobby 안전 검사"
           },
@@ -16,7 +18,9 @@
             "type": "command",
             "if": "Bash(gh pr *)",
             "command": "bash",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/pre-bash.sh"],
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/pre-bash.sh"
+            ],
             "timeout": 5,
             "statusMessage": "go-dobby 안전 검사"
           },
@@ -24,7 +28,9 @@
             "type": "command",
             "if": "Bash(rm *)",
             "command": "bash",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/pre-bash.sh"],
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/pre-bash.sh"
+            ],
             "timeout": 5,
             "statusMessage": "go-dobby 안전 검사"
           },
@@ -32,9 +38,25 @@
             "type": "command",
             "if": "Bash(rmdir *)",
             "command": "bash",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/pre-bash.sh"],
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/pre-bash.sh"
+            ],
             "timeout": 5,
             "statusMessage": "go-dobby 안전 검사"
+          }
+        ]
+      },
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/pre-agent.sh"
+            ],
+            "timeout": 5,
+            "statusMessage": "go-dobby 스폰 등록"
           }
         ]
       }
@@ -45,9 +67,27 @@
           {
             "type": "command",
             "command": "bash",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh"],
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh"
+            ],
             "timeout": 5,
             "statusMessage": "go-dobby 안전 훅 등록 점검"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/post-agent.sh"
+            ],
+            "timeout": 5,
+            "statusMessage": "go-dobby 스폰 기록"
           }
         ]
       }
