@@ -260,10 +260,39 @@ dobby_log() {
   local f; f="$(_order_dir "$key")/agent-logs.json"
   command -v jq >/dev/null 2>&1 || { dobby_check_deps; _die "jq 없음 — agent-logs 기록 생략"; return 1; }
   [ -f "$f" ] || echo '{}' > "$f"
-  if [ -n "$rd" ]; then
-    jq --arg s "$slug" --arg r "$rd" --arg p "$p" '.[$s] = ((.[$s] // {}) + {($r): $p})' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+
+  # ⛔ 라운드 접미 슬러그 금지(유령 에이전트의 원점 — 사례 FE1-1301 impl-fe-r6).
+  #    상태표엔 impl-fe 라운드 6으로 적고 로그만 impl-fe-r6로 새면 보드에 없는 행이 생긴다.
+  if [ "${DOBBY_FORCE:-0}" != "1" ] && printf '%s' "$slug" | grep -qE -- '-(r|round[-_]?)[0-9]+$'; then
+    local b r
+    b="$(printf '%s' "$slug" | sed -E 's/-(r|round[-_]?)([0-9]+)$//')"
+    r="$(printf '%s' "$slug" | sed -E 's/.*-(r|round[-_]?)([0-9]+)$/\2/')"
+    _die "라운드 접미 슬러그 금지 '$slug' — 같은 슬러그의 하위 키로: dobby_log $key $b '$p' round-$r"
+    return 1
+  fi
+
+  local t old
+  t="$(jq -r --arg s "$slug" 'if has($s) then (.[$s]|type) else "null" end' "$f" 2>/dev/null)" || t="null"
+
+  if [ "$t" = "string" ]; then
+    old="$(jq -r --arg s "$slug" '.[$s]' "$f" 2>/dev/null)"
+    [ "$old" = "$p" ] && return 0                      # 같은 경로 재기록은 멱등 no-op
+    # ⛔ 문자열 값에 라운드를 더하려 하면 jq가 실패해 조용히 아무것도 안 남는다.
+    #    기존 기록을 잃지 않도록 {impl: 기존, round-N: 새것} 객체로 승격한다.
+    #    라운드를 안 줬으면 round-2로 이어 붙인다(덮어써서 유실시키지 않는다).
+    jq --arg s "$slug" --arg o "$old" --arg r "${rd:-round-2}" --arg p "$p" \
+       '.[$s] = {"impl": $o, ($r): $p}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  elif [ "$t" = "object" ]; then
+    if [ -z "$rd" ]; then                              # 라운드 미지정 → 다음 번호로 이어 붙임
+      rd="round-$(jq -r --arg s "$slug" '[.[$s]|keys[]|capture("^round-(?<n>[0-9]+)$").n|tonumber] | (max // 1) + 1' "$f" 2>/dev/null)"
+    fi
+    jq --arg s "$slug" --arg r "$rd" --arg p "$p" '.[$s] += {($r): $p}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
   else
-    jq --arg s "$slug" --arg p "$p" '.[$s] = $p' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+    if [ -n "$rd" ]; then
+      jq --arg s "$slug" --arg r "$rd" --arg p "$p" '.[$s] = {($r): $p}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+    else
+      jq --arg s "$slug" --arg p "$p" '.[$s] = $p' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+    fi
   fi
 }
 
