@@ -19,10 +19,11 @@ description: 오더(이슈/작업)의 "구현 내용"(explainer.md)을 claude.ai
 `/dobby-share {키}` — {키}는 이슈 키 또는 `TASK-{slug}`. 대상 폴더 `$ORCHESTRATION_META/{키}/`.
 
 ## 사전 조건
-- `$ORCHESTRATION_META/{키}/explainer.md` 가 있어야 한다. 없으면 **"먼저 `/dobby-explain {키}`로 구현 내용을 생성하라"**고 알리고 중단한다(지어내지 않는다).
+- **근거 우선순위**: ① `$ORCHESTRATION_META/{키}/outcome.md`(구현 결과 — 있으면 1차 근거, `design.md`를 배경으로 참고) → ② 없으면 `explainer.md`(기존 방식 — 과거 오더 호환) → ③ 둘 다 없으면 **"먼저 `/dobby-design {키} outcome` 또는 `/dobby-explain {키}`로 생성하라"**고 알리고 중단한다(지어내지 않는다).
 
 ## 절차
-1. **근거 읽기**: `explainer.md`(구현 내용, 필수) + `status.md`의 제목(아티팩트 제목용). explainer.md **내용만** 근거로 쓴다(추가 조사·지어내기 금지).
+1. **근거 읽기**: 위 우선순위의 문서(outcome.md 우선, 없으면 explainer.md) + `status.md`의 제목(아티팩트 제목용). 그 문서 **내용만** 근거로 쓴다(추가 조사·지어내기 금지).
+2. **⛔ 용어 게이트(게시 거부)**: 게시 전에 **`dobby_terms_lint {근거 파일}`** 를 실행한다. 내부 용어·줄임말(FE/BE·round-N·P숫자·슬러그·blocking=·K=)이 검출되면 **Artifact publish를 하지 않고 중단**, 해당 줄을 보여주며 근거 문서를 먼저 고치라고 안내한다(아티팩트는 공개 후 되돌릴 수 없다). 코드 안 실제 식별자 인용 등 정당한 예외만 사용자가 시킨 경우 `DOBBY_FORCE=1`.
 2. **self-contained HTML 작성**: `${CLAUDE_PLUGIN_ROOT}` 밖의 임시 파일(예: 작업 폴더나 `$ORCHESTRATION_META/{키}/artifact.html`)에 explainer 내용을 **읽기 좋은 HTML**로 만든다. **⛔ Artifact CSP 준수 — 외부 호스트(CDN·폰트·이미지·스크립트) 금지, 모든 CSS는 인라인**:
    - 마크다운을 직접 HTML로 옮긴다(제목·목록·표·코드블록·인용). 스타일은 `<style>`로 인라인.
    - **mermaid 다이어그램**: claude.ai 아티팩트는 CDN을 못 쓰므로 mermaid를 라이브 렌더할 수 없다. 각 다이어그램을 **의미가 보존되는 대체 표현**으로 바꾼다 — 간단한 흐름은 **인라인 SVG**나 **번호 매긴 단계 목록/화살표 텍스트**로, 표 형태면 HTML 표로. (다이어그램 원문 mermaid 코드는 접기(`<details>`)에 보조로 넣어도 됨.)

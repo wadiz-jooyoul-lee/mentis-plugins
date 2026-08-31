@@ -49,6 +49,25 @@ in_dobby_scope() {
   return 1
 }
 
+# ── G12. 설계 문서(design.md) 셸 덮어쓰기 금지 ──────────────────────────
+# design.md는 사용자가 대시보드·편집기로 직접 고치는 유일한 메타 파일이다. 다른 메타처럼
+# cat >·sed -i 로 덮어쓰면 사용자 수정본이 조용히 사라진다(config.env 사고와 같은 유형).
+# 이미 있는 파일의 덮어쓰기만 막는다: 최초 생성(파일 없음)·append(>>)는 통과.
+# 정당한 재생성은 dobby_design_backup(백업) 후 Write 도구로 쓰거나 DOBBY_FORCE=1.
+case "$CMD" in
+  *design.md*)
+    if [ "${DOBBY_FORCE:-0}" != "1" ] && ! printf '%s' "$CMD" | grep -q "DOBBY_FORCE=1"; then
+      TGT="$(printf '%s' "$CMD" | grep -oE "[^ '\"]*design\.md" | head -1)"
+      case "$TGT" in /*) : ;; *) TGT="${CWD:+$CWD/}$TGT" ;; esac
+      if [ -f "$TGT" ]; then
+        if printf '%s' "$CMD" | grep -qE '(^|[|;&][[:space:]]*)(cat|tee|printf|echo)[^|;&]*[^>]>[[:space:]]*[^>][^|;&]*design\.md|sed[[:space:]]+-i[^|;&]*design\.md|perl[[:space:]]+-i[^|;&]*design\.md'; then
+          deny G12 "design.md는 사용자가 직접 수정하는 문서라 셸로 덮어쓸 수 없다. 재생성이 필요하면 dobby_design_backup {키} 로 백업한 뒤 Write 도구로 쓰거나, 사용자가 시킨 경우에만 DOBBY_FORCE=1 로 우회하라."
+        fi
+      fi
+    fi
+    ;;
+esac
+
 # ── G6. 메타 폴더 삭제 금지 (가장 구체적인 규칙부터) ────────────────────
 # dobby-end조차 메타는 지우지 않는다(워크트리만 제거). rm 계열이 메타 경로를 노리면 차단.
 case "$CMD" in

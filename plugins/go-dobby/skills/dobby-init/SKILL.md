@@ -83,10 +83,16 @@ mkdir -p ~/.config/go-dobby
        { "type": "command", "if": "Bash(git *)",   "command": "bash", "args": ["/Users/{사용자}/.config/go-dobby/hooks/pre-bash.sh"], "timeout": 5, "statusMessage": "go-dobby 안전 검사" },
        { "type": "command", "if": "Bash(gh pr *)", "command": "bash", "args": ["/Users/{사용자}/.config/go-dobby/hooks/pre-bash.sh"], "timeout": 5, "statusMessage": "go-dobby 안전 검사" },
        { "type": "command", "if": "Bash(rm *)",    "command": "bash", "args": ["/Users/{사용자}/.config/go-dobby/hooks/pre-bash.sh"], "timeout": 5, "statusMessage": "go-dobby 안전 검사" },
-       { "type": "command", "if": "Bash(rmdir *)", "command": "bash", "args": ["/Users/{사용자}/.config/go-dobby/hooks/pre-bash.sh"], "timeout": 5, "statusMessage": "go-dobby 안전 검사" }
+       { "type": "command", "if": "Bash(rmdir *)", "command": "bash", "args": ["/Users/{사용자}/.config/go-dobby/hooks/pre-bash.sh"], "timeout": 5, "statusMessage": "go-dobby 안전 검사" },
+       { "type": "command", "if": "Bash(cat *)",   "command": "bash", "args": ["/Users/{사용자}/.config/go-dobby/hooks/pre-bash.sh"], "timeout": 5, "statusMessage": "go-dobby 안전 검사" },
+       { "type": "command", "if": "Bash(tee *)",   "command": "bash", "args": ["/Users/{사용자}/.config/go-dobby/hooks/pre-bash.sh"], "timeout": 5, "statusMessage": "go-dobby 안전 검사" },
+       { "type": "command", "if": "Bash(sed *)",   "command": "bash", "args": ["/Users/{사용자}/.config/go-dobby/hooks/pre-bash.sh"], "timeout": 5, "statusMessage": "go-dobby 안전 검사" },
+       { "type": "command", "if": "Bash(perl *)",  "command": "bash", "args": ["/Users/{사용자}/.config/go-dobby/hooks/pre-bash.sh"], "timeout": 5, "statusMessage": "go-dobby 안전 검사" },
+       { "type": "command", "if": "Bash(python3 *)", "command": "bash", "args": ["/Users/{사용자}/.config/go-dobby/hooks/pre-bash.sh"], "timeout": 5, "statusMessage": "go-dobby 안전 검사" }
      ]
    }
    ```
+   (`cat`~`python3` 5개는 **G12**(design.md 셸 덮어쓰기 차단)용이다 — 셸 리다이렉트는 어떤 명령에서든 나올 수 있지만, matcher를 전체 Bash로 열면 모든 세션의 모든 명령에 훅 지연이 붙으므로 흔한 덮어쓰기 수단만 한정 등록한다. 남는 우회는 헬퍼 거부·대시보드 API가 겹으로 막는다.)
    - **스폰 훅(G10)** — 유령 에이전트 원천 차단. `matcher`는 도구 이름이라 `if` 없이 등록한다:
    ```json
    "PreToolUse":  [{ "matcher": "Agent|Task", "hooks": [{ "type": "command", "command": "bash",
