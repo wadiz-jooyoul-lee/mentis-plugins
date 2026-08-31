@@ -33,8 +33,8 @@ CFG="$HOME/.config/go-dobby/config.env"
 META="${ORCHESTRATION_META_PATH:-$ORCHESTRATION_WORKSPACE/meta}"
 [ -d "$META" ] || exit 0
 
-deny() {
-  jq -n --arg r "go-dobby 훅 [G10] $1" \
+deny() { # $1=규칙ID $2=사유
+  jq -n --arg r "go-dobby 훅 [$1] $2" \
     '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
   exit 0
 }
@@ -53,7 +53,7 @@ RND="$(printf '%s' "$DESC" | sed -nE 's/^[A-Za-z][A-Za-z0-9_.-]*#([0-9]+)[[:spac
 REST="$(printf '%s' "$DESC" | sed -E 's/^[A-Za-z][A-Za-z0-9_.-]*(#[0-9]+)?[[:space:]]*:[[:space:]]*//')"
 
 if [ -z "$SLUG" ]; then
-  deny "오더 $KEY 진행 중인 세션의 스폰입니다. description을 '{슬러그}: {한 줄 설명}' 형식으로 쓰세요
+  deny "G10" "오더 $KEY 진행 중인 세션의 스폰입니다. description을 '{슬러그}: {한 줄 설명}' 형식으로 쓰세요
   (재라운드면 '{슬러그}#{라운드}: …', 예: 'review-fe#6: 관심사 태그 제거 리뷰').
   상태표 등록·로그 기록이 이 형식에서 자동으로 이뤄집니다. 오더와 무관한 스폰이면 '[skip-dobby] …'."
 fi
@@ -63,9 +63,38 @@ case "$SLUG" in
   *-r[0-9]|*-r[0-9][0-9]|*-round[0-9]|*-round[0-9][0-9])
     base="$(printf '%s' "$SLUG" | sed -E 's/-(r|round)[0-9]+$//')"
     rn="$(printf '%s' "$SLUG" | sed -E 's/.*-(r|round)([0-9]+)$/\2/')"
-    deny "라운드 접미 슬러그 '$SLUG'는 유령 에이전트를 만듭니다. '${base}#${rn}: {설명}' 형식으로 쓰세요."
+    deny "G10" "라운드 접미 슬러그 '$SLUG'는 유령 에이전트를 만듭니다. '${base}#${rn}: {설명}' 형식으로 쓰세요."
     ;;
 esac
+
+# 역할·상태를 슬러그로 추정(사람이 나중에 다듬을 수 있게 최소값만)
+case "$SLUG" in
+  review*|*-review*) NAME="리뷰어"; STATE="리뷰" ;;
+  analy*|audit*|explore*) NAME="분석"; STATE="분석" ;;
+  produce*|doc*) NAME="산출자"; STATE="구현" ;;
+  *) NAME="개발자"; STATE="구현" ;;
+esac
+# ── G11: 설계 게이트 — 구현 단계(P4 이후)의 개발자 스폰은 design.md가 있어야 한다 ────
+# P1 분석 스폰은 단계가 아직 착수/분석이라 걸리지 않는다(분석→구현이 같은 슬러그여도 안전).
+# 산출자·리뷰어·비개발(산출물/작업정리) 오더는 대상이 아니다. 과거 오더의 P8 재개도 잡히며,
+# 그때는 deny 안내대로 현 상태 캡처(design.md)를 먼저 만들면 된다.
+if [ "$NAME" = "개발자" ] && [ ! -f "$META/$KEY/design.md" ]; then
+  SF="$META/$KEY/status.md"
+  PH="$(sed -nE 's/^- \*\*단계\*\*: *(.*)$/\1/p' "$SF" 2>/dev/null | head -1)"
+  KIND="$(sed -nE 's/^- \*\*종류\*\*: *(.*)$/\1/p' "$SF" 2>/dev/null | head -1)"
+  case "$PH" in
+    구현*|리뷰*|테스트*|통합*)
+      case "$KIND" in
+        *산출*|*정리*) : ;;   # 비개발 오더는 설계 문서 대상이 아님
+        *)
+          deny "G11" "설계 문서 없이 구현 스폰 불가 — 오더 $KEY 에 design.md가 없습니다.
+  먼저 설계를 만들고(/dobby-design $KEY — P3.5, 이미 진행 중인 작업의 편입·재개면 현 상태 캡처로 생성) 다시 스폰하세요.
+  구현 에이전트는 착수 직후 dobby_design_ack $KEY {슬러그} 로 읽은 설계 버전을 서명합니다."
+          ;;
+      esac
+      ;;
+  esac
+fi
 
 # ── 3) 상태표에 없으면 자동 등록 ──────────────────────────────────────
 OF="$META/$KEY/orchestration.md"
@@ -77,13 +106,8 @@ if awk -v s="$SLUG" -F'|' '
   exit 0   # 이미 등록됨
 fi
 
-# 역할·상태를 슬러그로 추정(사람이 나중에 다듬을 수 있게 최소값만)
-case "$SLUG" in
-  review*|*-review*) NAME="리뷰어"; STATE="리뷰" ;;
-  analy*|audit*|explore*) NAME="분석"; STATE="분석" ;;
-  produce*|doc*) NAME="산출자"; STATE="구현" ;;
-  *) NAME="개발자"; STATE="구현" ;;
-esac
+
+
 
 LIB=""
 for c in "$HOME/.config/go-dobby/hooks/dobby-lib.sh" \

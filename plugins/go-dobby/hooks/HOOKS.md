@@ -141,6 +141,8 @@ v2.1.246에서 실측 확인: 설치본 스크립트를 수동 실행하면 deny
 | G5 | subtree 밖 워크트리 제거·rm 금지 | PreToolUse·Bash | deny | settings.json(상동) | dobby-end 안전 경계 |
 | G6 | 메타 폴더($ORCHESTRATION_META) 삭제 금지 | PreToolUse·Bash | deny | settings.json(상동) | 비파괴 원칙 |
 | G10 | 스폰 시 상태표 자동 등록 + 로그 자동 기록 (유령 에이전트 차단) | PreToolUse·PostToolUse·Agent\|Task | 자동등록/자동기록(형식 없으면 deny) | settings.json(dobby-init 등록) | dobby-order C4 |
+| G11 | 설계 문서(design.md) 없이 구현 스폰 금지 — 단계가 구현 이후 + 종류 개발 + 역할 개발자일 때만 | PreToolUse·Agent\|Task | deny | settings.json(상동 — pre-agent.sh에 포함) | dobby-order P3.5 |
+| G12 | design.md 셸 덮어쓰기 금지(파일이 이미 있을 때 cat>·tee·sed -i·perl -i — 사용자 수정본 보호. append(>>)·최초 생성은 통과, DOBBY_FORCE=1 우회) | PreToolUse·Bash | deny | settings.json(if: cat/tee/sed/perl/python3 — dobby-init 등록) | dobby-design 비파괴 |
 | — | 안전 훅 미등록·구버전 감지 안내 | SessionStart | 안내 출력 | 플러그인 hooks.json(라이프사이클 훅은 정상 발화) | dobby-init |
 
 ## 로드맵 (다음 단계 후보 — 분석 완료, 미구현)
@@ -174,3 +176,16 @@ description = "{슬러그}: {한 줄 설명}"        예) impl-fe: 관심사 태
               "{슬러그}#{라운드}: {설명}"      예) review-fe#6: 6라운드 리뷰
 ```
 `impl-fe-r6`처럼 라운드를 슬러그에 붙이면 거절한다(유령 에이전트의 원점 — 사례 FE1-1301).
+
+## 설계 훅(G11·G12) — 검증 기록 (2026-09-01)
+
+스크립트에 실제 stdin JSON을 주입해 확인한 사실이다(추측 아님).
+
+- **G11**(pre-agent.sh): ①구현단계·개발·설계없음·개발자 재스폰 → deny ②설계있음 → 통과 ③분석단계(P1) → 통과
+  ④리뷰어 → 통과 ⑤산출물 오더 → 통과 ⑥통합단계(P8 재개)·설계없음 → deny. **6/6 설계대로.**
+  - ⚠️ 배치 주의: G11 검사는 **"이미 등록됨" exit보다 앞**에 있어야 한다 — P4 재스폰은 슬러그가 P1에서
+    이미 등록돼 있어, 등록 검사 뒤에 두면 영원히 발화하지 않는다(초기 구현에서 실제로 겪은 순서 버그).
+- **G12**(pre-bash.sh): ①존재하는 design.md에 cat> → deny ②append(>>) → 통과 ③파일 없음(최초 생성) → 통과
+  ④sed -i → deny ⑤DOBBY_FORCE=1 → 통과 ⑥상대경로 덮어쓰기 → deny ⑦무관한 파일 → 통과. **7/7 설계대로.**
+  - G12는 settings.json에 `Bash(cat *)`·`Bash(tee *)`·`Bash(sed *)`·`Bash(perl *)`·`Bash(python3 *)`
+    if 규칙이 있어야 발화한다(기존 git/gh pr/rm/rmdir 4개에는 안 걸림). dobby-init 재실행으로 등록.

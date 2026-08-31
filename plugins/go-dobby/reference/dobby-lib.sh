@@ -660,7 +660,7 @@ dobby_slug() {
   printf '%s' "$slug"
 }
 
-# dobby_scaffold_doc KEY analysis|implementation|produce [슬러그] — 요약 문서에 고정 섹션 틀을
+# dobby_scaffold_doc KEY analysis|implementation|produce|design|outcome [슬러그] — 요약 문서에 고정 섹션 틀을
 # 깐다(없을 때만·비파괴). 세 문서의 목차를 통일해 구조가 스킬·실행마다 달라지는 것을 막는다.
 # AI는 각 헤더 아래 내용만 채운다. 슬러그를 주면 fan-out 파일명({type}-{slug}.md).
 dobby_scaffold_doc() {
@@ -718,7 +718,52 @@ EOF
 ## 미해결
 EOF
       ;;
-    *) _die "dobby_scaffold_doc: 알 수 없는 종류 '$type' (analysis|implementation|produce)"; return 2 ;;
+    design) cat > "$f" <<EOF
+# $key 설계${slug:+ · $slug}
+> 구현 전 설계 — 이 문서를 수정하면 구현이 수정본을 따른다 (대시보드 "설계/결과" 탭에서 편집 가능)
+
+## 무엇을 만드나
+(한 문단)
+
+## 닫히는 조건
+(status.md의 닫히는 조건 그대로)
+
+## 설계
+(구성요소별 — 하는 일 / 어디에 \`경로/파일\` / 어떻게)
+
+## 결정과 근거
+| 결정한 것 | 고른 답 | 왜 | 검토한 대안 |
+|---|---|---|---|
+
+## 확인이 필요했던 것
+(대화형이면 사용자에게 물은 것과 답 / 자율이면 스스로 정한 결정과 그 이유 — 이유 없는 결정 금지)
+
+## 예상 파급
+(side-effects.md 요약)
+EOF
+      ;;
+    outcome) cat > "$f" <<EOF
+# $key 구현 결과
+> 설계한 내용이 실제로 어떻게 구현됐는지 — 아티팩트 문서의 1차 근거 (쉬운 용어, 줄임말·내부 용어 금지)
+
+## 한 줄 요약
+(무엇이 만들어졌는지 한 문장)
+
+## 설계 대비 결과
+| 설계 항목 | 구현 결과 | 설계와 달라진 점 |
+|---|---|---|
+
+## 구현 내용
+(구성요소별 — 무엇을 하는가 / 어디에 \`경로/파일\` / 어떻게 동작하는가)
+
+## 동작 흐름
+(단계별로)
+
+## 용어
+(용어: 쉬운 뜻)
+EOF
+      ;;
+    *) _die "dobby_scaffold_doc: 알 수 없는 종류 '$type' (analysis|implementation|produce|design|outcome)"; return 2 ;;
   esac
 }
 
@@ -728,6 +773,48 @@ EOF
 dobby_card() {
   local key="$1" file="$2" header="$3" body="$4"
   dobby_append "$key" "$file" "$(printf '\n## %s\n\n%s\n' "$header" "$body")"
+}
+
+# ── 설계 문서(design.md) 리비전·확인 서명 ────────────────────────────
+# "구현이 설계를 다시 읽었는가"는 관측 불가 → "읽어야만 알 수 있는 값(내용 해시)을 적었는가"로 바꾼다.
+# 사용자가 설계를 고치면 rev가 바뀌고, 옛 rev로 서명한 구현은 dobby_lint(#17)가 치명으로 잡는다.
+
+# dobby_design_rev KEY — design.md 내용 sha256 앞 8자리. 파일 없으면 빈 문자열.
+dobby_design_rev() {
+  local f; f="$(_order_dir "$1")/design.md"
+  [ -f "$f" ] || return 0
+  shasum -a 256 "$f" 2>/dev/null | cut -c1-8
+}
+
+# dobby_design_ack KEY SLUG — 지금 rev를 "이 슬러그가 확인한 설계 버전"으로 기록(design-ack.json).
+# 구현 에이전트가 착수 직후·P8 재개 직후 호출한다. rev를 stdout으로 돌려준다.
+dobby_design_ack() {
+  local key="$1" slug="$2" rev f
+  rev="$(dobby_design_rev "$key")"
+  [ -n "$rev" ] || { _die "design.md 없음 — 먼저 설계 문서를 만드세요(/dobby-design $key)"; return 1; }
+  f="$(_order_dir "$key")/design-ack.json"
+  [ -f "$f" ] || printf '{}' > "$f"
+  jq --arg s "$slug" --arg r "$rev" '.[$s] = $r' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  printf '%s' "$rev"
+}
+
+# dobby_design_backup KEY — regen 전 백업(design.md → design.md.bak). 사용자 수정본 유실 방지.
+dobby_design_backup() {
+  local f; f="$(_order_dir "$1")/design.md"
+  [ -f "$f" ] && cp "$f" "$f.bak"
+  return 0
+}
+
+# dobby_terms_lint FILE — 아티팩트로 나갈 문서(outcome.md 등)의 내부 용어·줄임말 검출.
+# 검출 줄을 "줄번호:내용"으로 출력하고 1을 반환(없으면 0). 이슈 키(FE-1234·FE1-1234)는 제외.
+# dobby-share가 게시 전에 부르고, dobby_lint #13이 치명으로 집계한다.
+dobby_terms_lint() {
+  local f="$1" hits
+  [ -f "$f" ] || return 0
+  hits="$(grep -nE '(\bFE\b|\bBE\b)([^0-9-]|$)|round-[0-9]|\bP[0-9]([^0-9A-Za-z]|$)|blocking *= *[0-9]|\bK *= *[0-9]|\b(impl|review)-[a-z]+' "$f" 2>/dev/null)"
+  [ -z "$hits" ] && return 0
+  printf '%s\n' "$hits"
+  return 1
 }
 
 # ── 아바타 소감(avatar-quips) 결정론 조각 ────────────────────────────
@@ -970,9 +1057,51 @@ EOF
   local ph f2
   while IFS= read -r f2; do
     [ -n "$f2" ] || continue
-    ph="$(grep -cE '^\((원인 위치|실제 실행되는 코드 경로 증명|어디를 어떻게)' "$f2" 2>/dev/null)" || ph=0
+    ph="$(grep -cE '^\((원인 위치|실제 실행되는 코드 경로 증명|어디를 어떻게|한 문단|무엇이 만들어졌는지|구성요소별|status.md의 닫히는 조건)' "$f2" 2>/dev/null)" || ph=0
     [ "${ph:-0}" -gt 0 ] 2>/dev/null && _w "$(basename "$f2") 틀 자리표시 ${ph}곳이 안 채워짐 — 헤더 아래 내용을 채우세요"
-  done < <(find "$dir" -maxdepth 1 -type f \( -name 'analysis*.md' -o -name 'implementation*.md' -o -name 'produce*.md' \) 2>/dev/null)
+  done < <(find "$dir" -maxdepth 1 -type f \( -name 'analysis*.md' -o -name 'implementation*.md' -o -name 'produce*.md' -o -name 'design.md' -o -name 'outcome.md' \) 2>/dev/null)
+
+  # 13) outcome.md 내부 용어·줄임말 — 치명(아티팩트 원고의 1차 근거라 밖으로 새면 못 되돌림)
+  if [ -f "$dir/outcome.md" ]; then
+    local terms
+    terms="$(dobby_terms_lint "$dir/outcome.md")" || \
+      _e "outcome.md 내부 용어·줄임말 $(printf '%s' "$terms" | grep -c .)곳 — FE/BE→프론트엔드/백엔드, round-N·P숫자·슬러그·blocking=·K= 금지: $(printf '%s' "$terms" | head -3 | tr '\n' ' ')"
+  fi
+
+  # 14) design.md 결정 표에 '왜'가 빈 행 — 치명(자율 모드가 컨펌을 건너뛰는 대가는 이유 기록)
+  if [ -f "$dir/design.md" ]; then
+    local badrow
+    badrow="$(awk -F'|' '
+      /^## /{ins=($0~/결정과 근거/); n=0; next}
+      ins && /^\|/ { n++; if(n<=2) next;                # 헤더·구분선 제외
+        w=$4; gsub(/^[ \t]+|[ \t]+$/,"",w);
+        if(w=="") bad++ }
+      END{print bad+0}' "$dir/design.md")"
+    [ "${badrow:-0}" -gt 0 ] 2>/dev/null && _e "design.md 결정과 근거 표에 '왜'가 빈 행 ${badrow}건 — 이유 없는 결정 금지(스스로 정했으면 근거를 적는다)"
+  fi
+
+  # 15) outcome.md 재작업 경위 서술 — 경고(결과만 적는 문서. 경위는 lessons·retro 몫)
+  if [ -f "$dir/outcome.md" ]; then
+    local hist
+    hist="$(grep -cE '라운드 ?[0-9]|리뷰(에서|를) |리뷰 지적|리뷰 반영|처음에는|처음엔 |되돌렸|재작업' "$dir/outcome.md" 2>/dev/null)" || hist=0
+    [ "${hist:-0}" -gt 0 ] 2>/dev/null && _w "outcome.md에 재작업 경위 서술 ${hist}곳 — 이 문서는 결과만, 과정은 회고(retro.md)에"
+  fi
+
+  # 16) 단계=해결(개발 오더)인데 outcome.md 없음 — 경고(P7에서 인라인 생성 누락)
+  if [ -f "$sf" ] && [ ! -f "$dir/outcome.md" ]; then
+    local ph16 kind16
+    ph16="$(sed -nE 's/^- \*\*단계\*\*: *(.*)$/\1/p' "$sf" | head -1)"
+    kind16="$(sed -nE 's/^- \*\*종류\*\*: *(.*)$/\1/p' "$sf" | head -1)"
+    case "$ph16" in 해결*|종료*) case "$kind16" in *개발*) _w "단계가 해결인데 outcome.md 없음 — P7 통합 후 구현 결과를 남기세요(/dobby-design $key outcome)";; esac;; esac
+  fi
+
+  # 17) 설계 확인 서명(design-ack)이 현재 설계와 불일치 — 치명(설계가 바뀐 뒤 구현이 옛 버전 기준)
+  if [ -f "$dir/design.md" ] && [ -f "$dir/design-ack.json" ]; then
+    local cur17 stale17
+    cur17="$(dobby_design_rev "$key")"
+    stale17="$(jq -r --arg c "$cur17" 'to_entries[] | select(.value != $c) | .key' "$dir/design-ack.json" 2>/dev/null | tr '\n' ' ')"
+    [ -n "${stale17% }" ] && _e "설계가 바뀌었는데 옛 버전으로 서명된 에이전트: ${stale17}— design.md를 다시 읽고 dobby_design_ack 재실행"
+  fi
 
   printf '(치명 %d, 경고 %d)\n' "$e" "$w"
   [ -n "$strict" ] && return "$e"
