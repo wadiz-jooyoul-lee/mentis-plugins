@@ -142,6 +142,7 @@ v2.1.246에서 실측 확인: 설치본 스크립트를 수동 실행하면 deny
 | G6 | 메타 폴더($ORCHESTRATION_META) 삭제 금지 | PreToolUse·Bash | deny | settings.json(상동) | 비파괴 원칙 |
 | G10 | 스폰 시 상태표 자동 등록 + 로그 자동 기록 (유령 에이전트 차단) | PreToolUse·PostToolUse·Agent\|Task | 자동등록/자동기록(형식 없으면 deny) | settings.json(dobby-init 등록) | dobby-order C4 |
 | G11 | 설계 문서(design.md) 없이 구현 스폰 금지 — 단계가 구현 이후 + 종류 개발 + 역할 개발자일 때만 | PreToolUse·Agent\|Task | deny | settings.json(상동 — pre-agent.sh에 포함) | dobby-order P3.5 |
+| G13 | 설계 문서 없이 에이전트 '구현' 전이 금지(개발 오더·개발자 역할) | dobby_agent_state 헬퍼 | 거부(비0 반환) | 코드 강제(훅 아님) | dobby-order P3.5 |
 | G12 | design.md 셸 덮어쓰기 금지(파일이 이미 있을 때 cat>·tee·sed -i·perl -i — 사용자 수정본 보호. append(>>)·최초 생성은 통과, DOBBY_FORCE=1 우회) | PreToolUse·Bash | deny | settings.json(if: cat/tee/sed/perl/python3 — dobby-init 등록) | dobby-design 비파괴 |
 | — | 안전 훅 미등록·구버전 감지 안내 | SessionStart | 안내 출력 | 플러그인 hooks.json(라이프사이클 훅은 정상 발화) | dobby-init |
 
@@ -189,3 +190,26 @@ description = "{슬러그}: {한 줄 설명}"        예) impl-fe: 관심사 태
   ④sed -i → deny ⑤DOBBY_FORCE=1 → 통과 ⑥상대경로 덮어쓰기 → deny ⑦무관한 파일 → 통과. **7/7 설계대로.**
   - G12는 settings.json에 `Bash(cat *)`·`Bash(tee *)`·`Bash(sed *)`·`Bash(perl *)`·`Bash(python3 *)`
     if 규칙이 있어야 발화한다(기존 git/gh pr/rm/rmdir 4개에는 안 걸림). dobby-init 재실행으로 등록.
+
+## G13 — 스폰 훅(G11)의 사각지대를 메운 헬퍼 게이트 (2026-09-01)
+
+G11은 `PreToolUse`·`Agent|Task`, 즉 **새 스폰**만 잡는다. 그런데 go-dobby의 **기본 경로**는
+분석 에이전트가 그대로 구현으로 이어가는 것이라(dobby-order C9 — `SendMessage`로 계약 전달)
+Agent 도구 호출이 없고, 훅이 발화할 기회 자체가 없다.
+
+**사례 FE1-1732**: `agent-logs.json`에 `image-pipeline`이 1회만 기록(스폰 1회). 13:35 스폰
+시점 단계는 `분석`이라 G11이 정상 통과했고, 13:58 `image-pipeline → 구현`은 SendMessage라
+훅 밖이었다. 결과적으로 design.md·outcome.md 없이 구현·리뷰 2라운드·통합까지 완주했다.
+
+그래서 **상태를 '구현'으로 바꾸는 길목**(`dobby_agent_state`)에 게이트를 뒀다. 스폰이든
+이어가기든 이 함수는 반드시 지난다. 파일을 고치기 **전에** 검사해, 거부되면 상태표도 그대로다.
+
+- 제외: 비개발 오더(종류 산출물·작업정리), 역할 리뷰어·산출자
+  (`산출`은 `dobby_norm_state`가 `구현`으로 접으므로 역할 확인이 필요하다)
+- 우회: `DOBBY_FORCE=1`
+
+### 검증 기록 (임시 META 픽스처 + FE1-1732 실제 파일 재현)
+개발·개발자·설계없음 → 차단 / 설계있음 → 통과 / 리뷰어 → 통과 / 산출물 오더 → 통과 /
+`개발자·FE` 표기 → 차단 / `DOBBY_FORCE=1` → 통과 / `분석`·`완료` 전이 → 영향 없음. **7/7**
+FE1-1732 실제 status·orchestration으로 사고 시점 재현: 종료코드 1, 상태표 `분석` 유지(미변경).
+design.md 생성 후 재실행: 종료코드 0, `구현`으로 정상 갱신.

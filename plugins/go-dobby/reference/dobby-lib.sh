@@ -201,11 +201,50 @@ dobby_agent_add() {
   ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
 }
 
+# _board_role OFILE SLUG — 상태표에서 그 슬러그의 '이름(롤)' 칸을 출력(없으면 빈 문자열).
+_board_role() {
+  awk -F'|' -v want="$2" '
+    function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);gsub(/\*/,"",x);return x}
+    /^## /{ins=($0~/에이전트 상태표/)?1:0;hdr=0;next}
+    ins==1 && /^\|/{
+      if(hdr==0){for(i=1;i<=NF;i++){c=t($i);if(c=="슬러그"||c=="에이전트")cs=i;else if(c=="이름")cn=i}
+                 if(cs)hdr=1;next}
+      if(cs && cn && t($cs)==want){print t($cn);exit}
+    }' "$1" 2>/dev/null
+}
+
 # dobby_agent_state KEY SLUG STATE [ROUND] — 그 행 상태/갱신만 수정. 비활성→활성 진입 시 착수 갱신.
 dobby_agent_state() {
   local key="$1" slug="$2" st rd="${4:-}"
   st="$(dobby_norm_state "$3")"
   local f now; f="$(_order_dir "$key")/orchestration.md"; now="$(_now)"
+
+  # ── G13: 설계 게이트 — 개발자가 '구현'으로 전이할 때 design.md가 없으면 거부 ──
+  # 스폰 훅(G11)은 Agent 도구 호출만 잡는다. 그런데 go-dobby의 기본 경로는 **분석 에이전트가
+  # 그대로 구현으로 이어가는 것**(dobby-order C9, SendMessage)이라 새 스폰이 없고, 훅이 발화할
+  # 기회 자체가 없다(사례 FE1-1732: 설계 없이 구현·리뷰·통합까지 완주). 상태를 '구현'으로 바꾸는
+  # 이 함수는 어느 경로든 반드시 지나므로 여기서 막는다.
+  # 제외: 비개발 오더(산출물·작업정리), 리뷰어·산출자 역할. 우회는 DOBBY_FORCE=1.
+  if [ "$st" = "구현" ] && [ "${DOBBY_FORCE:-0}" != "1" ] && [ ! -f "$(_order_dir "$key")/design.md" ]; then
+    local _kind _role
+    _kind="$(sed -nE 's/^- \*\*종류\*\*: *(.*)$/\1/p' "$(_order_dir "$key")/status.md" 2>/dev/null | head -1)"
+    _role="$(_board_role "$f" "$slug")"
+    case "$_kind" in
+      *산출*|*정리*) : ;;                       # 비개발 오더는 설계 문서 대상이 아님
+      *)
+        case "$_role" in
+          *리뷰*|*산출*) : ;;                   # 리뷰어·산출자는 대상 아님
+          *)
+            _die "설계 문서 없이 '구현' 전이 불가 — $key 에 design.md가 없습니다.
+  P3.5에서 설계를 확정한 뒤 구현으로 넘어갑니다(/dobby-design $key — 이미 진행 중이면 현 상태 캡처로 생성).
+  구현 에이전트는 착수 직후 dobby_design_ack $key $slug 로 읽은 설계 버전을 서명합니다.
+  (정말 예외라면 DOBBY_FORCE=1 로 우회)"
+            return 1
+            ;;
+        esac
+        ;;
+    esac
+  fi
   # 헤더 인식형: `## 에이전트 상태표` 헤더에서 상태/라운드/착수/갱신 컬럼 위치를 찾아 그 칸만 수정한다.
   # (오더마다 상태표 스키마가 달라 컬럼 위치를 하드코딩하면 엉뚱한 칸을 덮어써 표가 깨진다.)
   awk -F'|' -v OFS='|' -v slug="$slug" -v st="$st" -v rd="$rd" -v now="$now" '
