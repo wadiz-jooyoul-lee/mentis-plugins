@@ -544,7 +544,50 @@ dobby_setup_worktree() {
   fi
   git -C "$wt" push -u origin "$branch" >&2 2>/dev/null || true
   dobby_record_branch "$key" "$repo" "$branch" "$wt"
+  _docs_refs_worktree "$gate_key" "$repo" "$wt"
   printf '%s' "$wt"
+}
+
+# _docs_refs_worktree GATE_KEY REPO WORKTREE — 워크트리의 **코딩 규약 문서 경로**를 docs-refs.md에 적는다.
+#
+# 왜 필요한가: docs 게이트(dobby_docs_gate)는 `$ORCHESTRATION_DOCS_ROOT`(도서관)를 키워드로 뒤지는데,
+# **레이어·의존 규칙은 거기 없고 코드 저장소에 있다**(wadiz-frontend는 `packages/README.md`와
+# 계층형 `CLAUDE.md` 18개). 그래서 기능 키워드로 검색해도 구조 규약은 영원히 안 걸린다
+# (사례 FE1-1732: 이미지 로딩 정본을 상위 계층에 두어 의존 방향이 뒤집혔고, PR 리뷰에서 지적돼
+#  호출부 21곳의 import를 다시 고쳤다. `packages/README.md` 한 번 읽었으면 없었을 재작업이다).
+#
+# 키워드를 늘리는 방식은 쓰지 않는다 — `구조|의존` 계열은 도서관 127개 문서 중 95개를 히트해
+# 변별력이 없고, `dobby_docs_search`의 `head -20` 캡 때문에 정작 필요한 기능 문서를 밀어낸다.
+#
+# ⚠️ 이 함수는 **목록만 만든다.** 읽는 것은 구현 에이전트 몫이다(FE1-1732의 실패는 목록 부재가
+#    아니라 미독이었다). 그래서 안내 문구를 함께 적는다.
+_docs_refs_worktree() {
+  local gate_key="$1" repo="$2" wt="$3"
+  local f; f="$(_order_dir "$gate_key")/docs-refs.md"
+  [ -f "$f" ] || return 0
+  [ -d "$wt" ] || return 0
+  # 워크트리마다(FE·BE 등) 다시 불리므로 같은 repo 절은 한 번만 적는다.
+  grep -qF "## 워크트리 규약 — $repo" "$f" 2>/dev/null && return 0
+  local hits
+  # 무엇을 모으나 (실측으로 정한 조합 — wadiz-frontend 기준 22개·572바이트·0.12초):
+  #  ① `CLAUDE.md`는 **깊이 제한 없이** 전부 — 깊이로 자르면 정작 수정 대상 폴더의 규약을 놓친다
+  #     (`packages/features/src/support-share/CLAUDE.md`는 깊이 5이고 FE1-1809가 고친 폴더다.
+  #      깊이 3·4는 둘 다 18개 중 15개만 잡았다).
+  #  ② `README.md`는 **상위 2단계까지만** — 레이어 규칙이 있는 `packages/README.md`는 담되,
+  #     깊이를 풀면 모듈별 README가 63개까지 불어나 목록이 소음이 된다.
+  hits="$( { find "$wt" -type f -name 'CLAUDE.md' \
+               -not -path '*/node_modules/*' -not -path '*/.git/*' 2>/dev/null
+             find "$wt" -mindepth 1 -maxdepth 2 -type f -name 'README.md' \
+               -not -path '*/node_modules/*' 2>/dev/null; } \
+          | sed "s|^$wt/||" | sort -u)"
+  [ -n "$hits" ] || return 0
+  {
+    printf '\n## 워크트리 규약 — %s\n' "$repo"
+    printf -- '- 새 파일·폴더의 **위치를 정하기 전에** 아래 중 대상 경로에 해당하는 것을 직접 읽는다.\n'
+    printf -- '  상위 계층에 정본을 두면 하위 계층이 그것을 참조해 **의존 방향이 뒤집힌다**.\n'
+    printf -- '- 읽고 고른 위치와 근거를 `implementation.md` 핵심 설계 결정에 한 줄로 남긴다.\n\n'
+    printf '%s\n' "$hits" | sed 's/^/- `/; s/$/`/'
+  } >> "$f"
 }
 
 # dobby_commit_push WORKTREE BRANCH MSG — 리뷰 통과 후 커밋(--no-verify)·푸시.
@@ -1142,9 +1185,60 @@ EOF
     [ -n "${stale17% }" ] && _e "설계가 바뀌었는데 옛 버전으로 서명된 에이전트: ${stale17}— design.md를 다시 읽고 dobby_design_ack 재실행"
   fi
 
+  # 18) 계약 없는 구현 롤 행 — 경고
+  # 검사 5는 반대 방향(파일은 있는데 표에 없는 고아 파일)만 본다. 이쪽은 "표에 있는데 계약이 없는" 쪽.
+  # ⛔ 계약제를 채택한 오더(agents/에 계약이 1개 이상)에서만 발화한다. P4-L(경량)·P4-C(편입)·
+  #    P4-W(작업정리)의 인라인 에이전트는 **스펙상 계약 파일이 없다**(dobby_bootstrap_inline은
+  #    dobby_agent_add만 한다). 무조건 검사하면 그 오더들에 해소 방법이 없는 영구 경고가 달려
+  #    "경고는 무시해도 된다"를 학습시킨다. (실측: 무조건 29/71건 → 조건부 5/71건)
+  if [ -f "$of" ] && find "$dir/agents" -maxdepth 1 -type f -name '*.md' 2>/dev/null | grep -q .; then
+    local miss18="" s18
+    while IFS= read -r s18; do
+      [ -n "$s18" ] || continue
+      [ -f "$dir/agents/$s18.md" ] || miss18="$miss18 $s18"
+    done < <(_board_impl_slugs "$of")
+    [ -n "$miss18" ] && _w "계약 없는 구현 롤:${miss18} — agents/{슬러그}.md 가 없습니다(같은 오더의 다른 슬러그는 계약이 있어 누락으로 보입니다)"
+  fi
+
+  # 19) 라운드 상한 초과인데 에스컬레이션 기록 없음 — 경고
+  # dobby-order P6이 "최대 라운드 기본 3, 초과 시 사용자 에스컬레이션"을 규정하는데 강제 수단이
+  # 없어 지켜지지 않는다(실측: 라운드 4~10까지 간 오더 10건 전부 에스컬레이션 기록 0건.
+  # 사례 FE1-1803 라운드 6·3일 — 사용자는 끝난 뒤 회고로 알았다).
+  # 라운드가 길어지는 것 자체가 문제가 아니라 **사용자가 모르는 채 길어지는 것**이 문제다.
+  if [ -f "$of" ]; then
+    local maxr19
+    maxr19="$(_board_impl_slugs "$of" round | awk '$1+0>m{m=$1+0} END{print m+0}')"
+    if [ "${maxr19:-0}" -ge 4 ] 2>/dev/null; then
+      grep -qE '에스컬레|라운드 상한|상한 초과|사용자에게 확인|사용자 확인' "$of" \
+        || _w "구현 라운드 ${maxr19}회인데 에스컬레이션 기록 없음 — P6은 최대 라운드 3 초과 시 사용자 확인을 요구합니다. 계속 돌리기 전에 남은 지적의 성격(코드 결함인지 문서 동기화인지)을 사용자에게 알리세요"
+    fi
+  fi
+
   printf '(치명 %d, 경고 %d)\n' "$e" "$w"
   [ -n "$strict" ] && return "$e"
   return 0
+}
+
+# _board_impl_slugs BOARD_FILE [round] — 상태표에서 **구현 롤**(이름에 개발자·산출자) 행만 골라
+# 슬러그(기본) 또는 라운드 값(round)을 한 줄씩 낸다. 컬럼 위치는 헤더에서 찾는다(스키마 하드코딩 금지).
+_board_impl_slugs() {
+  local f="$1" what="${2:-slug}"
+  awk -F'|' -v what="$what" '
+    function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);gsub(/\*/,"",x);return x}
+    /^## /{ins=(index($0,"에이전트 상태표")>0)?1:0; hdr=0; next}
+    ins==1 && /^\|/{
+      if(hdr==0){
+        for(i=1;i<=NF;i++){c=t($i)
+          if(c=="슬러그")cs=i; else if(c=="이름")cn=i; else if(c=="라운드")cr=i}
+        if(cs&&cn) hdr=1
+        next
+      }
+      s=t($cs); n=t($cn); r=(cr?t($cr):"")
+      if(s !~ /^[a-z0-9][a-z0-9-]+$/) next          # 구분선·헤더·날짜 칸을 걸러냄
+      if(n !~ /개발자|산출자/) next                  # 리뷰어·Explore·감사는 대상 아님
+      if(what=="round"){ if(r ~ /^[0-9]+$/) print r; else print 0 }
+      else print s
+    }' "$f"
 }
 
 # ── 진입 부트스트랩 · 분류 · 세션 (스킬 중복 기술을 함수 하나로) ──────────
