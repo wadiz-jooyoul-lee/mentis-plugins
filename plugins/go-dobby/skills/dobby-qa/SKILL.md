@@ -19,7 +19,7 @@ dobby-order (개발·통합)  →  ★dobby-qa (QA 감시·수정 루프)★  �
 
 ## 원칙 (필수 — 시작 전 숙지)
 
-- 분석·수정 에이전트를 스폰할 때 프롬프트 상단에 **`${CLAUDE_PLUGIN_ROOT}/reference/analysis-discipline.md` 원칙 0·1·2·3**(이중경로면 1·4)을 넣고, 그 뒤에 **`${CLAUDE_PLUGIN_ROOT}/reference/role-personas.md`의 역할 블록**(수정=「구현 에이전트」, 리뷰=「리뷰 에이전트」)을 삽입한다.
+- 분석·수정 에이전트를 스폰할 때 프롬프트 상단에 **`${CLAUDE_PLUGIN_ROOT}/reference/analysis-discipline.md` 원칙 0·1·2·3·4**(이중경로면 1)을 넣고, 그 뒤에 **`${CLAUDE_PLUGIN_ROOT}/reference/role-personas.md`의 역할 블록**(수정=「구현 에이전트」, 리뷰=「리뷰 에이전트」)을 삽입한다.
 - **사실 기반·추측 금지**: 버그가 이 오케스트레이션 소관인지, 어느 에이전트 담당인지는 **계약 화이트리스트·코드로 확인한 사실**로만 판단한다. 애매하면 자동 편입하지 말고 슬랙으로 문의한다(기준 ③).
 
 ## 사전 조건
