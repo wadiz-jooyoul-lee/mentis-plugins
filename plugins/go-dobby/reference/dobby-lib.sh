@@ -1478,4 +1478,156 @@ dobby_gate() {
   return 1
 }
 
+# ── 폐기(dobby-discard) — 필요 없는 오더를 절차대로 없앤다 ────────────
+# 착수만 하고 접은 오더, 잘못 만든 키, 다른 오더로 흡수된 오더가 보드에 남아 소음이 된다.
+# 그렇다고 rm 으로 지우면 G6이 막는다 — 막는 게 맞다. 메타는 종료된 작업의 유일한 기록이라
+# "지워도 되는지"를 사람이 눈으로 판단할 수 없기 때문이다. 그래서 폐기는 두 단계로 나눈다.
+#
+#   1) 검사(dobby_discard_check): 산출물이 하나라도 있으면 거부한다. 추정하지 않고 전부
+#      파일·git에서 읽는다 — 단계·워크트리·미푸시 커밋·code-changes diff·게시 아티팩트·
+#      리뷰·에이전트 요약.
+#   2) 이동(dobby_discard): 압축 백업을 만든 뒤 휴지통($ORCHESTRATION_META/.discarded/)으로
+#      옮긴다. 지우는 것이 아니라 옮기는 것이라 되돌릴 수 있고(dobby_discard_undo),
+#      대시보드 보드에서는 사라진다(대시보드가 점으로 시작하는 폴더를 건너뛴다 —
+#      orchestration.ts listOrderKeys 의 !d.name.startsWith(".")).
+#
+# 영구 삭제(dobby_discard_purge)는 휴지통 안만 대상이고, 사용자 확인 없이는 돌지 않는다.
+
+_discard_dir() { printf '%s/.discarded' "$(_meta)"; }
+
+# dobby_discard_check KEY — 폐기해도 되는지 검사. 위반을 한 줄씩 stdout에 내고 1을 반환.
+#   위반이 0건이면 아무것도 내지 않고 0. ⛔ 이 함수가 0을 주기 전에는 옮기지 않는다.
+dobby_discard_check() {
+  local key="$1" dir phase wt n sub bad=0
+  [ -n "$key" ] || { _die 'dobby_discard_check KEY — 키가 필요하다'; return 1; }
+  dir="$(_order_dir "$key")"
+  [ -d "$dir" ] || { printf -- '- 오더 폴더가 없다: %s\n' "$dir"; return 1; }
+
+  # 1) 해결·종료까지 간 오더는 남겨야 하는 기록이다(폐기 대상이 아니다).
+  if [ -f "$dir/status.md" ]; then
+    phase="$(_trim "$(grep -m1 '^- \*\*단계\*\*:' "$dir/status.md" 2>/dev/null | sed 's/^[^:]*: *//')")"
+    case "$phase" in
+      해결|종료) printf -- '- 단계가 "%s"다 — 정상 완료한 오더는 폐기하지 않는다(기록 보존).\n' "$phase"; bad=1 ;;
+    esac
+  fi
+
+  # 2) 워크트리가 살아 있으면 미커밋·미푸시 코드를 잃을 수 있다.
+  #    한 오더가 저장소·슬러그별로 워크트리를 여러 개 가질 수 있으므로 한 줄씩 본다
+  #    (한 변수에 몰아 담으면 dobby_wt_unpushed 가 여러 경로를 한 인자로 받아 '?'를 낸다).
+  while IFS= read -r wt; do
+    [ -n "$wt" ] || continue
+    n="$(dobby_wt_unpushed "$wt")"
+    if [ "$n" = "0" ]; then
+      printf -- '- 워크트리가 아직 있다: %s — 먼저 /dobby-end 로 정리하라(미푸시 커밋은 없다).\n' "$wt"
+    else
+      printf -- '- 워크트리가 아직 있다: %s — origin에 없는 커밋이 %s개다. 잃으면 되돌릴 수 없다.\n' "$wt" "$n"
+    fi
+    bad=1
+  done < <(dobby_subtree_list 2>/dev/null | awk -F'\t' -v k="$key" '$2==k{print $1}')
+
+  # 3) 코드 변경 기록(dobby-end가 남긴 diff)이 있으면 실제로 일한 오더다.
+  if [ -d "$dir/code-changes" ]; then
+    n="$(find "$dir/code-changes" -name '*.diff' -size +0 2>/dev/null | wc -l | tr -d ' ')"
+    [ "${n:-0}" -gt 0 ] && { printf -- '- 코드 변경 기록이 %s건 있다(code-changes/*.diff) — 워크트리를 지운 뒤에는 이것이 유일한 코드 원본이다.\n' "$n"; bad=1; }
+  fi
+
+  # 4) 아티팩트가 게시돼 있으면 공개 링크가 근거 문서를 잃는다(되돌릴 수 없다).
+  if [ -f "$dir/artifact-share.md" ]; then
+    n="$(grep -c 'https\?://' "$dir/artifact-share.md" 2>/dev/null)" || n=0
+    [ "${n:-0}" -gt 0 ] && { printf -- '- 게시된 아티팩트가 %s건이다(artifact-share.md) — 링크가 살아 있는 동안 근거를 없애지 않는다.\n' "$n"; bad=1; }
+  fi
+
+  # 5) 리뷰·에이전트 요약이 있으면 라운드를 돈 오더다.
+  for sub in reviews agents; do
+    [ -d "$dir/$sub" ] || continue
+    n="$(find "$dir/$sub" -name '*.md' 2>/dev/null | wc -l | tr -d ' ')"
+    [ "${n:-0}" -gt 0 ] && { printf -- '- %s/ 에 기록이 %s건 있다 — 실제로 진행한 오더다.\n' "$sub" "$n"; bad=1; }
+  done
+
+  [ "$bad" -eq 0 ] || return 1
+  return 0
+}
+
+# dobby_discard KEY "사유" — 검사 통과 시 압축 백업을 만든 뒤 휴지통으로 옮긴다. 새 경로 stdout.
+#   ⛔ dobby_discard_check 를 통과하지 않으면 아무것도 하지 않는다(조건을 무르는 판단은 사용자 몫).
+#   백업은 여기서 "동기로" 돈다 — dobby_resolve 와 다른 점이다. 저 쪽은 대시보드 버튼이
+#   동기 대기하므로 분리 실행해야 하지만, 여기는 다음 줄에서 폴더를 옮기기 때문에
+#   백그라운드로 띄우면 압축이 사라진 폴더를 읽어 아카이브가 깨진다.
+dobby_discard() {
+  local key="$1" why="${2:-}" dir trash dest bk bkdest
+  [ -n "$key" ] || { _die 'dobby_discard KEY "사유" — 키가 필요하다'; return 1; }
+  dir="$(_order_dir "$key")"
+  [ -d "$dir" ] || { _die "오더 폴더가 없다: $dir"; return 1; }
+  if ! dobby_discard_check "$key" >/dev/null 2>&1; then
+    _die "폐기 조건 미충족 — 'dobby_discard_check $key' 로 사유를 확인하라"
+    return 1
+  fi
+
+  bk="$DOBBY_LIB_DIR/dobby-meta-backup.sh"
+  if [ "${DOBBY_META_BACKUP:-1}" = "1" ] && [ -f "$bk" ]; then
+    bkdest="${ORCHESTRATION_BACKUP_DIR:-$HOME/claude-projects-backup/orchestration}"
+    mkdir -p "$bkdest" 2>/dev/null
+    bash "$bk" "$key" >>"$bkdest/backup-run.log" 2>&1 \
+      || printf 'dobby-lib: 압축 백업 실패 — 휴지통 이동만 진행한다(되돌리기는 dobby_discard_undo %s)\n' "$key" >&2
+  fi
+
+  # 왜 없앴는지를 폴더 안에 남긴다 — 나중에 휴지통을 열었을 때 유일한 단서다.
+  cat >> "$dir/discard-reason.md" <<EOF
+# $key 폐기 기록
+- **일시**: $(_now)
+- **사유**: ${why:-미기재}
+- **원래 경로**: $dir
+- **되돌리기**: dobby_discard_undo $key
+EOF
+
+  trash="$(_discard_dir)"; mkdir -p "$trash" || return 1
+  dest="$trash/$key--$(_ts)"
+  mv "$dir" "$dest" || { _die "이동 실패: $dir → $dest"; return 1; }
+  printf '%s\n' "$dest"
+}
+
+# dobby_discard_list — 휴지통 목록 "경로<TAB>키<TAB>폐기시각" stdout(오래된 것부터).
+dobby_discard_list() {
+  local trash d name; trash="$(_discard_dir)"
+  [ -d "$trash" ] || return 0
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    name="$(basename "$d")"
+    printf '%s\t%s\t%s\n' "$d" "${name%--*}" "${name##*--}"
+  done < <(find "$trash" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | LC_ALL=C sort)
+}
+
+# dobby_discard_undo KEY — 휴지통에서 원래 자리로 되돌린다(같은 키가 여럿이면 가장 최근 것).
+dobby_discard_undo() {
+  local key="$1" src dir
+  [ -n "$key" ] || { _die 'dobby_discard_undo KEY — 키가 필요하다'; return 1; }
+  src="$(dobby_discard_list | awk -F'\t' -v k="$key" '$2==k{print $1}' | tail -1)"
+  [ -n "$src" ] || { _die "휴지통에 $key 가 없다 — dobby_discard_list 로 확인하라"; return 1; }
+  dir="$(_order_dir "$key")"
+  [ -e "$dir" ] && { _die "원래 자리에 이미 폴더가 있다: $dir"; return 1; }
+  mv "$src" "$dir" || { _die "복원 실패: $src → $dir"; return 1; }
+  # 폐기 기록은 지우지 않고 되돌린 사실을 덧붙인다(비파괴 — 이력이 남는다).
+  printf -- '- **되돌림**: %s\n' "$(_now)" >> "$dir/discard-reason.md"
+  printf '%s\n' "$dir"
+}
+
+# dobby_discard_purge KEY — 휴지통 안의 그 오더를 영구 삭제.
+#   ⛔ 사용자가 명시적으로 지시할 때만. 확인 없이 돌지 않도록 DOBBY_DISCARD_PURGE_OK=1 을 요구한다.
+#   대상이 휴지통 밖이면 무조건 거부한다(경로 사고 방지).
+dobby_discard_purge() {
+  local key="$1" src trash
+  [ -n "$key" ] || { _die 'dobby_discard_purge KEY — 키가 필요하다'; return 1; }
+  [ "${DOBBY_DISCARD_PURGE_OK:-0}" = "1" ] || {
+    _die "영구 삭제는 사용자 확인이 필요하다 — 확인을 받았으면 DOBBY_DISCARD_PURGE_OK=1 을 붙여 다시 실행하라"; return 1; }
+  trash="$(_discard_dir)"
+  src="$(dobby_discard_list | awk -F'\t' -v k="$key" '$2==k{print $1}' | tail -1)"
+  [ -n "$src" ] || { _die "휴지통에 $key 가 없다"; return 1; }
+  case "$src" in
+    "$trash"/*) : ;;
+    *) _die "휴지통 밖 경로는 삭제하지 않는다: $src"; return 1 ;;
+  esac
+  rm -rf "$src" || { _die "삭제 실패: $src"; return 1; }
+  printf '삭제: %s\n' "$src"
+}
+
 echo "dobby-lib loaded" >&2
