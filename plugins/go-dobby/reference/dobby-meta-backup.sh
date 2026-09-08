@@ -15,9 +15,10 @@
 # 원본: 읽기만 한다. 원본에 쓰거나 지우는 동작은 없다.
 #
 # 사용법:
-#   dobby-meta-backup.sh {키}        # 한 폴더
-#   dobby-meta-backup.sh --all       # 메타 전체 훑기(이미 최신인 폴더는 건너뜀)
-#   DOBBY_META_BACKUP=0 …            # 아무것도 하지 않고 종료(테스트·복구용)
+#   dobby-meta-backup.sh {키}                # 한 폴더 (해결 시점 스냅샷)
+#   dobby-meta-backup.sh --all               # 메타 전체 훑기(이미 최신인 폴더는 건너뜀)
+#   dobby-meta-backup.sh --inprogress [am|pm]  # 작업중인 폴더들을 한 덩이로(임시 보관)
+#   DOBBY_META_BACKUP=0 …                    # 아무것도 하지 않고 종료(테스트·복구용)
 set -eu
 
 [ "${DOBBY_META_BACKUP:-1}" = "1" ] || exit 0
@@ -37,6 +38,12 @@ mkdir -p "$DEST/tmp"
 
 LOG="$DEST/backup-log.txt"
 EXCLUDE="$DEST/exclude.txt"
+
+# 진행중(작업중) 백업 — 폴더별로 나누지 않고 한 덩이로 모아 임시 보관한다.
+# 해결 전에는 폴더별 아카이브가 갱신되지 않아(해결 시점에만 만든다) 그 사이 변경이 무방비다.
+INP_DIR="$DEST/inprogress"
+INP_LOG="$INP_DIR/inprogress-log.txt"
+INP_KEEP_DAYS="${ORCHESTRATION_BACKUP_KEEP_DAYS:-14}"
 
 # 잠금 정리는 트랩 한 개로 모은다. 함수마다 trap을 걸면 나중에 건 것이 앞의 것을 덮어써
 # (bash의 EXIT 트랩은 하나뿐) 비정상 종료 시 락이 남는다. 키는 아래 _valid_key 를 통과한
@@ -237,10 +244,119 @@ backup_all() {
   [ "$fail_n" -eq 0 ]
 }
 
+# ── 진행중(작업중) 폴더 한 덩이 백업 ────────────────────────────────
+# 대상: status.md 가 있고 단계가 해결·종료가 아닌 폴더.
+#   · 해결·종료된 것은 폴더별 아카이브가 이미 확정돼 있어 뺀다.
+#   · status.md 가 없는 폴더(대부분 종료 서머리만 남은 기록물)도 뺀다 — 더 변하지 않는다.
+#   · 정본 8단계에 없는 값(완료·보류 등)은 해결·종료가 아니므로 담는다. 임시 백업이라
+#     애매한 것은 넉넉히 담는 편이 안전하다.
+_inprogress_keys() {
+  local d k p
+  while IFS= read -r d; do
+    k="$(basename "$d")"
+    _valid_key "$k" || continue
+    [ -f "$META/$k/status.md" ] || continue
+    p="$(grep -m1 -oE '^- \*\*단계\*\*: *.*' "$META/$k/status.md" 2>/dev/null \
+         | sed -E 's/^- \*\*단계\*\*: *//; s/[[:space:]]*$//')"
+    case "$p" in 해결|종료) continue ;; esac
+    printf '%s\n' "$k"
+  done < <(find "$META" -mindepth 1 -maxdepth 1 -type d ! -name '.*' | sort)
+}
+
+# 지금 시각의 회차 — 오전(10시 이후) / 오후(15시 이후). 10시 전이면 빈 문자열.
+# 15시 이후에 그날 처음 돌면 오후 회차 하나만 만든다(오전은 그날 건너뛴 것으로 둔다).
+_inprogress_slot() {
+  local h; h=$(date '+%H'); h=${h#0}
+  if [ "$h" -ge 15 ]; then printf 'pm'
+  elif [ "$h" -ge 10 ]; then printf 'am'
+  fi
+}
+
+# 반환: 0=백업함 1=건너뜀 2=실패
+backup_inprogress() {
+  local slot="${1:-}" day out lock keys n raw files size ratio
+  [ -n "$slot" ] || slot="$(_inprogress_slot)"
+  if [ -z "$slot" ]; then
+    printf '⏭  아직 회차 시각이 아닙니다(오전 10시 이후 · 오후 3시 이후)\n'
+    return 1
+  fi
+  case "$slot" in am|pm) ;; *) printf '회차는 am 또는 pm 입니다: %s\n' "$slot" >&2; return 2 ;; esac
+
+  mkdir -p "$INP_DIR"
+  day="$(date '+%Y%m%d')"
+  out="$INP_DIR/inprogress-$day-$slot.$EXT"
+  if [ -f "$out" ]; then
+    printf '⏭  이미 있습니다: %s\n' "$(basename "$out")"
+    return 1
+  fi
+
+  lock="$DEST/.lock-__inprogress__"
+  if [ -f "$lock" ] && [ $(( $(date +%s) - $(stat -f %m "$lock" 2>/dev/null || echo 0) )) -lt 600 ]; then
+    printf '⏭  이미 진행 중\n'
+    return 1
+  fi
+  _lock_add "$lock"
+
+  keys="$(_inprogress_keys)"
+  n=$(printf '%s' "$keys" | grep -c . || true)
+  if [ "$n" -eq 0 ]; then
+    _lock_drop "$lock"
+    printf '⏭  작업중인 폴더가 없습니다\n'
+    return 1
+  fi
+
+  local tmp="$INP_DIR/../tmp/inprogress-$day-$slot.$EXT.part"
+  # shellcheck disable=SC2086
+  raw=$(tar -cf - -C "$META" --exclude-from="$EXCLUDE" $keys 2>/dev/null | wc -c | tr -d ' ')
+  # shellcheck disable=SC2086
+  if ! tar -cf - -C "$META" --exclude-from="$EXCLUDE" $keys 2>/dev/null | _compress "$tmp"; then
+    rm -f "$tmp"; _lock_drop "$lock"
+    printf '%s | ❌ 실패(압축) | %s-%s\n' "$(_now)" "$day" "$slot" >> "$INP_LOG"
+    printf '❌ 압축 실패\n' >&2
+    return 2
+  fi
+  if ! _verify "$tmp" || ! _tar_list "$tmp" >/dev/null 2>&1; then
+    rm -f "$tmp"; _lock_drop "$lock"
+    printf '%s | ❌ 실패(검증) | %s-%s\n' "$(_now)" "$day" "$slot" >> "$INP_LOG"
+    printf '❌ 검증 실패\n' >&2
+    return 2
+  fi
+  files=$(_tar_list "$tmp" 2>/dev/null | grep -vc '/$' || true)
+  mv "$tmp" "$out"
+
+  size=$(stat -f %z "$out")
+  ratio=$(awk -v r="$raw" -v c="$size" 'BEGIN{ printf "%.1f", (c>0? r/c : 0) }')
+  printf '%s | %s-%s | %3s orders | %5s files | %6s → %6s (%sx) | %s\n' \
+    "$(_now)" "$day" "$slot" "$n" "$files" "$(_hsize "$raw")" "$(_hsize "$size")" "$ratio" \
+    "$(basename "$out")" >> "$INP_LOG"
+
+  # 보관 정리: 파일명 날짜가 보관 기간보다 이전이면 지운다(검증 통과 뒤에만).
+  local cutoff f fday
+  cutoff="$(date -v-"${INP_KEEP_DAYS}"d '+%Y%m%d' 2>/dev/null || echo '')"
+  if [ -n "$cutoff" ]; then
+    for f in "$INP_DIR"/inprogress-*.tar.*; do
+      [ -f "$f" ] || continue
+      fday="$(basename "$f" | sed -E 's/^inprogress-([0-9]{8})-.*/\1/')"
+      case "$fday" in [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;; *) continue ;; esac
+      if [ "$fday" -lt "$cutoff" ]; then
+        rm -f "$f"
+        printf '%s | ↳ 보관기간(%s일) 초과 삭제: %s\n' "$(_now)" "$INP_KEEP_DAYS" "$(basename "$f")" >> "$INP_LOG"
+      fi
+    done
+  fi
+
+  _lock_drop "$lock"
+  printf '✅ 진행중 %s-%s — 폴더 %s개, %s개 파일, %s → %s (%s배)\n' \
+    "$day" "$slot" "$n" "$files" "$(_hsize "$raw")" "$(_hsize "$size")" "$ratio"
+  return 0
+}
+
 case "${1:-}" in
   --all|-a) backup_all ;;
+  --inprogress|-i) backup_inprogress "${2:-}" ;;
   ''|-h|--help)
-    printf '사용법: %s {키}   또는   %s --all\n' "$(basename "$0")" "$(basename "$0")"
+    printf '사용법: %s {키}   |   %s --all   |   %s --inprogress [am|pm]\n' \
+      "$(basename "$0")" "$(basename "$0")" "$(basename "$0")"
     exit 2 ;;
   *) backup_one "$1" ;;
 esac
