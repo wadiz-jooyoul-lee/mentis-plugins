@@ -887,6 +887,86 @@ dobby_design_backup() {
   return 0
 }
 
+# ── 클로드 아티팩트 기록 (artifact-share.md) ─────────────────────────
+# 한 오더가 여러 아티팩트를 게시할 수 있다(구현 결과·회고 요약 등). 그래서 링크를 **표 한 줄씩**
+# 쌓고, 슬러그로 신규/갱신을 가른다. 슬러그는 게시 원고 파일명과 짝이다 — artifacts/{슬러그}.html
+#
+# 예전 형식(불릿 `- **링크**: …` 한 건)도 그대로 남는다 — 대시보드 파서가 둘 다 읽으므로
+# 끝난 오더의 파일을 건드리지 않는다(비파괴). 그 오더를 다시 게시하면 아래 함수가
+# `## 아티팩트` 표를 새로 만들어 자연히 표 형식으로 넘어간다.
+
+# dobby_artifact_share_path KEY — artifact-share.md 경로. 없으면 머리말만 만들어 둔다.
+dobby_artifact_share_path() {
+  local key="$1" f
+  f="$(_order_dir "$key")/artifact-share.md"
+  [ -f "$f" ] || printf '# %s 아티팩트 공유\n' "$key" > "$f"
+  printf '%s' "$f"
+}
+
+# dobby_artifact_add KEY SLUG TITLE URL — '## 아티팩트' 표에 행을 추가한다.
+# 같은 슬러그 행이 이미 있으면 **아무것도 하지 않고 1을 반환**한다(갱신은 dobby_artifact_touch).
+# ⛔ 슬러그가 다른 아티팩트를 기존 URL로 덮어쓰지 마라 — 이전 링크가 죽는다.
+dobby_artifact_add() {
+  local key="$1" slug="$2" title="$3" url="$4" f now
+  [ -n "$key" ] && [ -n "$slug" ] && [ -n "$url" ] || {
+    _die "dobby_artifact_add: KEY SLUG TITLE URL 필요"; return 2; }
+  printf '%s' "$slug" | grep -qE '^[a-z0-9][a-z0-9-]*$' || {
+    _die "dobby_artifact_add: 슬러그는 소문자·숫자·하이픈만 (받은 값: $slug)"; return 2; }
+  f="$(dobby_artifact_share_path "$key")"
+  if _artifact_row_exists "$f" "$slug"; then
+    printf 'dobby-lib: %s 아티팩트 "%s" 행이 이미 있습니다 — 갱신은 dobby_artifact_touch\n' \
+      "$key" "$slug" >&2
+    return 1
+  fi
+  now="$(_now)"
+  _table_row_append "$f" "아티팩트" \
+    "| 슬러그 | 제목 | 링크 | 생성 | 갱신 |" \
+    "|--------|------|------|------|------|" \
+    "| $slug | ${title:-$slug} | $url | $now |  |"
+}
+
+# dobby_artifact_touch KEY SLUG [NOTE] — 그 슬러그 행의 '갱신' 칸만 현재 시각으로 고친다.
+# NOTE를 주면 `2026-09-07 10:40 (설명)` 형태로 적는다(기존 파일 관례와 동일).
+dobby_artifact_touch() {
+  local key="$1" slug="$2" note="${3:-}" f now val
+  f="$(_order_dir "$key")/artifact-share.md"
+  [ -f "$f" ] || { _die "dobby_artifact_touch: $f 없음"; return 2; }
+  _artifact_row_exists "$f" "$slug" || {
+    _die "dobby_artifact_touch: 슬러그 '$slug' 행이 없습니다 — 신규는 dobby_artifact_add"; return 1; }
+  now="$(_now)"; val="$now"; [ -n "$note" ] && val="$now ($note)"
+  # 헤더에서 '슬러그'·'갱신' 칼럼 위치를 찾아 그 칸만 수정한다(스키마 하드코딩 금지 —
+  # dobby_agent_state와 같은 방식).
+  awk -F'|' -v OFS='|' -v slug="$slug" -v val="$val" '
+    function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
+    /^## / { ins=(index($0,"아티팩트")>0)?1:0; hdr=0; print; next }
+    ins==1 && /^\|/ {
+      if (hdr==0) {
+        for(i=1;i<=NF;i++){c=t($i); if(c=="슬러그")cs=i; else if(c=="갱신")cu=i}
+        if(cs>0 && cu>0) hdr=1
+        print; next
+      }
+      issep=1; for(i=2;i<NF;i++){c=t($i); if(c!="" && c !~ /^-+$/){issep=0;break}}
+      if(issep){print;next}
+      if(t($(cs))==slug && cu>0) $(cu)=" " val " "
+      print; next
+    }
+    { print }
+  ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+
+# _artifact_row_exists FILE SLUG — '## 아티팩트' 표에 그 슬러그 행이 있으면 0.
+# ⛔ 이 섹션 안만 본다 — 파일 다른 곳(레거시 불릿·설명문)에 같은 낱말이 있어도 오판하지 않게.
+_artifact_row_exists() {
+  local f="$1" slug="$2"
+  [ -f "$f" ] || return 1
+  awk -F'|' -v slug="$slug" '
+    function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
+    /^## / { ins=(index($0,"아티팩트")>0)?1:0; next }
+    ins==1 && /^\|/ { if(t($2)==slug){found=1; exit} }
+    END{ exit(found?0:1) }
+  ' "$f"
+}
+
 # dobby_terms_lint FILE — 아티팩트로 나갈 문서(outcome.md 등)의 내부 용어·줄임말 검출.
 # 검출 줄을 "줄번호:내용"으로 출력하고 1을 반환(없으면 0). 이슈 키(FE-1234·FE1-1234)는 제외.
 # dobby-share가 게시 전에 부르고, dobby_lint #13이 치명으로 집계한다.
