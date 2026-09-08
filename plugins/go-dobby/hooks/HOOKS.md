@@ -112,6 +112,17 @@ v2.1.246에서 실측 확인: 설치본 스크립트를 수동 실행하면 deny
    단, 규칙 정규식이 lib과 겹치면(커밋 메시지 규칙 등) 한쪽에 정의하고 다른 쪽이 참조하게 한다.
 6. 확신이 없으면 **차단하지 말고 통과**시킨다(오탐으로 정상 작업을 막는 비용 > 미탐 비용 —
    훅은 방어선이지 유일한 수단이 아니다).
+7. **⛔ 경로 비교는 반드시 정규화 사본(`$CMDX`)으로 한다** — 훅이 받는 명령 문자열은 셸이
+   **아직 펼치지 않은 원문**이다. `~/work/…`·`$HOME/…`·`$ORCHESTRATION_META/…`로 쓴 경로는
+   실경로와 글자가 달라 `grep -qF "$ORCHESTRATION_META"` 가 전부 빗나간다. 원문 `$CMD`는
+   명령 "문법"을 보는 규칙(G1의 브랜치 이름, G12의 리다이렉트 형태)에만 쓴다.
+   또한 **cwd가 보호 대상 폴더 안이면 상대경로만으로도 그 폴더를 노릴 수 있다**(`cd {메타}/{키}
+   && rm -rf .`) — 경로 인자가 없는 경우도 함께 막아야 한다.
+
+   > **실제 사고 (2026-09-09)**: G6이 `rm -rf ~/work/orchestration-meta/{키}`를 통과시켜
+   > 오더 메타가 지워졌다. 같은 명령을 절대경로로 쓰면 정상 차단됐다. 즉 규칙은 있었지만
+   > 물결표 한 글자로 무력화된 상태였다. 새 규칙을 넣을 때 **경로 표기 네 가지(절대경로·`~`·
+   > `$HOME`·전용 변수)로 각각 시험**해 판정이 같은지 확인한다.
 
 ## 새 훅 추가 절차
 
@@ -138,8 +149,8 @@ v2.1.246에서 실측 확인: 설치본 스크립트를 수동 실행하면 deny
 | ID | 규칙 | 이벤트 | 처리 | 전달 경로 | 근거 스킬 |
 |----|------|--------|------|-----------|-----------|
 | G1 | 정식 배포 베이스(master)로 push·merge·PR 금지 | PreToolUse·Bash | deny | settings.json(dobby-init 등록 — #34573 우회) | dobby-order C1 |
-| G5 | subtree 밖 워크트리 제거·rm 금지 | PreToolUse·Bash | deny | settings.json(상동) | dobby-end 안전 경계 |
-| G6 | 메타 폴더($ORCHESTRATION_META) 삭제 금지 | PreToolUse·Bash | deny | settings.json(상동) | 비파괴 원칙 |
+| G5 | subtree 밖 워크트리 제거·rm 금지 (예외: `$ORCHESTRATION_META/.discarded/` — 메타가 워크스페이스 안에 있는 설정이면 폐기 휴지통이 이 규칙 관할에도 들어오기 때문) | PreToolUse·Bash | deny | settings.json(상동) | dobby-end 안전 경계 |
+| G6 | 메타 폴더($ORCHESTRATION_META) 삭제 금지. cwd가 메타 안일 때의 상대경로 rm도 차단. 예외 하나: 폐기 휴지통(`.discarded/`) 아래만 허용하며, 메타 경로가 여럿이면 **전부** 휴지통 아래일 때만 통과 | PreToolUse·Bash | deny | settings.json(상동) | 비파괴 원칙 · dobby-discard |
 | G10 | 스폰 시 상태표 자동 등록 + 로그 자동 기록 (유령 에이전트 차단) | PreToolUse·PostToolUse·Agent\|Task | 자동등록/자동기록(형식 없으면 deny) | settings.json(dobby-init 등록) | dobby-order C4 |
 | G11 | 설계 문서(design.md) 없이 구현 스폰 금지 — 단계가 구현 이후 + 종류 개발 + 역할 개발자일 때만 | PreToolUse·Agent\|Task | deny | settings.json(상동 — pre-agent.sh에 포함) | dobby-order P3.5 |
 | G13 | 설계 문서 없이 에이전트 '구현' 전이 금지(개발 오더·개발자 역할) | dobby_agent_state 헬퍼 | 거부(비0 반환) | 코드 강제(훅 아님) | dobby-order P3.5 |
