@@ -13,6 +13,10 @@ _now() { printf '%s' "${DOBBY_NOW:-$(date '+%Y-%m-%d %H:%M')}"; }
 _ts()  { printf '%s' "${DOBBY_TS:-$(date '+%Y%m%d-%H%M%S')}"; }
 _die() { printf 'dobby-lib: %s\n' "$*" >&2; return 1; }
 
+# 이 파일이 있는 폴더 — 옆에 둔 스크립트(dobby-meta-backup.sh)를 부를 때 쓴다.
+# 설치 위치가 플러그인 캐시(버전별 폴더)라 절대 경로를 박을 수 없다.
+DOBBY_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || DOBBY_LIB_DIR=""
+
 # ── 상태 어휘 정본(대시보드 파서와 동일 규칙) ─────────────────────────
 # 상태 표기가 스킬·실행마다 흔들리지 않도록, 값을 적는 함수(dobby_phase·dobby_agent_state·
 # dobby_agent_add)가 들어온 단어를 아래 정본으로 자동 교정한다. 규칙·순서는 대시보드
@@ -657,6 +661,22 @@ dobby_resolve() {
 - **비고**: 워크트리·메타 유지. 추가 수정 시 dobby-order P8 재개.
 EOF
   dobby_event "$key" "해결 표시 — status 해결"
+  _dobby_meta_backup "$key"
+}
+
+# _dobby_meta_backup KEY — 해결 시점에 메타 폴더를 압축 백업(분리 실행).
+#   ⛔ 반드시 백그라운드로 띄우고 출력은 파일로 돌린다: 대시보드의 "해결 처리" 버튼은
+#      execFileSync 로 이 함수를 동기 대기하므로(jobs.ts startResolve), 인라인으로 압축하면
+#      버튼이 그만큼 멈추고, 자식이 부모의 stdout 파이프를 물고 있으면 부모가 반환하지 못한다.
+#   DOBBY_META_BACKUP=0 으로 끌 수 있다(테스트·복구 시).
+_dobby_meta_backup() {
+  [ "${DOBBY_META_BACKUP:-1}" = "1" ] || return 0
+  local bk="$DOBBY_LIB_DIR/dobby-meta-backup.sh" dest
+  [ -f "$bk" ] || return 0
+  dest="${ORCHESTRATION_BACKUP_DIR:-$HOME/claude-projects-backup/orchestration}"
+  mkdir -p "$dest" 2>/dev/null || return 0
+  nohup bash "$bk" "$1" >>"$dest/backup-run.log" 2>&1 &
+  return 0
 }
 
 # ── 정리(dobby-end) 기계적 조각 ──────────────────────────────────────

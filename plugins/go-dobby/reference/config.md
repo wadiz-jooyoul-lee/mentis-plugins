@@ -58,7 +58,8 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 | `dobby_quips_last KEY` | avatar-quips | 슬러그별 직전 board 소감만 추출(뉘앙스 다양화 신호 — 파일 통독 대체) |
 | `dobby_quips_merge KEY 새소감파일` | avatar-quips 저장 | 기존 JSON 병합·history append·원자적 저장(직접 읽기/쓰기 금지) |
 | `dobby_merge_root 워크트리 루트 에이전트` | P7 | 에이전트 브랜치 → 루트 머지·push |
-| `dobby_resolve KEY [undo]` | dobby-resolve | 단계 해결↔통합 + ## 해결 골격 + 미완료 에이전트 완료 |
+| `dobby_resolve KEY [undo]` | dobby-resolve | 단계 해결↔통합 + ## 해결 골격 + 미완료 에이전트 완료. 해결 시 메타 백업을 분리 실행으로 띄운다(undo는 백업 안 함) |
+| `dobby-meta-backup.sh KEY \| --all` | 해결 시(자동) · 사용자(일괄) | 메타 폴더 텍스트를 `{폴더이름}--{시각}.tar.zst`로 압축. 이미지 제외, 검증 통과 후 이전 아카이브 교체. `--all`은 변경된 폴더만 |
 | `dobby_subtree_list` | dobby-end | subtree 폴더별 `경로<TAB>키` 목록 |
 | `dobby_wt_unpushed WORKTREE` | dobby-end 판정 | origin 미푸시 커밋 수(모르면 `?`) |
 | `dobby_end_snapshot KEY WORKTREE BASE` | dobby-end | 제거 전 code-changes/{repo}.commits·.diff 저장 |
@@ -93,6 +94,7 @@ ORCHESTRATION_META="${ORCHESTRATION_META_PATH:-$ORCHESTRATION_WORKSPACE/meta}"
 | `ORCHESTRATION_REPOS_ROOT` | 원본 소스 저장소들이 있는 루트. 소스 루트 = `$ORCHESTRATION_REPOS_ROOT/{repo}` | `$HOME/work/repos` | 전체 |
 | `ORCHESTRATION_ENV_MAP` | 테스트 환경→호스트 매핑 | `dev=dev.wadiz.io,rc=rc.wadiz.kr,rc2=rc2.wadiz.kr,rc4=rc4.wadiz.io` | dobby-test |
 | `ORCHESTRATION_DOCS_ROOT` | 참고 문서 루트. 문서 = `$ORCHESTRATION_DOCS_ROOT/{repo}.md`(파일) 또는 `$ORCHESTRATION_DOCS_ROOT/{repo}/`(폴더) | `$HOME/work/repos/docs` | 전체 |
+| `ORCHESTRATION_BACKUP_DIR` | 메타 백업 저장 위치(선택) | `$HOME/claude-projects-backup/orchestration` | dobby-resolve |
 | `TEST_LOGIN_ID` / `TEST_LOGIN_PW` | 테스트 계정(선택) | (없음 → 로그인 필요 테스트는 건너뜀) | dobby-test |
 
 - "사용 스킬"은 그 변수를 **직접 쓰는** 스킬을 표시한 것이다. 설정 파일(`config.env`)에는 모든 변수를 함께 두고, 각 스킬은 자기에게 필요한 값만 사용한다.
