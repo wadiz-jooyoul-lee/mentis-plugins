@@ -19,6 +19,12 @@
 #   dobby-meta-backup.sh --all               # 메타 전체 훑기(이미 최신인 폴더는 건너뜀)
 #   dobby-meta-backup.sh --inprogress [am|pm]  # 작업중인 폴더들을 한 덩이로(임시 보관)
 #   DOBBY_META_BACKUP=0 …                    # 아무것도 하지 않고 종료(테스트·복구용)
+#   ORCHESTRATION_META_GIT=0 …               # 깃 커밋·푸시만 끄기(백업은 그대로)
+#
+# 깃 동기화: 메타 폴더가 원격이 붙은 깃 저장소면, 백업이 끝난 뒤 커밋·푸시까지 한다.
+#   백업과 같은 주기를 그대로 타므로(해결 시점 · 하루 두 회차) 따로 돌릴 것이 없다.
+#   무엇을 올릴지는 그 저장소의 .gitignore 가 정한다(이미지·code-changes·잡 로그 등 제외).
+#   실패해도 백업은 이미 끝났으므로 로그만 남기고 넘어간다.
 set -eu
 
 [ "${DOBBY_META_BACKUP:-1}" = "1" ] || exit 0
@@ -120,6 +126,53 @@ _latest_archive() {
   ls -1t "$DEST/$1--"*.tar.* 2>/dev/null | head -1 || true
 }
 
+# ── 깃 동기화 ─────────────────────────────────────────────────────────
+# _meta_git_sync "제목" — 메타 폴더를 커밋·푸시한다. 백업이 끝난 뒤 한 번만 부른다.
+#   · 원격이 붙은 깃 저장소가 아니면 조용히 넘어간다(설정 없이도 안전).
+#   · 변경이 없으면 커밋하지 않는다.
+#   · 락으로 겹침을 막는다(해결 시점 백업과 회차 백업이 같이 돌 수 있다).
+#   · ⛔ 실패를 백업 실패로 만들지 않는다 — 아카이브는 이미 만들어졌다. 로그만 남긴다.
+#   · 푸시가 거부되면(원격이 앞서 있음) 커밋은 남기고 넘어간다. 병합은 사람이 판단한다.
+# 전체 훑기 중인지 — 훑기 중에는 폴더마다 하지 않고 끝에 한 번만 한다.
+_SWEEP=0
+
+_meta_git_sync() {
+  [ "${ORCHESTRATION_META_GIT:-1}" = "1" ] || return 0
+  git -C "$META" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+  git -C "$META" remote get-url origin >/dev/null 2>&1 || return 0
+
+  local title="$1" glog="$DEST/git-sync.log" lock="$DEST/.lock-__git__"
+  if [ -f "$lock" ] && [ $(( $(date +%s) - $(stat -f %m "$lock" 2>/dev/null || echo 0) )) -lt 600 ]; then
+    printf '%s | ⏭ 건너뜀(깃 동기화 진행 중)\n' "$(_now)" >> "$glog"
+    return 0
+  fi
+  _lock_add "$lock"
+
+  if [ -z "$(git -C "$META" status --porcelain 2>/dev/null)" ]; then
+    _lock_drop "$lock"
+    return 0
+  fi
+
+  local n body
+  git -C "$META" add -A >/dev/null 2>&1 || { _lock_drop "$lock"; return 0; }
+  n="$(git -C "$META" diff --cached --name-only | wc -l | tr -d ' ')"
+  # 어떤 오더가 바뀌었는지만 본문에 남긴다(경로 첫 조각 = 오더 키).
+  body="$(git -C "$META" diff --cached --name-only | awk -F/ '{print $1}' | sort -u | head -20 | tr '\n' ' ')"
+
+  if git -C "$META" commit -q -m "$title" -m "변경 파일 ${n}개 — ${body}" >/dev/null 2>&1; then
+    printf '%s | 커밋 | %s개 파일 | %s\n' "$(_now)" "$n" "$title" >> "$glog"
+    if git -C "$META" push -q >>"$glog" 2>&1; then
+      printf '%s | 푸시 완료\n' "$(_now)" >> "$glog"
+    else
+      printf '%s | ⚠️ 푸시 실패(커밋은 남음) — 원격이 앞서 있거나 네트워크 문제\n' "$(_now)" >> "$glog"
+    fi
+  else
+    printf '%s | ⚠️ 커밋 실패\n' "$(_now)" >> "$glog"
+  fi
+  _lock_drop "$lock"
+  return 0
+}
+
 # ── 한 폴더 백업 ──────────────────────────────────────────────────────
 # 반환: 0=백업함 1=건너뜀 2=실패
 backup_one() {
@@ -211,12 +264,15 @@ backup_one() {
   _lock_drop "$lock"
   [ -n "$quiet" ] || printf '✅ %s — %s개 파일, %s → %s (%s배)\n' \
     "$key" "$files" "$(_hsize "$raw")" "$(_hsize "$size")" "$ratio"
+  # 전체 훑기 중이면 여기서 하지 않는다 — 끝에 한 번만 한다(커밋 제목이 어긋나지 않게).
+  [ "$_SWEEP" = "1" ] || _meta_git_sync "chore(meta): $key 백업 시점 기록"
   return 0
 }
 
 # ── 전체 훑기 ─────────────────────────────────────────────────────────
 backup_all() {
   local done_n=0 skip_n=0 fail_n=0 d key rc alllock="$DEST/.lock-__all__"
+  _SWEEP=1
   # 전체 훑기 동안 유지되는 락 — 폴더별 락은 폴더마다 생겼다 사라져서, 대시보드가 진행 중을
   # 놓치고 "끝났다"고 판단한다. 훑기 자체의 락을 따로 둔다.
   _lock_add "$alllock"
@@ -237,6 +293,8 @@ backup_all() {
   local total
   total=$(find "$DEST" -maxdepth 1 -type f -name '*.tar.*' -exec stat -f %z {} \; 2>/dev/null | awk '{s+=$1} END{print s+0}')
   _lock_drop "$alllock"
+  _SWEEP=0
+  _meta_git_sync "chore(meta): 전체 백업 시점 기록 (백업 ${done_n}개)"
   printf '\n완료 — 백업 %d개 · 건너뜀 %d개 · 실패 %d개 · 아카이브 총 %d개 %s\n' \
     "$done_n" "$skip_n" "$fail_n" \
     "$(find "$DEST" -maxdepth 1 -type f -name '*.tar.*' | wc -l | tr -d ' ')" \
@@ -346,6 +404,8 @@ backup_inprogress() {
   fi
 
   _lock_drop "$lock"
+  local slotko; [ "$slot" = "am" ] && slotko="오전" || slotko="오후"
+  _meta_git_sync "chore(meta): $(date '+%Y-%m-%d') $slotko 회차 기록"
   printf '✅ 진행중 %s-%s — 폴더 %s개, %s개 파일, %s → %s (%s배)\n' \
     "$day" "$slot" "$n" "$files" "$(_hsize "$raw")" "$(_hsize "$size")" "$ratio"
   return 0
