@@ -124,6 +124,28 @@ v2.1.246에서 실측 확인: 설치본 스크립트를 수동 실행하면 deny
    > 물결표 한 글자로 무력화된 상태였다. 새 규칙을 넣을 때 **경로 표기 네 가지(절대경로·`~`·
    > `$HOME`·전용 변수)로 각각 시험**해 판정이 같은지 확인한다.
 
+8. **⛔ "명령에 경로가 나오는가"가 아니라 "그 경로가 대상인가"로 판정한다** — 파괴 규칙은
+   명령 전체에서 보호 경로를 찾으면 안 된다. 지우는 대상이 임시 폴더인데 같은 줄에 보호
+   경로가 있다는 이유로 정상 작업이 막힌다:
+
+   ```
+   cd {워크스페이스}/repo && rm -rf /tmp/foo     ← 지우는 건 /tmp인데 차단됐다
+   cat {워크스페이스}/a.md; rm -f /tmp/out.txt   ← 읽기만 했는데 차단됐다
+   ```
+
+   `$RM_TARGETS`가 이것을 푼다: 구분자(`;` `|` `&`)로 단순 명령을 나눈 뒤 **첫 낱말이
+   `rm`/`rmdir`인 줄의 인자 부분만** 모은다. 경로 판정은 이 구간으로 한다.
+
+   **되돌림 조건 두 가지를 반드시 함께 둔다**(느슨해지는 방향으로 실패하지 않게):
+   - 구간을 못 뽑으면(따옴표·치환 등 특이 형태) **명령 전체**로 되돌린다.
+   - `find -exec`·`xargs`는 삭제 대상이 `rm` **앞**에 있다(탐색 경로·파이프 입력).
+     `rm` 뒤만 보면 `-rf {} \` 만 남아 보호 경로를 놓치므로 **명령 전체**로 되돌린다.
+
+   > **경위 (2026-09-09)**: 7번을 고쳐 규칙이 실제로 동작하기 시작하자, 원래 있던 이 거친
+   > 판정이 곧바로 드러났다(같은 세션에서 정상 명령이 두 번 막혔다). 오탐은 새로 생긴 것이
+   > 아니라 **물결표 구멍에 가려져 있던 것**이다. 규칙을 작동시키는 수정과 판정을 정밀하게
+   > 만드는 수정은 **짝으로** 해야 한다.
+
 ## 새 훅 추가 절차
 
 1. 대상 규칙이 **판단 없이 감지 가능한지** 확인한다(문자열/파일 존재/정규식). 판단이 필요하면
@@ -149,8 +171,8 @@ v2.1.246에서 실측 확인: 설치본 스크립트를 수동 실행하면 deny
 | ID | 규칙 | 이벤트 | 처리 | 전달 경로 | 근거 스킬 |
 |----|------|--------|------|-----------|-----------|
 | G1 | 정식 배포 베이스(master)로 push·merge·PR 금지 | PreToolUse·Bash | deny | settings.json(dobby-init 등록 — #34573 우회) | dobby-order C1 |
-| G5 | subtree 밖 워크트리 제거·rm 금지 (예외: `$ORCHESTRATION_META/.discarded/` — 메타가 워크스페이스 안에 있는 설정이면 폐기 휴지통이 이 규칙 관할에도 들어오기 때문) | PreToolUse·Bash | deny | settings.json(상동) | dobby-end 안전 경계 |
-| G6 | 메타 폴더($ORCHESTRATION_META) 삭제 금지. cwd가 메타 안일 때의 상대경로 rm도 차단. 예외 하나: 폐기 휴지통(`.discarded/`) 아래만 허용하며, 메타 경로가 여럿이면 **전부** 휴지통 아래일 때만 통과 | PreToolUse·Bash | deny | settings.json(상동) | 비파괴 원칙 · dobby-discard |
+| G5 | subtree 밖 워크트리 제거·rm 금지 (예외: `$ORCHESTRATION_META/.discarded/` — 메타가 워크스페이스 안에 있는 설정이면 폐기 휴지통이 이 규칙 관할에도 들어오기 때문). rm 판정은 `$RM_TARGETS`(삭제 대상 구간)로 — 공통 규율 8 | PreToolUse·Bash | deny | settings.json(상동) | dobby-end 안전 경계 |
+| G6 | 메타 폴더($ORCHESTRATION_META) 삭제 금지. cwd가 메타 안일 때의 상대경로 rm도 차단. 예외 하나: 폐기 휴지통(`.discarded/`) 아래만 허용하며, 메타 경로가 여럿이면 **전부** 휴지통 아래일 때만 통과. 판정은 `$RM_TARGETS`로 — 공통 규율 8 | PreToolUse·Bash | deny | settings.json(상동) | 비파괴 원칙 · dobby-discard |
 | G10 | 스폰 시 상태표 자동 등록 + 로그 자동 기록 (유령 에이전트 차단) | PreToolUse·PostToolUse·Agent\|Task | 자동등록/자동기록(형식 없으면 deny) | settings.json(dobby-init 등록) | dobby-order C4 |
 | G11 | 설계 문서(design.md) 없이 구현 스폰 금지 — 단계가 구현 이후 + 종류 개발 + 역할 개발자일 때만 | PreToolUse·Agent\|Task | deny | settings.json(상동 — pre-agent.sh에 포함) | dobby-order P3.5 |
 | G13 | 설계 문서 없이 에이전트 '구현' 전이 금지(개발 오더·개발자 역할) | dobby_agent_state 헬퍼 | 거부(비0 반환) | 코드 강제(훅 아님) | dobby-order P3.5 |
