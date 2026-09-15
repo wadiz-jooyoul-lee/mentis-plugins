@@ -51,6 +51,26 @@ CMDX="$(printf '%s' "$CMD" | sed \
   -e "s|[\$]HOME|$HOME|g" \
   -e "s|~/|$HOME/|g")" || CMDX="$CMD"
 
+# ── 삭제 "대상" 구간만 뽑기 ─────────────────────────────────────────────
+# G5·G6은 원래 "명령 문자열 어딘가에 보호 경로가 나오는가"로 판정했다. 그래서 지우는 대상이
+# 임시 폴더인데도 같은 줄에 보호 경로가 있으면 막혔다(오탐):
+#     cd {워크스페이스}/repo && rm -rf /tmp/foo      ← 지우는 건 /tmp인데 차단
+# 이 오탐은 규칙에 원래 있었지만, 위 정규화 전에는 `~` 표기가 비교를 빗나가 가려져 있었다.
+# 정규화로 규칙이 실제로 동작하기 시작하면서 드러났다.
+#
+# 아래는 rm/rmdir이 **실제로 인자를 받는 구간**만 모은다: 구분자(; | &)로 잘라 단순 명령으로
+# 나눈 뒤, 첫 낱말이 rm/rmdir인 줄의 인자 부분만 남긴다. 경로 판정은 이 구간으로 한다.
+# ⛔ 못 뽑으면(따옴표·치환 등으로 형태가 특이하면) **명령 전체로 되돌린다** — 판정을 느슨하게
+#    만드는 방향으로는 절대 실패하지 않게(미탐 < 오탐).
+RM_TARGETS="$(printf '%s' "$CMDX" | tr ';|&' '\n\n\n' \
+  | sed -nE 's/^[[:space:]]*(sudo[[:space:]]+)?(rm|rmdir)([[:space:]]+.*)$/\3/p')"
+[ -n "$RM_TARGETS" ] || RM_TARGETS="$CMDX"
+# ⛔ find -exec·xargs 는 삭제 대상이 rm **뒤가 아니라 앞**에 있다(find의 탐색 경로, 파이프 입력).
+#    이 형태에서 rm 뒤 구간만 보면 `-rf {} \` 만 남아 보호 경로를 놓친다 — 명령 전체로 되돌린다.
+case "$CMDX" in
+  *-exec*|*-execdir*|*xargs*) RM_TARGETS="$CMDX" ;;
+esac
+
 # 차단 응답: 규칙 ID + 사유를 JSON으로 내보내고 종료 (exit 0 + deny JSON)
 deny() {
   jq -n --arg r "go-dobby 훅 [$1] $2" \
@@ -97,9 +117,9 @@ esac
 # 전부 휴지통 아래일 때만 통과시킨다(하나라도 살아 있는 오더면 차단).
 case "$CMD" in
   *rm\ *|*rmdir\ *)
-    if printf '%s' "$CMDX" | grep -qF "$ORCHESTRATION_META"; then
-      NMETA="$(printf '%s' "$CMDX" | grep -oF "$ORCHESTRATION_META" | wc -l | tr -d ' ')"
-      NTRASH="$(printf '%s' "$CMDX" | grep -oF "$ORCHESTRATION_META/.discarded/" | wc -l | tr -d ' ')"
+    if printf '%s' "$RM_TARGETS" | grep -qF "$ORCHESTRATION_META"; then
+      NMETA="$(printf '%s' "$RM_TARGETS" | grep -oF "$ORCHESTRATION_META" | wc -l | tr -d ' ')"
+      NTRASH="$(printf '%s' "$RM_TARGETS" | grep -oF "$ORCHESTRATION_META/.discarded/" | wc -l | tr -d ' ')"
       if [ "${NTRASH:-0}" -eq 0 ] || [ "${NMETA:-0}" -ne "${NTRASH:-0}" ]; then
         deny G6 "메타 폴더($ORCHESTRATION_META)는 삭제 금지다. 오더 기록은 생명주기 원본이라 dobby-end도 워크트리만 제거하고 메타는 보존한다. 필요 없는 오더를 없애려면 /dobby-discard {키} 로 폐기하라(조건 검사·백업 후 휴지통으로 옮긴다)."
       fi
@@ -128,12 +148,12 @@ case "$CMD" in
     # 메타가 워크스페이스 안에 있는 설정이면(예: WORKSPACE=$HOME/work, META=$HOME/work/
     # orchestration-meta) 휴지통도 이 규칙 관할에 들어온다. 폐기 휴지통은 G6이 이미
     # "전부 휴지통 아래일 때만" 통과시키는 좁은 예외를 검사했으므로 여기서도 허용한다.
-    if printf '%s' "$CMDX" | grep -qF "$ORCHESTRATION_WORKSPACE" \
-       && ! printf '%s' "$CMDX" | grep -qF "$ORCHESTRATION_WORKSPACE/subtree/" \
-       && ! printf '%s' "$CMDX" | grep -qF "$ORCHESTRATION_META/.discarded/"; then
+    if printf '%s' "$RM_TARGETS" | grep -qF "$ORCHESTRATION_WORKSPACE" \
+       && ! printf '%s' "$RM_TARGETS" | grep -qF "$ORCHESTRATION_WORKSPACE/subtree/" \
+       && ! printf '%s' "$RM_TARGETS" | grep -qF "$ORCHESTRATION_META/.discarded/"; then
       deny G5 "rm 대상이 dobby 워크스페이스 안인데 subtree/ 밖이다. 워크스페이스 정리는 subtree/ 하위만 허용된다(dobby-end 안전 경계)."
     fi
-    if printf '%s' "$CMDX" | grep -qE "rm[^|;&]*[[:space:]]${ORCHESTRATION_REPOS_ROOT}(/[^[:space:]]*)?([[:space:]]|$)"; then
+    if printf '%s' "$RM_TARGETS" | grep -qE "(^|[[:space:]])${ORCHESTRATION_REPOS_ROOT}(/[^[:space:]]*)?([[:space:]]|$)"; then
       deny G5 "원본 소스 저장소($ORCHESTRATION_REPOS_ROOT)는 rm 대상이 될 수 없다. go-dobby는 워크트리(subtree/)에서만 작업한다."
     fi
     ;;
