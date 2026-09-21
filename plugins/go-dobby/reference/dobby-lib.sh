@@ -1364,6 +1364,21 @@ EOF
       _w "design.md 내부 용어·줄임말 $(printf '%s' "$terms20" | grep -c .)곳 — 사용자가 읽고 승인하는 문서입니다. FE/BE→프론트엔드/백엔드, round-N→N차 검토, P숫자→단계 이름, 슬러그→담당 이름으로 풀어 쓰세요(코드 안 식별자 인용이면 그대로 두어도 됩니다): $(printf '%s' "$terms20" | head -3 | tr '\n' ' ')"
   fi
 
+  # 21) 산출물 문서에 메타 보정 흔적 — 경고 (dobby-order C10)
+  # 규칙을 못 지켜 틀어진 기록을 바로잡은 일(빠진 문서 뒤늦게 작성·형식 복원·재서명·검사 통과)은
+  # 개발 내용이 아니다. 이슈가 요구한 것을 만든 게 아니라 이 도구를 쓰다 생긴 뒤처리이며,
+  # 문서를 읽는 사람에게는 소음이다. 기록은 orchestration.md 이벤트 로그 한 줄이면 된다.
+  # ⛔ 패턴에 orchestration.md·status.md 를 넣지 않는다 — explainer.md 머리의 "근거: …" 출처
+  #    표기가 그 이름을 정상적으로 인용해 28개 파일이 통째로 오탐이 된다(실측).
+  #    아래 패턴은 메타 작업에만 나오는 것들이라 206개 파일 중 1건만 잡았다(오탐 0).
+  local meta21="" f21 hit21
+  for f21 in "$dir"/outcome.md "$dir"/explainer.md "$dir"/produce.md "$dir"/implementation*.md; do
+    [ -f "$f21" ] || continue
+    hit21="$(grep -cE 'dobby_[a-z_]+|artifact-share|design-ack|메타 (보정|정정|복원|누락)|산출물 보강|표기 규약' "$f21" 2>/dev/null)" || hit21=0
+    [ "${hit21:-0}" -gt 0 ] 2>/dev/null && meta21="$meta21 $(basename "$f21")(${hit21})"
+  done
+  [ -n "$meta21" ] && _w "산출물 문서에 메타 보정 흔적:${meta21} — 메타를 바로잡은 일은 개발 내용이 아닙니다(C10). 해당 줄을 지우고 orchestration.md 이벤트 로그에만 남기세요"
+
   printf '(치명 %d, 경고 %d)\n' "$e" "$w"
   [ -n "$strict" ] && return "$e"
   return 0
