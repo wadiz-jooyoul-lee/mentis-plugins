@@ -91,6 +91,7 @@ description: 오더의 설계 문서(design.md)와 구현 결과 문서(outcome.
    - 전문용어는 처음 쓸 때 괄호로 풀이. 과도한 단축어·별명 금지.
    - 작성 후 `dobby_terms_lint $ORCHESTRATION_META/{키}/outcome.md`로 자가 검사한다(검출되면 고친다 — dobby_lint #13 치명).
 5. **⛔ 실수·재작업 경위는 쓰지 않는다**(결과만 — dobby_lint #15 경고). 과정은 retro.md 몫.
+5-1. **⛔ 메타 보정은 한 줄도 쓰지 않는다**(dobby-order **C10**): 빠진 산출물을 뒤늦게 만든 일·`artifact-share.md` 형식 복원·`design-ack` 재서명·`dobby_lint` 통과시키기는 **개발 내용이 아니다.** 이슈가 요구한 것을 만든 게 아니라 도구를 쓰다 생긴 뒤처리다. 기록은 `orchestration.md` 이벤트 로그에만 남긴다.
 6. **P8 후속 후에는** 전체 재생성 대신 **`## 후속 {YYYY-MM-DD} — {요약}` 섹션을 append**한다(설계 대비 표의 해당 행만 갱신 가능).
 
 ## 비파괴

@@ -62,6 +62,7 @@ description: 서브 에이전트가 자기 워크트리에서 이슈/작업을 �
   - **스키마**: `CustomTag = { category: string; action?: string(기본 '클릭'); label?: string|null }` → `trackingEvent('ga.custom.tag', { GACategory, GAAction, GALabel })`로 dataLayer에 push.
   - **컴포넌트 사용**: 노출은 `const { ref } = useTrackingEventRef({ impressionCallback: {feature}Tracker.tracking...Impression })` 후 그 `ref`를 대상 요소에 부착(뷰 50%·1초 이상 시 수집, `shouldTrackImpressionOnce`로 1회 제한). 클릭은 핸들러에서 `{feature}Tracker.tracking...Click()` 직접 호출(또는 `clickCallback`).
   - **⛔ 마이그레이션 시 수집 스펙 보존**: 기존 인라인 수집을 tracker로 옮길 땐 **category/action/label 값을 원본 그대로** 유지한다(값이 바뀌면 데이터가 단절돼 지표가 끊긴다). 옮긴 뒤 위 "기존 데이터 수집 보존 확인"으로 **모든 상호작용 경로**에 누락이 없는지 대조한다.
+- **⛔ 메타 보정은 `implementation.md`에 쓰지 않는다**(dobby-order **C10**): `dobby_lint` 통과·`design-ack` 재서명·상태표 정정 같은 뒤처리는 개발 내용이 아니다. **검증 결과 표에 메타 점검 행을 끼워 넣는 것도 금지**다(사례 FE1-1800: 코드 검증 표에 "설계 문서 dobby_lint 치명 0 · 재서명 rev" 행이 섞였다). 이 표에는 lint·타입·빌드·테스트처럼 **코드를 대상으로 한 검증만** 적는다.
 - **docs 참조(필수)**: 애매하거나 확인이 필요한데 현재 코드로 확인 불가하면 → `$ORCHESTRATION_DOCS_ROOT/{repo}.md`(파일) 또는 `$ORCHESTRATION_DOCS_ROOT/{repo}/`(폴더) 문서 → 없으면 `$ORCHESTRATION_REPOS_ROOT/{repo}` 실제 소스를 읽어 확인하고 **반드시 사실 기반으로만** 구현한다. 추측 금지.
 - **⛔ 코드 주석은 짧게 — 조사 내용을 코드로 옮기지 않는다**: 이 스킬은 "이유 없는 결정 금지"·"추정 금지, 실측으로 증명"을 요구하는데, 그 근거를 **코드 주석에도 옮겨 적으면서** 주석이 코드보다 길어지고 있다. 근거를 남기는 자리는 **메타 문서**이고 코드가 아니다.
   - **코드 주석에 쓰는 것** — 코드만 읽어서는 알 수 없는 것 두 가지뿐이다: ⑴ 왜 이 방식이 **아니면 안 되는가**(한두 줄), ⑵ **되돌리면 깨지는 조건**(이 줄을 지우면 무엇이 무너지는가).
