@@ -147,7 +147,11 @@ def main():
             bdate = bodies.get(rel, TODAY.isoformat())
             age   = (TODAY - datetime.date(*map(int, bdate.split('-')))).days
             ncom  = commits_since(repo, bdate) if repo else 0
-            obs   = [t for t in terms if t in text]
+            # 낡은 표현은 본문에서만 센다. 인용 블록(`>`)은 과거 기록이거나
+            # "예전에는 이랬다" 는 정정 기록이라 세면 오히려 점수가 올라간다.
+            body_text = '\n'.join(l for l in text.split('\n')
+                                   if not l.lstrip().startswith('>'))
+            obs   = [t for t in terms if t in body_text]
 
             score = len(miss) * 3 + min(ncom, 300) * 0.1 + len(obs) * 4
             if score < 1:
