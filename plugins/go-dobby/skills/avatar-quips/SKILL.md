@@ -16,7 +16,21 @@ description: mentis 대시보드 전용 재미기능. 한 오더의 에이전트
 아래 절차는 두 모드 공통이되, **대상 슬러그 집합**만 다르다(전체=상태표의 모든 슬러그, 선택=인자로 받은 슬러그).
 
 ## 설정
-`~/.config/go-dobby/config.env`를 source 해 `$ORCHESTRATION_META`를 확인하고, **공용 헬퍼도 source 한다**: `source "${CLAUDE_PLUGIN_ROOT}/reference/dobby-lib.sh" && dobby_load_config` — sig 계산(`dobby_quips_sig`)·직전 소감(`dobby_quips_last`)·병합 저장(`dobby_quips_merge`)에 쓴다(`${CLAUDE_PLUGIN_ROOT}/reference/config.md`).
+**공용 헬퍼부터 부른다.** `$ORCHESTRATION_META`는 이 헬퍼가 만들어 주는 값이다 — `config.env`에는
+`ORCHESTRATION_META_PATH`(뒤에 `_PATH`)만 있어서, 설정 파일만 읽고 `$ORCHESTRATION_META`를 보면
+**빈 값**이 나온다.
+
+```bash
+source "${CLAUDE_PLUGIN_ROOT}/reference/dobby-lib.sh" && dobby_load_config
+echo "$ORCHESTRATION_META"   # 여기서 경로가 찍혀야 다음으로 간다
+```
+
+대시보드가 띄우는 경우에는 환경변수로도 넘어오므로, 헬퍼가 없어도 `$ORCHESTRATION_META`가 이미
+차 있을 수 있다. **비어 있을 때만** 위 명령으로 채운다. ⛔ 비었다고 그냥 물러나지 않는다 —
+헬퍼를 부르지 않은 채 포기한 적이 있다(FE1-1979: 2턴 만에 종료, 소감 0건).
+
+헬퍼는 sig 계산(`dobby_quips_sig`)·직전 소감(`dobby_quips_last`)·병합 저장(`dobby_quips_merge`)에도
+쓴다(`${CLAUDE_PLUGIN_ROOT}/reference/config.md`).
 
 ## 1. 신호 수집 (효율적 리드만 — ⛔ 본문 읽기 금지)
 토큰·속도를 위해 **딱 필요한 가벼운 파일만** 읽는다.
@@ -98,7 +112,9 @@ console.log(JSON.stringify(map));
 - **→ 헬퍼 `dobby_quips_sig {키} {슬러그}`로 구한다(직접 암산 금지 — 대시보드 공식과 자동 일치)**: 일반 슬러그는 `<상태>#<라운드>`(예 `완료#1`, `구현#` — `deliverables/{슬러그}` 존재 시 완료 보정 포함), `__orchestrator__`는 4-1의 집계 서명.
 
 ## 6. 저장 (원자적 · 병합 · 격리 — 전부 헬퍼가 담당)
-**이번 대상 슬러그의 소감만** 담은 **새 소감 JSON**을 임시 파일(예: `/tmp/quips-{키}.json`)에 쓰고, **→ 헬퍼 `dobby_quips_merge {키} {임시파일}`** 한 번으로 끝낸다 — 기존 `{키}.json` 읽기·병합(다른 슬러그 값 보존)·**history append**(board 소감을 `{at, state, mood, text}`로 누적, 기존 항목 불변)·원자적 저장(tmp→rename)을 전부 헬퍼가 한다. **⛔ 기존 파일을 직접 읽거나 병합 결과를 직접 쓰지 않는다.**
+**이번 대상 슬러그의 소감만** 담은 **새 소감 JSON**을 **`/tmp/quips-{키}.json`** 에 쓰고,
+⛔ 임시 파일을 `$ORCHESTRATION_META` 안에 만들지 않는다 — 오더 폴더에 `.mentis-quips/`를 만들어
+중간 산출물을 남긴 일이 있다(오더 56개에 쓰레기가 쌓였다). **→ 헬퍼 `dobby_quips_merge {키} {임시파일}`** 한 번으로 끝낸다 — 기존 `{키}.json` 읽기·병합(다른 슬러그 값 보존)·**history append**(board 소감을 `{at, state, mood, text}`로 누적, 기존 항목 불변)·원자적 저장(tmp→rename)을 전부 헬퍼가 한다. **⛔ 기존 파일을 직접 읽거나 병합 결과를 직접 쓰지 않는다.**
 
 새 소감 JSON 스키마(대상 슬러그만, 있는 것만):
 ```json
@@ -122,6 +138,9 @@ console.log(JSON.stringify(map));
 }
 ```
 - `agents[슬러그].sig`는 5번에서 구한 지문. 대상 슬러그는 board·agents·history를 **반드시** 채운다(board나 agents가 비면 대시보드가 계속 "미생성"으로 보고 다시 요청함).
+- ⛔ **받은 슬러그를 하나도 빠뜨리지 않는다.** 저장 직전에 "인자로 받은 슬러그 수 == board 항목 수"를
+  세어 확인한다. 하나라도 빠지면 대시보드가 그 슬러그만 다시 요청해 같은 일을 두 번 하게 된다
+  (FE1-1814: 3개를 받아 2개만 채웠다).
 - `changes`·`reviews`는 항상 채워도 되고, 정 애매하면 board만이라도 안전하게. `history`는 board 소감 기준으로 매 생성마다 1줄씩 누적.
 
 ## 원칙
