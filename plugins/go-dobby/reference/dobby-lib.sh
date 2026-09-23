@@ -392,7 +392,20 @@ dobby_testrun_new() {
   n="$(find "$(_order_dir "$key")/test-runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
   n=$((n + 1))
   dir="$(_order_dir "$key")/test-runs/$(_ts)"; mkdir -p "$dir"
-  [ -f "$dir/result.md" ] || printf '# %s 테스트 결과 — 회차 %s\n\n(진행 중)\n' "$key" "$n" > "$dir/result.md"
+  # 시나리오 표는 **여기서 완성해 준다**. 스킬이 표를 직접 지으면 회차마다 머리글이 달라져
+  # (실측 75회차에 20가지 넘음) 대시보드가 칸을 못 읽는다. 머리글·구분선·빈 행까지 깔아 두고
+  # 스킬은 칸만 채우게 한다. 마커는 대시보드가 이 표를 정확히 집게 하는 표시다.
+  if [ ! -f "$dir/result.md" ]; then
+    {
+      printf '# %s 테스트 결과 — 회차 %s\n\n(진행 중)\n\n' "$key" "$n"
+      printf '## 시나리오별 결과\n\n<!-- dobby:scenarios -->\n'
+      printf '| # | 페이지 / URL | 확인 항목 | 기대 | 실제 | 판정 | 근거 |\n'
+      printf '|---|---|---|---|---|---|---|\n'
+      if [ -n "$total" ] && [ "$total" -eq "$total" ] 2>/dev/null; then
+        i=1; while [ "$i" -le "$total" ]; do printf '| S%s |  |  |  |  |  |  |\n' "$i"; i=$((i+1)); done
+      fi
+    } > "$dir/result.md"
+  fi
   sf="$(_order_dir "$key")/status.md"; now="$(_now)"
   if [ -f "$sf" ]; then
     _table_row_append "$sf" "테스트 실행 이력" \
