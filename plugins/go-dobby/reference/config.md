@@ -43,6 +43,7 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 | `dobby_set_kind KEY 종류` | (d) 종류 확인 진입 시 | status.md `- **종류**:` 기록/갱신(정본 개발·산출물·작업 정리로 자동 교정) |
 | `dobby_agent_add KEY 슬러그 이름 설명 상태 [라운드]` | 스폰 전(선갱신) | 상태표 행 추가(중복 무시, 활성이면 착수=now) |
 | `dobby_agent_state KEY 슬러그 상태 [라운드]` | 전이마다 | 그 행 상태/갱신만 수정(비활성→활성 진입 시 착수 갱신) |
+| `dobby_add_condition KEY "조건 한 줄"` | **P1 닫히는 조건 선언 직후(필수)·P8 범위 확장** | status.md `## 닫히는 조건 항목` 표에 `C{n}` 행 추가(번호 자동, stdout). 테스트 시나리오가 이 번호를 달고 대시보드가 "조건 N개 중 M개 확인"을 센다 |
 | `dobby_set_title KEY "제목"` | **이슈 조회 직후(필수)** | status.md 제목을 실제 요약으로 갱신(골격 임시 제목 덮어씀). dobby-start 경유 여부와 무관 |
 | `dobby_append KEY 파일 "블록"` | append 문서마다 | decisions.md 등 append-only 문서에 읽기 없이 블록 추가(토큰 0) |
 | `dobby_event KEY "사건 — 설명"` | 타임라인 사건마다 | 이벤트 로그 1줄 append |
@@ -50,7 +51,7 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 | `dobby_phase KEY 단계` | 단계 전이 | status.md 현재 단계/갱신 |
 | `dobby_review_path KEY 라운드 슬러그` | P5 | reviews/round-N/{슬러그}.md 경로(폴더 생성) |
 | `dobby_blocking KEY 라운드` | P6 전이 판정 | reviews/round-N의 `## [blocker\|major]` 카드 헤더 집계(숫자 stdout). 카드 형식 없는 파일은 경고 — 그 파일만 직접 읽어 판정 |
-| `dobby_testrun_new KEY [전체시나리오수]` | dobby-test 시작 | 회차 자동 계산 + test-runs/{시각}/ + result.md 골격 + status.md 이력 표 행 추가(경로 stdout) |
+| `dobby_testrun_new KEY [전체시나리오수] [환경]` | dobby-test 시작 | 회차 자동 계산 + test-runs/{시각}/ + result.md 골격(`- **환경**:` 줄·`조건` 칸 포함) + status.md 이력 표 행 추가(경로 stdout) |
 | `dobby_testrun_update KEY 폴더시각 상태 [성공/실패/skip]` | 시나리오마다·마감 | 이력 표의 그 회차 행만 상태·집계 수정(통독 없음) |
 | `dobby_commit_push 워크트리 브랜치 "메시지"` | P6 통과 후 | commit --no-verify + push. **⛔ 메시지에 내부 용어(`round-N`·리뷰 반영·슬러그)·금지 서명(Co-Authored-By 등) 감지 시 거부**(코드 강제) |
 | `dobby_bootstrap_inline KEY "제목" 종류 슬러그 "이름" "설명" [상태] [CWD]` | P4-L·P4-C·P4-W 인라인 분기 | status 골격+제목+종류+세션+상태표 1행+agent-logs(메인 세션 전사)를 한 번에 |
