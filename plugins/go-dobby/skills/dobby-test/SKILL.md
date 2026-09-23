@@ -1,6 +1,6 @@
 ---
 name: dobby-test
-description: 구현한 내용이 실제 환경에서 정상 동작하는지 chrome-devtools로 검증하는 스킬. dobby-start가 만든 test-plan.md가 있으면 재사용하고 없으면 변경(diff)을 분석해 테스트 목록을 도출한 뒤, 국내/글로벌 국가 전환·로그인을 포함해 실제 브라우저로 테스트하고 결과를 $ORCHESTRATION_META/{키}/test-runs/{시각}/ 에 회차별로(덮어쓰지 않게) 저장하고 화면에도 통과/실패/보류를 한눈에 보이는 틀로 출력한다(보류는 사유를 함께 적는다). 진행 상태는 이슈 폴더 루트의 단일 status.md(테스트 실행 이력 표·현재 단계)를 갱신한다. 검증은 여기까지이며 상태를 자동으로 "해결"로 올리지 않는다(해결 표시는 dobby-resolve 담당). 테스트가 끝나면 그동안 연 브라우저 페이지를 닫아 정리하고, 남은 한 장에 완료 요약을 띄운다. 사용법 /dobby-test {키|브랜치} 또는 /dobby-test (현재 브랜치).
+description: 구현한 내용이 실제 환경에서 정상 동작하는지 chrome-devtools로 검증하는 스킬. dobby-start가 만든 test-plan.md가 있으면 재사용하고 없으면 변경(diff)을 분석해 테스트 목록을 도출한 뒤, 국내/글로벌 국가 전환·로그인을 포함해 실제 브라우저로 테스트하고 결과를 $ORCHESTRATION_META/{키}/test-runs/{시각}/ 에 회차별로(덮어쓰지 않게) 저장하고 화면에도 통과/실패/보류를 한눈에 보이는 틀로 출력한다(보류는 사유를 함께 적는다). 진행 상태는 이슈 폴더 루트의 단일 status.md(테스트 실행 이력 표·현재 단계)를 갱신한다. 검증은 여기까지이며 상태를 자동으로 "해결"로 올리지 않는다(해결 표시는 dobby-resolve 담당). 테스트가 끝나면 완료 요약을 회차 폴더에 summary.html 로 남기고(대시보드 검증 탭에서 회차마다 다시 볼 수 있다), 그동안 연 브라우저 페이지를 닫아 정리한 뒤 남은 한 장에 그 파일을 띄운다. 사용법 /dobby-test {키|브랜치} 또는 /dobby-test (현재 브랜치).
 ---
 
 # dobby-test
@@ -139,22 +139,28 @@ description: 구현한 내용이 실제 환경에서 정상 동작하는지 chro
 
 테스트로 연 페이지를 그대로 두면 회차를 거듭할수록 탭이 쌓인다. **결과를 저장한 뒤** 정리하고, 마지막 한 장에 완료 요약을 띄운다.
 
-1. `list_pages`로 현재 목록을 받는다.
-2. **6-0에서 적어 둔 id에 없는 페이지**(= 이번 테스트가 연 것) 중 **한 장만 남기고** 닫는다.
-3. 남긴 그 장에 아래 요약을 그린다(`evaluate_script`).
-4. 이번 테스트가 연 페이지가 하나도 없으면 **아무것도 하지 않는다** — 새 탭을 열지 않는다.
+1. **요약 화면을 파일로 쓴다**: `{결과폴더}/summary.html` (Write 도구). `{결과폴더}`는 6-0에서 `dobby_testrun_new` 가 돌려준 그 폴더다.
+2. `list_pages`로 현재 목록을 받는다.
+3. **6-0에서 적어 둔 id에 없는 페이지**(= 이번 테스트가 연 것) 중 **한 장만 남기고** 닫는다.
+4. 남긴 그 장을 `navigate_page` 로 `file://{결과폴더}/summary.html` 로 보낸다.
+5. 이번 테스트가 연 페이지가 하나도 없으면 **파일만 쓰고 끝낸다** — 새 탭을 열지 않는다.
 
 ⛔ **6-0에 적어 둔 페이지는 닫지도, 덮어쓰지도 않는다** — 사용자가 쓰던 탭이다.
-⛔ 마지막 한 장은 닫히지 않는다(도구가 `The last open page cannot be closed`로 거절한다). 그 장이 곧 요약을 그릴 자리다.
+⛔ 마지막 한 장은 닫히지 않는다(도구가 `The last open page cannot be closed`로 거절한다). 그 장이 곧 요약을 띄울 자리다.
 
-**요약 그리기** — 빈 문서에 직접 써 넣는다. 파일도 서버도 만들지 않고, 탭을 닫으면 사라진다.
+**⛔ 임시 폴더에 쓰지 않는다.** 결과 폴더에 result.md 와 나란히 둔다. 임시 폴더에 만들면 탭을 닫는 순간 잃어버려 "그때 뭐가 실패했더라"를 다시 볼 수 없다. 결과 폴더에 있으면 **대시보드 검증 탭이 회차마다 `요약 화면` 링크를 띄워** 언제든 다시 열 수 있다.
 
-⚠️ **`head.innerHTML` 을 먼저 쓰고 `document.title` 을 나중에 준다.** 순서를 바꾸면 head를
-덮어쓸 때 `<title>` 이 함께 지워져 탭 제목이 빈다(실측).
+**요약 파일** — 통짜 HTML 한 장. `<!doctype html>` 부터 `</html>` 까지 스스로 갖춘다.
 
-```js
-document.head.innerHTML = `<meta charset="utf-8"><style>
-  :root{color-scheme:light}
+```html
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{키} 검증 결과 {N}회차</title>
+<style>
+  :root{color-scheme:light dark}
   body{margin:0;padding:40px;background:#fafafa;color:#1f1f1f;
        font:15px/1.7 -apple-system,"Apple SD Gothic Neo","Malgun Gothic",sans-serif}
   .wrap{max-width:760px;margin:0 auto}
@@ -167,12 +173,13 @@ document.head.innerHTML = `<meta charset="utf-8"><style>
   .k{color:#8c8c8c;margin-right:6px}
   .pass{color:#52c41a}.failc{color:#ff4d4f}
   footer{margin-top:28px;color:#bfbfbf;font-size:12px}
-</style>`;
-document.body.innerHTML = `<div class="wrap">…</div>`;
-document.title = "{키} 테스트 완료 — 통과 8 · 실패 1 · 보류 2";   // head 다음에
+</style>
+</head>
+<body><div class="wrap">…</div></body>
+</html>
 ```
 
-담을 것과 순서는 **7단계 화면 출력과 같다**(터미널과 브라우저가 다른 말을 하지 않게).
+담을 것과 순서는 **7단계 화면 출력과 같다**(터미널과 브라우저와 파일이 다른 말을 하지 않게).
 
 | 자리 | 내용 |
 |---|---|
@@ -184,10 +191,10 @@ document.title = "{키} 테스트 완료 — 통과 8 · 실패 1 · 보류 2"; 
 | 통과 | `S1 S2 S3 …` 번호만 |
 | 맨 아래 | 결과 파일 경로 |
 
-⛔ **바깥에서 무엇도 받아오지 않는다.** 글꼴 CDN도 쓰지 않는다 — 인터넷이 끊기면 지연되고, 테스트 브라우저에 외부 요청을 남긴다. 위 시스템 글꼴로 충분하다.
-⛔ 요약 화면을 따로 찍어 저장하지 않는다. 같은 내용이 이미 result.md에 글로 있다.
+⛔ **바깥에서 무엇도 받아오지 않는다.** 글꼴·스크립트 CDN도 쓰지 않는다 — 인터넷이 끊기면 지연되고, 나중에 대시보드에서 다시 열 때도 깨진다. 위 시스템 글꼴로 충분하다. 그림이 필요하면 같은 폴더의 스크린샷을 상대 경로로 가리킨다.
+⛔ 요약 화면을 **따로 찍어(screenshot) 저장하지 않는다.** 파일 자체가 남으므로 그림은 필요 없다.
 
-스크린샷·네트워크 기록은 이미 결과 폴더에 저장돼 있으므로, 페이지를 닫아도 잃는 것이 없다.
+스크린샷·네트워크 기록·요약 화면이 모두 결과 폴더에 있으므로, 페이지를 닫아도 잃는 것이 없다.
 
 ## 주의
 
