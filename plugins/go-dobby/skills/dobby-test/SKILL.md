@@ -1,6 +1,6 @@
 ---
 name: dobby-test
-description: 구현한 내용이 실제 환경에서 정상 동작하는지 chrome-devtools로 검증하는 스킬. dobby-start가 만든 test-plan.md가 있으면 재사용하고 없으면 변경(diff)을 분석해 테스트 목록을 도출한 뒤, 국내/글로벌 국가 전환·로그인을 포함해 실제 브라우저로 테스트하고 결과를 $ORCHESTRATION_META/{키}/test-runs/{시각}/ 에 회차별로(덮어쓰지 않게) 저장하고 화면에도 통과/실패/보류를 한눈에 보이는 틀로 출력한다(보류는 사유를 함께 적는다). 진행 상태는 이슈 폴더 루트의 단일 status.md(테스트 실행 이력 표·현재 단계)를 갱신한다. 검증은 여기까지이며 상태를 자동으로 "해결"로 올리지 않는다(해결 표시는 dobby-resolve 담당). 테스트가 끝나면 그동안 연 브라우저 페이지를 닫아 정리한다. 사용법 /dobby-test {키|브랜치} 또는 /dobby-test (현재 브랜치).
+description: 구현한 내용이 실제 환경에서 정상 동작하는지 chrome-devtools로 검증하는 스킬. dobby-start가 만든 test-plan.md가 있으면 재사용하고 없으면 변경(diff)을 분석해 테스트 목록을 도출한 뒤, 국내/글로벌 국가 전환·로그인을 포함해 실제 브라우저로 테스트하고 결과를 $ORCHESTRATION_META/{키}/test-runs/{시각}/ 에 회차별로(덮어쓰지 않게) 저장하고 화면에도 통과/실패/보류를 한눈에 보이는 틀로 출력한다(보류는 사유를 함께 적는다). 진행 상태는 이슈 폴더 루트의 단일 status.md(테스트 실행 이력 표·현재 단계)를 갱신한다. 검증은 여기까지이며 상태를 자동으로 "해결"로 올리지 않는다(해결 표시는 dobby-resolve 담당). 테스트가 끝나면 그동안 연 브라우저 페이지를 닫아 정리하고, 남은 한 장에 완료 요약을 띄운다. 사용법 /dobby-test {키|브랜치} 또는 /dobby-test (현재 브랜치).
 ---
 
 # dobby-test
@@ -130,16 +130,58 @@ description: 구현한 내용이 실제 환경에서 정상 동작하는지 chro
 - 보류가 하나도 없으면 그 칸은 통째로 뺀다. 실패가 없으면 마찬가지.
 - 같은 내용을 result.md 에도 남긴다(화면 출력은 요약, 파일은 근거까지).
 
-### 8. 브라우저 정리 (마감 뒤 반드시)
+### 8. 브라우저 정리 + 완료 표시 (마감 뒤 반드시)
 
-테스트로 연 페이지를 그대로 두면 회차를 거듭할수록 탭이 쌓이고, 다음 회차에서 어느 페이지를 보고 있는지 헷갈린다. **결과를 저장한 뒤** 정리한다.
+테스트로 연 페이지를 그대로 두면 회차를 거듭할수록 탭이 쌓인다. **결과를 저장한 뒤** 정리하고, 마지막 한 장에 완료 요약을 띄운다.
 
 1. `list_pages`로 현재 목록을 받는다.
-2. **6-0에서 적어 둔 id에 없는 페이지**(= 이번 테스트가 연 것)를 `close_page`로 닫는다.
-3. 남은 페이지가 하나뿐이면 `navigate_page`로 `about:blank`에 보내 비워 둔다.
+2. **6-0에서 적어 둔 id에 없는 페이지**(= 이번 테스트가 연 것) 중 **한 장만 남기고** 닫는다.
+3. 남긴 그 장에 아래 요약을 그린다(`evaluate_script`).
+4. 이번 테스트가 연 페이지가 하나도 없으면 **아무것도 하지 않는다** — 새 탭을 열지 않는다.
 
-⛔ **6-0에 적어 둔 페이지는 닫지 않는다** — 사용자가 쓰던 탭이다.
-⛔ 마지막 한 장은 닫히지 않는다(도구가 `The last open page cannot be closed`로 거절한다). 오류가 아니니 그대로 두고 3번으로 비우면 된다.
+⛔ **6-0에 적어 둔 페이지는 닫지도, 덮어쓰지도 않는다** — 사용자가 쓰던 탭이다.
+⛔ 마지막 한 장은 닫히지 않는다(도구가 `The last open page cannot be closed`로 거절한다). 그 장이 곧 요약을 그릴 자리다.
+
+**요약 그리기** — 빈 문서에 직접 써 넣는다. 파일도 서버도 만들지 않고, 탭을 닫으면 사라진다.
+
+⚠️ **`head.innerHTML` 을 먼저 쓰고 `document.title` 을 나중에 준다.** 순서를 바꾸면 head를
+덮어쓸 때 `<title>` 이 함께 지워져 탭 제목이 빈다(실측).
+
+```js
+document.head.innerHTML = `<meta charset="utf-8"><style>
+  :root{color-scheme:light}
+  body{margin:0;padding:40px;background:#fafafa;color:#1f1f1f;
+       font:15px/1.7 -apple-system,"Apple SD Gothic Neo","Malgun Gothic",sans-serif}
+  .wrap{max-width:760px;margin:0 auto}
+  .verdict{font-size:34px;font-weight:700;margin:0 0 4px}
+  .sub{color:#8c8c8c;margin:0 0 20px}
+  .bar{display:flex;height:6px;border-radius:3px;overflow:hidden;margin-bottom:28px}
+  h2{font-size:15px;margin:24px 0 8px}
+  .item{padding:10px 14px;background:#fff;border:1px solid #f0f0f0;border-radius:6px;margin-bottom:6px}
+  .item.fail{border-left:3px solid #ff4d4f}
+  .k{color:#8c8c8c;margin-right:6px}
+  .pass{color:#52c41a}.failc{color:#ff4d4f}
+  footer{margin-top:28px;color:#bfbfbf;font-size:12px}
+</style>`;
+document.body.innerHTML = `<div class="wrap">…</div>`;
+document.title = "{키} 테스트 완료 — 통과 8 · 실패 1 · 보류 2";   // head 다음에
+```
+
+담을 것과 순서는 **7단계 화면 출력과 같다**(터미널과 브라우저가 다른 말을 하지 않게).
+
+| 자리 | 내용 |
+|---|---|
+| 맨 위 | 판정 한 줄 — `통과` 또는 `실패 N건`, 글자를 크게 |
+| 그 아래 | `{키} · {N}회차 · {환경}` |
+| 막대 | 통과 초록 `#52c41a` · 실패 빨강 `#ff4d4f` · 보류 회색 `#bfbfbf` 비율대로 |
+| 실패 | 시나리오 · 기대 · 실제 · 재현 (없으면 이 칸 통째 생략) |
+| 보류 | 시나리오 · 왜 못 했나 (없으면 생략) |
+| 통과 | `S1 S2 S3 …` 번호만 |
+| 맨 아래 | 결과 파일 경로 |
+
+⛔ **바깥에서 무엇도 받아오지 않는다.** 글꼴 CDN도 쓰지 않는다 — 인터넷이 끊기면 지연되고, 테스트 브라우저에 외부 요청을 남긴다. 위 시스템 글꼴로 충분하다.
+⛔ 요약 화면을 따로 찍어 저장하지 않는다. 같은 내용이 이미 result.md에 글로 있다.
+
 스크린샷·네트워크 기록은 이미 결과 폴더에 저장돼 있으므로, 페이지를 닫아도 잃는 것이 없다.
 
 ## 주의
