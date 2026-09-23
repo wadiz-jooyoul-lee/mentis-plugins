@@ -383,12 +383,13 @@ dobby_blocking() {
   printf '%s' "$n"
 }
 
-# dobby_testrun_new KEY [총시나리오수] — 회차를 자동 계산(기존 test-runs/ 폴더 수 + 1)하고
+# dobby_testrun_new KEY [총시나리오수] [환경] — 회차를 자동 계산(기존 test-runs/ 폴더 수 + 1)하고
 # test-runs/{ts}/ + result.md 골격을 만든 뒤, status.md '## 테스트 실행 이력' 표에
 # 이번 회차 행(상태 테스트중·집계 0/0/0)을 추가한다. 폴더 경로 stdout.
 # (집계 칸의 "(전체 N)"은 참고 표기 — 대시보드는 앞 숫자 3개(성공/실패/skip)만 읽는다.)
+# 환경(dev·rc4 등)은 result.md 머리의 `- **환경**:` 줄로 들어간다 — 대시보드 검증 탭의 환경 칸.
 dobby_testrun_new() {
-  local key="$1" total="${2:-}" n dir sf now
+  local key="$1" total="${2:-}" env="${3:-}" n dir sf now
   n="$(find "$(_order_dir "$key")/test-runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
   n=$((n + 1))
   dir="$(_order_dir "$key")/test-runs/$(_ts)"; mkdir -p "$dir"
@@ -397,12 +398,17 @@ dobby_testrun_new() {
   # 스킬은 칸만 채우게 한다. 마커는 대시보드가 이 표를 정확히 집게 하는 표시다.
   if [ ! -f "$dir/result.md" ]; then
     {
-      printf '# %s 테스트 결과 — 회차 %s\n\n(진행 중)\n\n' "$key" "$n"
+      printf '# %s 테스트 결과 — 회차 %s\n\n' "$key" "$n"
+      # 환경도 **여기서 깔아 준다**. 스킬이 본문 아무 데나 적던 때는 회차 77개 중 39개만
+      # 환경이 남아(절반) 대시보드 환경 칸이 비었다. 비어 있어도 줄은 남겨 채우게 한다.
+      printf -- '- **환경**: %s\n\n(진행 중)\n\n' "$env"
       printf '## 시나리오별 결과\n\n<!-- dobby:scenarios -->\n'
-      printf '| # | 페이지 / URL | 확인 항목 | 기대 | 실제 | 판정 | 근거 |\n'
-      printf '|---|---|---|---|---|---|---|\n'
+      # `조건` 칸은 이 시나리오가 확인하는 해결 조건 번호(C1 등, status.md '## 닫히는 조건 항목').
+      # 이 칸이 있어야 대시보드가 "조건 N개 중 M개 확인"을 스스로 말할 수 있다.
+      printf '| # | 조건 | 페이지 / URL | 확인 항목 | 기대 | 실제 | 판정 | 근거 |\n'
+      printf '|---|---|---|---|---|---|---|---|\n'
       if [ -n "$total" ] && [ "$total" -eq "$total" ] 2>/dev/null; then
-        i=1; while [ "$i" -le "$total" ]; do printf '| S%s |  |  |  |  |  |  |\n' "$i"; i=$((i+1)); done
+        i=1; while [ "$i" -le "$total" ]; do printf '| S%s |  |  |  |  |  |  |  |\n' "$i"; i=$((i+1)); done
       fi
     } > "$dir/result.md"
   fi
@@ -527,6 +533,27 @@ dobby_set_scope() {
       if (insec && !done && $0 ~ /^[ \t]*-[ \t]*\*\*제목\*\*/) { print "- **닫히는 조건**: " s; done=1 }
     }
   ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+
+# dobby_add_condition KEY "조건 한 줄" — status.md '## 닫히는 조건 항목' 표에 C{n} 행을 붙인다(번호 자동).
+# 한 줄짜리 `닫히는 조건`을 **확인할 수 있는 단위로 쪼갠 것**이다. 테스트 시나리오가 이 번호를 달고
+# (result.md `조건` 칸), 대시보드 검증 탭이 "조건 N개 중 M개 확인"을 이 표와 대조해 말한다.
+# ⛔ 한 줄을 기계로 쪼개지 않는다 — `고아 훅/쿼리키/tsconfig 정리`처럼 구분 기호가 뜻 안에도 들어가
+#    잘못 잘린다. P1에서 사람이 한 번 나눠 부르는 쪽이 정확하다.
+# 범위가 넓어지면(P8) 같은 방식으로 한 줄 더 부르면 된다 — 기존 번호는 그대로 둔다.
+dobby_add_condition() {
+  local key="$1" text="$2" f n
+  f="$(_order_dir "$key")/status.md"
+  [ -f "$f" ] || return 0
+  [ -n "$text" ] || return 0
+  n="$(awk '/^## /{ins=(index($0,"닫히는 조건 항목")>0)?1:0; next}
+            ins==1 && /^\| *C[0-9]+ *\|/{c++}
+            END{print c+0}' "$f")"
+  n=$((n + 1))
+  _table_row_append "$f" "닫히는 조건 항목" \
+    "| # | 조건 |" "|----|------|" \
+    "| C$n | $text |"
+  printf 'C%s' "$n"
 }
 
 # dobby_append KEY FILE "블록"  — 오더 메타의 append-only 문서(decisions.md 등)에 블록을 '읽기 없이' 뒤에 붙인다.

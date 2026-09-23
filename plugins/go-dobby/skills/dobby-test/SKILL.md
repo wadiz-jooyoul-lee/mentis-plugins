@@ -1,6 +1,6 @@
 ---
 name: dobby-test
-description: 구현한 내용이 실제 환경에서 정상 동작하는지 chrome-devtools로 검증하는 스킬. dobby-start가 만든 test-plan.md가 있으면 재사용하고 없으면 변경(diff)을 분석해 테스트 목록을 도출한 뒤, 국내/글로벌 국가 전환·로그인을 포함해 실제 브라우저로 테스트하고 결과를 $ORCHESTRATION_META/{키}/test-runs/{시각}/ 에 회차별로(덮어쓰지 않게) 저장하고 화면에도 통과/실패/보류를 한눈에 보이는 틀로 출력한다(보류는 사유를 함께 적는다). 진행 상태는 이슈 폴더 루트의 단일 status.md(테스트 실행 이력 표·현재 단계)를 갱신한다. 검증은 여기까지이며 상태를 자동으로 "해결"로 올리지 않는다(해결 표시는 dobby-resolve 담당). 테스트가 끝나면 그동안 연 브라우저 페이지를 닫아 정리한다. 사용법 /dobby-test {키|브랜치} 또는 /dobby-test (현재 브랜치).
+description: 구현한 내용이 실제 환경에서 정상 동작하는지 chrome-devtools로 검증하는 스킬. dobby-start가 만든 test-plan.md가 있으면 재사용하고 없으면 변경(diff)을 분석해 테스트 목록을 도출한 뒤, 국내/글로벌 국가 전환·로그인을 포함해 실제 브라우저로 테스트하고 결과를 $ORCHESTRATION_META/{키}/test-runs/{시각}/ 에 회차별로(덮어쓰지 않게) 저장하고 화면에도 통과/실패/보류를 한눈에 보이는 틀로 출력한다(보류는 사유를 함께 적는다). 진행 상태는 이슈 폴더 루트의 단일 status.md(테스트 실행 이력 표·현재 단계)를 갱신한다. 검증은 여기까지이며 상태를 자동으로 "해결"로 올리지 않는다(해결 표시는 dobby-resolve 담당). 테스트가 끝나면 그동안 연 브라우저 페이지를 닫아 정리하고, 남은 한 장에 완료 요약을 띄운다. 사용법 /dobby-test {키|브랜치} 또는 /dobby-test (현재 브랜치).
 ---
 
 # dobby-test
@@ -13,7 +13,7 @@ description: 구현한 내용이 실제 환경에서 정상 동작하는지 chro
 
 ## 설정 (첫 실행 시 확인)
 
-작업을 시작하기 전에 **`${CLAUDE_PLUGIN_ROOT}/reference/config.md`의 "설정 절차"를 그대로 따른다**: `~/.config/go-dobby/config.env`를 source 해 환경 변수를 **읽기만** 한다. ⛔ **이 스킬은 config.env를 저장·수정·생성하지 않는다**(값 변경은 `dobby-init` 전용 — config.md '비파괴 원칙'). config.env 파일이 아예 없으면 멈추고 `/dobby-init`을 먼저 실행하도록 안내한다. 메타 루트 `ORCHESTRATION_META`, 변수 목록·기본값, 폴더 배치(워크트리 `$ORCHESTRATION_WORKSPACE/subtree/` · 메타 `$ORCHESTRATION_META/`)는 모두 그 문서에 있다. 이하 메타 경로는 `$ORCHESTRATION_META` 기준. **공용 헬퍼(config.md '공용 헬퍼', 이미 source됨)**: 회차 시작은 `dobby_testrun_new 키 [전체시나리오수]`(회차 자동 계산 + 폴더/result.md 골격 + status.md 이력 표 행 추가, 폴더 경로 반환), 회차 행 갱신은 `dobby_testrun_update 키 {폴더시각} {상태} [성공/실패/skip]`(그 행만 수정 — status.md 통독 금지), 현재 단계 전이는 `dobby_phase 키 검증`.
+작업을 시작하기 전에 **`${CLAUDE_PLUGIN_ROOT}/reference/config.md`의 "설정 절차"를 그대로 따른다**: `~/.config/go-dobby/config.env`를 source 해 환경 변수를 **읽기만** 한다. ⛔ **이 스킬은 config.env를 저장·수정·생성하지 않는다**(값 변경은 `dobby-init` 전용 — config.md '비파괴 원칙'). config.env 파일이 아예 없으면 멈추고 `/dobby-init`을 먼저 실행하도록 안내한다. 메타 루트 `ORCHESTRATION_META`, 변수 목록·기본값, 폴더 배치(워크트리 `$ORCHESTRATION_WORKSPACE/subtree/` · 메타 `$ORCHESTRATION_META/`)는 모두 그 문서에 있다. 이하 메타 경로는 `$ORCHESTRATION_META` 기준. **공용 헬퍼(config.md '공용 헬퍼', 이미 source됨)**: 회차 시작은 `dobby_testrun_new 키 [전체시나리오수] [환경]`(회차 자동 계산 + 폴더/result.md 골격 + status.md 이력 표 행 추가, 폴더 경로 반환), 회차 행 갱신은 `dobby_testrun_update 키 {폴더시각} {상태} [성공/실패/skip]`(그 행만 수정 — status.md 통독 금지), 현재 단계 전이는 `dobby_phase 키 검증`.
 
 ## 산출물 (단일 이슈 폴더)
 
@@ -55,17 +55,22 @@ description: 구현한 내용이 실제 환경에서 정상 동작하는지 chro
 
 ### 6. 테스트 수행
 #### 6-0. 시작 전 준비 (조작 전에 반드시 먼저)
-1. **결과 폴더·이력 행·골격 생성**: **→ 헬퍼 `dobby_testrun_new {키} {전체 시나리오 수}`** — 회차 자동 계산(기존 폴더 수+1)·`test-runs/{시각}/`+`result.md` 골격 생성·status.md `테스트 실행 이력` 표에 이번 회차 행(상태 `테스트중`·집계 `0/0/0`) 추가까지 한 번에 한다. 반환된 폴더 경로를 이후 단계에 쓴다.
-2. **현재 단계 전이**: `dobby_phase {키} 검증`.
-3. **시나리오 표는 이미 깔려 있다 — 칸만 채운다**: `dobby_testrun_new` 가 result.md 에 표식과 머리글, 시나리오 수만큼의 빈 행을 만들어 둔다.
+1. **결과 폴더·이력 행·골격 생성**: **→ 헬퍼 `dobby_testrun_new {키} {전체 시나리오 수} {환경}`** — 회차 자동 계산(기존 폴더 수+1)·`test-runs/{시각}/`+`result.md` 골격 생성·status.md `테스트 실행 이력` 표에 이번 회차 행(상태 `테스트중`·집계 `0/0/0`) 추가까지 한 번에 한다. 반환된 폴더 경로를 이후 단계에 쓴다.
+   - **환경은 꼭 넘긴다**(`dev`·`rc1`·`rc4`·`stage`·`prod` 중 이번에 본 곳). 4단계에서 확인한 배포 대상이다. 안 넘기면 result.md 머리의 `- **환경**:` 이 빈칸으로 남고 대시보드 검증 탭의 환경 칸이 비어 "어디서 본 결과인지" 알 수 없게 된다(실측: 쌓인 회차 77개 중 39개만 환경이 남아 있었다).
+2. **해결 조건을 먼저 읽는다**: `status.md` 의 `## 닫히는 조건 항목` 표(`C1`·`C2`…)를 읽어 둔다. 없으면 없는 대로 진행하고, 아래 `조건` 칸은 비워 둔다.
+3. **현재 단계 전이**: `dobby_phase {키} 검증`.
+4. **시나리오 표는 이미 깔려 있다 — 칸만 채운다**: `dobby_testrun_new` 가 result.md 에 표식과 머리글, 시나리오 수만큼의 빈 행을 만들어 둔다.
 
 ```markdown
 <!-- dobby:scenarios -->
-| # | 페이지 / URL | 확인 항목 | 기대 | 실제 | 판정 | 근거 |
-|---|---|---|---|---|---|---|
-| S1 |  |  |  |  |  |  |
+| # | 조건 | 페이지 / URL | 확인 항목 | 기대 | 실제 | 판정 | 근거 |
+|---|---|---|---|---|---|---|---|
+| S1 | C1 |  |  |  |  |  |  |
 ```
 
+   - **`조건` 칸에는 `C` 번호만 적는다**(`C1`, 여럿이면 `C1·C2`). 조건 문장을 옮겨 적지 않는다.
+     이 시나리오가 어느 해결 조건을 확인하는지 대는 칸이고, 대시보드가 이 번호로 "조건 3가지 중
+     3가지 확인"을 센다. 짚을 조건이 없으면(회귀 확인용 등) 비워 둔다.
    - ⛔ **머리글·컬럼·표식을 바꾸지 않는다.** 표를 새로 짓지도 않는다. 회차마다 제멋대로 지어
      대시보드가 칸을 못 읽던 문제가 있었다(75회차에 머리글이 20가지 넘게 나왔다).
    - 적을 것이 없는 칸은 **빈 채로 둔다**(대시보드가 빈 칸만 있는 컬럼은 알아서 감춘다).
@@ -75,7 +80,7 @@ description: 구현한 내용이 실제 환경에서 정상 동작하는지 chro
      읽히지 않는다.
    - 이 표 말고 회차 요약을 따로 적을 때는 **`판정` 이라는 컬럼명을 쓰지 않는다**(`구분 | 건수`).
      쓰면 대시보드가 그 집계표를 시나리오 표로 착각한다.
-4. **원래 열려 있던 페이지를 적어 둔다**: `list_pages`로 지금 열린 페이지의 id를 기록한다. 8단계에서 **테스트가 연 것만** 닫기 위해 필요하다 — 사용자가 보고 있던 탭을 닫으면 안 된다.
+5. **원래 열려 있던 페이지를 적어 둔다**: `list_pages`로 지금 열린 페이지의 id를 기록한다. 8단계에서 **테스트가 연 것만** 닫기 위해 필요하다 — 사용자가 보고 있던 탭을 닫으면 안 된다.
 
 #### 6-1. 시나리오 루프 (각 시나리오 4스텝 한 세트)
 1. **조작**: `navigate_page`·`take_snapshot`·`click`/`fill`. 리다이렉트·상태코드는 `list_network_requests`(`includePreservedRequests: true`)로 확인. 화면은 `take_screenshot`으로 결과 폴더에 저장.
@@ -130,16 +135,58 @@ description: 구현한 내용이 실제 환경에서 정상 동작하는지 chro
 - 보류가 하나도 없으면 그 칸은 통째로 뺀다. 실패가 없으면 마찬가지.
 - 같은 내용을 result.md 에도 남긴다(화면 출력은 요약, 파일은 근거까지).
 
-### 8. 브라우저 정리 (마감 뒤 반드시)
+### 8. 브라우저 정리 + 완료 표시 (마감 뒤 반드시)
 
-테스트로 연 페이지를 그대로 두면 회차를 거듭할수록 탭이 쌓이고, 다음 회차에서 어느 페이지를 보고 있는지 헷갈린다. **결과를 저장한 뒤** 정리한다.
+테스트로 연 페이지를 그대로 두면 회차를 거듭할수록 탭이 쌓인다. **결과를 저장한 뒤** 정리하고, 마지막 한 장에 완료 요약을 띄운다.
 
 1. `list_pages`로 현재 목록을 받는다.
-2. **6-0에서 적어 둔 id에 없는 페이지**(= 이번 테스트가 연 것)를 `close_page`로 닫는다.
-3. 남은 페이지가 하나뿐이면 `navigate_page`로 `about:blank`에 보내 비워 둔다.
+2. **6-0에서 적어 둔 id에 없는 페이지**(= 이번 테스트가 연 것) 중 **한 장만 남기고** 닫는다.
+3. 남긴 그 장에 아래 요약을 그린다(`evaluate_script`).
+4. 이번 테스트가 연 페이지가 하나도 없으면 **아무것도 하지 않는다** — 새 탭을 열지 않는다.
 
-⛔ **6-0에 적어 둔 페이지는 닫지 않는다** — 사용자가 쓰던 탭이다.
-⛔ 마지막 한 장은 닫히지 않는다(도구가 `The last open page cannot be closed`로 거절한다). 오류가 아니니 그대로 두고 3번으로 비우면 된다.
+⛔ **6-0에 적어 둔 페이지는 닫지도, 덮어쓰지도 않는다** — 사용자가 쓰던 탭이다.
+⛔ 마지막 한 장은 닫히지 않는다(도구가 `The last open page cannot be closed`로 거절한다). 그 장이 곧 요약을 그릴 자리다.
+
+**요약 그리기** — 빈 문서에 직접 써 넣는다. 파일도 서버도 만들지 않고, 탭을 닫으면 사라진다.
+
+⚠️ **`head.innerHTML` 을 먼저 쓰고 `document.title` 을 나중에 준다.** 순서를 바꾸면 head를
+덮어쓸 때 `<title>` 이 함께 지워져 탭 제목이 빈다(실측).
+
+```js
+document.head.innerHTML = `<meta charset="utf-8"><style>
+  :root{color-scheme:light}
+  body{margin:0;padding:40px;background:#fafafa;color:#1f1f1f;
+       font:15px/1.7 -apple-system,"Apple SD Gothic Neo","Malgun Gothic",sans-serif}
+  .wrap{max-width:760px;margin:0 auto}
+  .verdict{font-size:34px;font-weight:700;margin:0 0 4px}
+  .sub{color:#8c8c8c;margin:0 0 20px}
+  .bar{display:flex;height:6px;border-radius:3px;overflow:hidden;margin-bottom:28px}
+  h2{font-size:15px;margin:24px 0 8px}
+  .item{padding:10px 14px;background:#fff;border:1px solid #f0f0f0;border-radius:6px;margin-bottom:6px}
+  .item.fail{border-left:3px solid #ff4d4f}
+  .k{color:#8c8c8c;margin-right:6px}
+  .pass{color:#52c41a}.failc{color:#ff4d4f}
+  footer{margin-top:28px;color:#bfbfbf;font-size:12px}
+</style>`;
+document.body.innerHTML = `<div class="wrap">…</div>`;
+document.title = "{키} 테스트 완료 — 통과 8 · 실패 1 · 보류 2";   // head 다음에
+```
+
+담을 것과 순서는 **7단계 화면 출력과 같다**(터미널과 브라우저가 다른 말을 하지 않게).
+
+| 자리 | 내용 |
+|---|---|
+| 맨 위 | 판정 한 줄 — `통과` 또는 `실패 N건`, 글자를 크게 |
+| 그 아래 | `{키} · {N}회차 · {환경}` |
+| 막대 | 통과 초록 `#52c41a` · 실패 빨강 `#ff4d4f` · 보류 회색 `#bfbfbf` 비율대로 |
+| 실패 | 시나리오 · 기대 · 실제 · 재현 (없으면 이 칸 통째 생략) |
+| 보류 | 시나리오 · 왜 못 했나 (없으면 생략) |
+| 통과 | `S1 S2 S3 …` 번호만 |
+| 맨 아래 | 결과 파일 경로 |
+
+⛔ **바깥에서 무엇도 받아오지 않는다.** 글꼴 CDN도 쓰지 않는다 — 인터넷이 끊기면 지연되고, 테스트 브라우저에 외부 요청을 남긴다. 위 시스템 글꼴로 충분하다.
+⛔ 요약 화면을 따로 찍어 저장하지 않는다. 같은 내용이 이미 result.md에 글로 있다.
+
 스크린샷·네트워크 기록은 이미 결과 폴더에 저장돼 있으므로, 페이지를 닫아도 잃는 것이 없다.
 
 ## 주의
