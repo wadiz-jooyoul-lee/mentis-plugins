@@ -361,6 +361,15 @@ dobby_review_path() {
   local dir; dir="$(_order_dir "$1")/reviews/round-$2"; mkdir -p "$dir"
   printf '%s/%s.md' "$dir" "$3"
 }
+# _order_phase KEY — status.md `## 현재 단계`의 `- **단계**:` 값. 없으면 빈 문자열.
+_order_phase() {
+  local f
+  f="$(_order_dir "$1")/status.md"
+  [ -f "$f" ] || return 0
+  grep -m1 -E '^[ \t]*-[ \t]*\*\*단계\*\*' "$f" 2>/dev/null \
+    | sed -E 's/.*[:：][ \t]*//; s/[*`]//g; s/[ \t]+$//'
+}
+
 # _order_worktree KEY — status.md '## 워크트리 / 브랜치' 표의 첫 경로(물결표 펼침). 없으면 빈 문자열.
 _order_worktree() {
   local f p
@@ -1810,6 +1819,15 @@ dobby_discard_purge() {
 # 훅(pre-bash.sh G1)은 생 명령을 막는 마지막 방어선이고, 여기는 정상 경로다.
 # ─────────────────────────────────────────────────────────────────────────────
 
+# 배송을 시작할 수 있는 현재 단계(status.md `- **단계**:`).
+#
+# 정본은 착수·분석·구현·리뷰·통합·검증·해결·종료 여덟이다(dobby-start status.md 스키마).
+# ⛔ `완료` 는 **에이전트 상태표**의 값이지 단계가 아니다 — P7 설명의 "구현 에이전트 상태를
+#    `완료`로 갱신한다"를 단계로 잘못 읽기 쉽다. 실제 메타에 `완료` 로 적힌 오더가 4개 있어
+#    받아는 주되, 정본으로 쓰지 않는다.
+# dobby-order 가 끝나는 지점이 `통합` 이므로 그것이 기본 진입 조건이다.
+DOBBY_SHIP_PHASES="통합 검증 해결 종료 완료"
+
 # 배송을 맡는 저장소. **여기 없는 저장소는 이 스킬이 다루지 않는다.**
 #
 # 환경 브랜치 이름·리뷰봇 유무·빌드 방식이 저장소마다 달라, 한 틀로 돌리면 조용히 틀린 일을 한다.
@@ -1856,6 +1874,15 @@ dobby_ship_pr() {
   local key="$1" wt="$2" br="$3" env="$4" title="$5" body="$6" n dirty
   _ship_has "$env" "$DOBBY_SHIP_ENVS" || { _die "배송 환경이 아니다: '$env' (허용: $DOBBY_SHIP_ENVS)"; return 1; }
   [ -d "$wt" ] || { _die "워크트리가 없다: $wt"; return 1; }
+
+  # ⛔ 통합까지 끝난 오더인가. 리뷰를 통과한 것만 내보낸다(C1).
+  local ph; ph="$(_order_phase "$key")"
+  if [ -n "$ph" ]; then
+    _ship_has "$ph" "$DOBBY_SHIP_PHASES" || {
+      _die "현재 단계가 '$ph' 다 — 배송은 통합이 끝난 뒤에 한다(허용: $DOBBY_SHIP_PHASES). dobby-order 를 먼저 P7 통합까지 진행하라."
+      return 1
+    }
+  fi
 
   # ⛔ 이 스킬이 맡는 저장소인가. 아니면 조용히 틀린 일을 하기 전에 멈춘다.
   local name; name="$(basename "$(_ship_repo "$wt")")"
