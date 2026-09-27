@@ -53,6 +53,11 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 | `dobby_blocking KEY 라운드` | P6 전이 판정 | reviews/round-N의 `## [blocker\|major]` 카드 헤더 집계(숫자 stdout). 카드 형식 없는 파일은 경고 — 그 파일만 직접 읽어 판정 |
 | `dobby_testrun_new KEY [전체시나리오수] [환경]` | dobby-test 시작 | 회차 자동 계산 + test-runs/{시각}/ + result.md 골격(`- **환경**:` 줄·`조건` 칸 포함) + status.md 이력 표 행 추가(경로 stdout) |
 | `dobby_testrun_update KEY 폴더시각 상태 [성공/실패/skip]` | 시나리오마다·마감 | 이력 표의 그 회차 행만 상태·집계 수정(통독 없음) |
+| `dobby_ship_pr KEY 워크트리 브랜치 환경 "제목" "본문"` | dobby-ship 2단계 | PR 생성(번호 stdout). **환경이 dev·rc1·rc4·stage 가 아니면·미커밋이 남아 있으면 거부**, 이미 열린 PR 은 재사용, dev 외에는 `--reviewer wadiz-fe/fe1-team` 자동 부착 |
+| `dobby_ship_merge KEY PR번호` | dobby-ship 5단계 | 머지. **베이스가 dev·rc1·rc4 가 아니면·충돌이면·미반영 변경요청이 있으면 거부**(stage·정식 배포 베이스는 사용자가 직접) |
+| `dobby_ship_round KEY` | dobby-ship 리뷰 반영 직전 | 회차 stdout. **4회째면 거부**하고 배송 단계에 `리뷰 왕복 3회 — 사람 확인 필요` 기록 |
+| `dobby_ship_verify KEY "필요번들" "확인된번들"` | dobby-ship 8단계 | 배포 대조. **빠진 번들이 있으면 거부**(반쪽 배포로 테스트 차단 — 사례 FE1-1808) |
+| `dobby_ship_stage KEY "단계"` | dobby-ship 단계 전이마다 | status.md `- **배송 단계**:` upsert(여러 번 불러도 한 줄). 다음 실행이 여기서 이어받는다 |
 | `dobby_commit_push 워크트리 브랜치 "메시지"` | P6 통과 후 | commit --no-verify + push. **⛔ 메시지에 내부 용어(`round-N`·리뷰 반영·슬러그)·금지 서명(Co-Authored-By 등) 감지 시 거부**(코드 강제) |
 | `dobby_bootstrap_inline KEY "제목" 종류 슬러그 "이름" "설명" [상태] [CWD]` | P4-L·P4-C·P4-W 인라인 분기 | status 골격+제목+종류+세션+상태표 1행+agent-logs(메인 세션 전사)를 한 번에 |
 | `dobby_quips_sig KEY 슬러그` | avatar-quips | 소감 재생성 서명 계산(대시보드 공식과 자동 일치 — `__orchestrator__` 포함, 직접 암산 금지) |

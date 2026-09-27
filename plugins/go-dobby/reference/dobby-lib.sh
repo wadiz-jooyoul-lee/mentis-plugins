@@ -1735,4 +1735,129 @@ dobby_discard_purge() {
   printf '삭제: %s\n' "$src"
 }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# dobby-ship — 배송(PR → 리뷰 → 머지 → 빌드 → 배포 확인) 헬퍼
+#
+# 스킬 문서에 "⛔ …하지 마라"라고 적어 둔 것은 지켜지지 않는다(실측: 시나리오 표 머리글이
+# 회차 75개에 20가지 넘게 나왔다). 지켜야 하는 것은 **거부하는 함수**로 내린다.
+# 훅(pre-bash.sh G1)은 생 명령을 막는 마지막 방어선이고, 여기는 정상 경로다.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# 배송이 갈 수 있는 환경. clive(=cloud_live)는 없다 — dobby-order C1.
+DOBBY_SHIP_ENVS="dev rc1 rc4 stage"
+# 그중 스킬이 직접 머지해도 되는 환경. stage 는 빠져 있다 — 스테이지 반영은 사람이 시점을 고른다.
+DOBBY_SHIP_MERGE_ENVS="dev rc1 rc4"
+
+_ship_has() { case " $2 " in *" $1 "*) return 0 ;; esac; return 1; }
+
+# dobby_ship_stage KEY "단계" — status.md '## 이슈/작업'에 '- **배송 단계**: …'를 upsert.
+# 다음에 dobby-ship 이 불렸을 때 **어디부터 이어서 할지**를 이 줄로 정한다.
+dobby_ship_stage() {
+  local key="$1" st="$2" f
+  f="$(_order_dir "$key")/status.md"
+  [ -f "$f" ] || return 0
+  [ -n "$st" ] || return 0
+  awk -v s="$st" '
+    /^##/ { insec = ($0 ~ /이슈\/작업/) }
+    {
+      if (insec && $0 ~ /^[ \t]*-[ \t]*\*\*배송 단계\*\*/) { if (!done) { print "- **배송 단계**: " s; done=1 } next }
+      print
+      if (insec && !done && $0 ~ /^[ \t]*-[ \t]*\*\*닫히는 조건\*\*/) { print "- **배송 단계**: " s; done=1 }
+    }
+    END { if (!done) print "- **배송 단계**: " s }
+  ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+
+# dobby_ship_pr KEY 워크트리 브랜치 환경 "제목" "본문" — PR 생성(또는 기존 것 재사용). 번호 stdout.
+#
+# 막는 것:
+#   · 환경이 dev·rc1·rc4·stage 가 아니면 거부(clive 포함)
+#   · 워크트리에 미커밋 변경이 남아 있으면 거부 — 리뷰 통과분만 나간다(C1)
+#   · 같은 (브랜치→환경) PR 이 이미 열려 있으면 새로 만들지 않고 그 번호를 돌려준다
+# 해 주는 것:
+#   · dev 를 뺀 환경에 --reviewer wadiz-fe/fe1-team 을 **자동으로** 붙인다.
+#     리뷰 요청이 있어야 자동 코드리뷰가 돌아 승인이 붙는다. 스킬이 깜빡할 수 없게 여기서 붙인다.
+dobby_ship_pr() {
+  local key="$1" wt="$2" br="$3" env="$4" title="$5" body="$6" n dirty
+  _ship_has "$env" "$DOBBY_SHIP_ENVS" || { _die "배송 환경이 아니다: '$env' (허용: $DOBBY_SHIP_ENVS)"; return 1; }
+  [ -d "$wt" ] || { _die "워크트리가 없다: $wt"; return 1; }
+
+  dirty="$(git -C "$wt" status --porcelain 2>/dev/null | head -5)"
+  if [ -n "$dirty" ]; then
+    _die "워크트리에 미커밋 변경이 남아 있다 — 리뷰를 통과한 것만 내보낸다(C1). 먼저 dobby_commit_push 로 정리하라:
+$dirty"
+    return 1
+  fi
+
+  n="$(gh pr list --repo "$(_ship_repo "$wt")" --head "$br" --base "$env" --state open \
+        --json number -q '.[0].number' 2>/dev/null)"
+  if [ -n "$n" ]; then printf '%s' "$n"; return 0; fi
+
+  local extra=()
+  [ "$env" = "dev" ] || extra=(--reviewer wadiz-fe/fe1-team)
+  ( cd "$wt" && gh pr create --base "$env" --head "$br" --title "$title" --body "$body" "${extra[@]}" ) >&2 || return 1
+  ( cd "$wt" && gh pr list --head "$br" --base "$env" --state open --json number -q '.[0].number' )
+}
+
+# 워크트리의 저장소(owner/repo).
+_ship_repo() { git -C "$1" remote get-url origin 2>/dev/null | sed -E 's#.*github\.com[:/]##; s#\.git$##'; }
+
+# dobby_ship_merge KEY PR번호 — 머지 전에 막을 것을 다 보고 머지한다.
+#
+# 막는 것:
+#   · 베이스가 dev·rc1·rc4 가 아니면 거부(stage·cloud_live·release/* …)
+#   · 충돌(CONFLICTING)이면 거부
+#   · 반영하지 않은 변경요청(CHANGES_REQUESTED)이 남아 있으면 거부
+#     — "기다리지 않는" 환경(stage·dev)에서도 달려 있는 지적을 모르고 덮는 것을 막는다
+dobby_ship_merge() {
+  local key="$1" pr="$2" j base mergeable decision
+  [ -n "$pr" ] || { _die "PR 번호가 필요하다"; return 1; }
+  j="$(gh pr view "$pr" --json baseRefName,mergeable,reviewDecision 2>/dev/null)" \
+    || { _die "PR #$pr 을 조회하지 못했다"; return 1; }
+  base="$(printf '%s' "$j" | sed -nE 's/.*"baseRefName":"([^"]*)".*/\1/p')"
+  mergeable="$(printf '%s' "$j" | sed -nE 's/.*"mergeable":"([^"]*)".*/\1/p')"
+  decision="$(printf '%s' "$j" | sed -nE 's/.*"reviewDecision":"([^"]*)".*/\1/p')"
+
+  _ship_has "$base" "$DOBBY_SHIP_MERGE_ENVS" \
+    || { _die "베이스가 '$base' 인 PR 은 이 스킬이 머지하지 않는다(허용: $DOBBY_SHIP_MERGE_ENVS). stage·정식 배포 베이스 반영은 사용자가 직접 한다."; return 1; }
+  [ "$mergeable" != "CONFLICTING" ] \
+    || { _die "PR #$pr 에 충돌이 있다. 워크트리에서 $base 를 머지해 풀고 푸시한 뒤 다시 하라."; return 1; }
+  [ "$decision" != "CHANGES_REQUESTED" ] \
+    || { _die "PR #$pr 에 반영하지 않은 변경요청이 있다. 리뷰 내용을 읽고 처리한 뒤 다시 하라."; return 1; }
+
+  gh pr merge "$pr" --merge >&2 || return 1
+  dobby_event "$key" "PR #$pr 머지 → $base"
+}
+
+# dobby_ship_round KEY — 리뷰 반영 라운드를 하나 올린다. 4회째면 거부한다. 현재 회차 stdout.
+# 리뷰↔수정이 무한히 오가는 것을 막는다(글로 적은 "3라운드 상한"을 코드로).
+dobby_ship_round() {
+  local key="$1" f n
+  f="$(_order_dir "$key")/status.md"
+  [ -f "$f" ] || { _die "status.md 가 없다: $key"; return 1; }
+  n="$(grep -cE '^- .* PR 리뷰 [0-9]+회차' "$(_order_dir "$key")/orchestration.md" 2>/dev/null)" || n=0
+  n=$((n + 1))
+  if [ "$n" -gt 3 ]; then
+    dobby_ship_stage "$key" "리뷰 왕복 3회 — 사람 확인 필요"
+    _die "리뷰 반영이 3회를 넘었다($n회째). 무엇이 반복해서 걸리는지 정리해 사용자에게 알리고 멈춰라."
+    return 1
+  fi
+  printf '%s' "$n"
+}
+
+# dobby_ship_verify KEY "필요번들" "확인된번들" — 배포 대조. 빠진 게 있으면 거부한다.
+# 반쪽 배포 상태로 테스트하면 수정 전 동작이 관측돼 코드 결함으로 오진한다(사례 FE1-1808).
+# 인자는 공백으로 구분한 번들 이름 목록이다. 예: dobby_ship_verify FE1-1943 "static global" "static"
+dobby_ship_verify() {
+  local key="$1" need="$2" got="$3" miss="" b
+  [ -n "$need" ] || { _die "필요한 번들 목록이 비었다"; return 1; }
+  for b in $need; do _ship_has "$b" "$got" || miss="$miss $b"; done
+  if [ -n "$miss" ]; then
+    dobby_ship_stage "$key" "배포 일부 미확인 —${miss}"
+    _die "배포가 확인되지 않은 번들이 있다:${miss} (필요: $need / 확인: $got). 반쪽 배포로 테스트하면 안 된다 — 더 기다리거나 사용자에게 알려라."
+    return 1
+  fi
+  printf '배포 확인 완료: %s\n' "$need"
+}
+
 echo "dobby-lib loaded" >&2

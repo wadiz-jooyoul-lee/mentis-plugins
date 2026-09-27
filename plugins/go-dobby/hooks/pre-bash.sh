@@ -5,6 +5,8 @@
 # 여기서 마지막으로 막는 방어선이다(dobby-lib.sh 헬퍼를 안 거치고 생 명령을 칠 때 대비).
 #   G1: 정식 배포 베이스($ORCHESTRATION_DEFAULT_BASE, 기본 master)로의 push·merge·PR 금지
 #       (dobby-order C1 — master 반영은 사용자가 직접)
+#       PR 머지는 베이스가 dev·rc1·rc4 일 때만 통과(dobby-ship), 그 밖은 차단.
+#       gh workflow run 의 environment=clive(=cloud_live 배포)도 차단.
 #   G5: dobby 워크스페이스 안에서 subtree/ 밖 폴더 제거 금지 (dobby-end 안전 경계)
 #   G6: 메타 폴더($ORCHESTRATION_META) 삭제 금지 (비파괴 원칙 — 생명주기 기록 보존)
 #
@@ -175,9 +177,36 @@ if in_dobby_scope; then
     deny G1 "정식 배포 베이스($BASE)로의 PR 생성은 금지다(dobby-order C1). $BASE 반영은 사용자가 직접 한다."
   fi
 
-  # (3) gh pr merge — dobby 흐름의 브랜치 통합은 git(dobby_merge_root)으로만 한다
+  # (3) gh pr merge — 허용 베이스(dev·rc1·rc4)로만 연다.
+  #
+  # 예전에는 전면 금지였다. dobby-ship 이 이 셋으로 머지하므로 조건부로 푼다.
+  # ⛔ 그 밖(cloud_live·master·stage·release/* 등)은 그대로 막는다 — 사용자가 직접 한다.
+  #    stage 를 뺀 것은 의도적이다: 스테이지 반영은 사람이 시점을 고르는 일이다.
+  #
+  # 명령에는 베이스가 안 적혀 있다(`gh pr merge 29399 --merge`). 그래서 PR 을 조회해 확인한다.
+  # 조회에 실패하면 **막는다** — 모르면 통과가 아니라 차단이다(예전이 전면 금지였으니 안전 쪽).
+  # 인자 없이 부르면 gh 가 현재 브랜치의 PR 을 본다.
   if printf '%s' "$CMD" | grep -qE "gh[[:space:]]+pr[[:space:]]+merge"; then
-    deny G1 "gh pr merge는 dobby 흐름에서 금지다. 에이전트→루트 통합은 dobby_merge_root(git merge)로, $BASE 머지는 사용자가 직접 한다."
+    PRREF="$(printf '%s' "$CMD" \
+      | sed -nE 's/.*gh[[:space:]]+pr[[:space:]]+merge[[:space:]]+([^[:space:]-][^[:space:]]*).*/\1/p')"
+    # shellcheck disable=SC2086
+    MBASE="$( (cd "${CWD:-.}" 2>/dev/null && gh pr view $PRREF --json baseRefName -q .baseRefName) 2>/dev/null )"
+    case "$MBASE" in
+      dev|rc1|rc4) : ;;  # 허용 — dobby-ship 배송 경로
+      "")
+        deny G1 "머지 대상 PR 의 베이스를 확인하지 못했다(gh 조회 실패). 베이스를 모르면 머지하지 않는다 — PR 번호를 명시하거나 워크트리 안에서 실행하라."
+        ;;
+      *)
+        deny G1 "베이스가 '$MBASE' 인 PR 머지는 금지다(dobby-order C1). 허용 베이스는 dev·rc1·rc4 뿐이다. 정식 배포 베이스($BASE)·stage·release 반영은 사용자가 직접 한다."
+        ;;
+    esac
+  fi
+
+  # (3-1) gh workflow run — 빌드로 라이브를 건드리는 길을 막는다.
+  # `-f environment=clive` 는 워크플로가 cloud_live 브랜치로 바꿔 빌드·배포한다.
+  if printf '%s' "$CMD" | grep -qE "gh[[:space:]]+workflow[[:space:]]+run" \
+     && printf '%s' "$CMD" | grep -qE "environment[[:space:]]*=[[:space:]]*(clive|cloud_live)([[:space:]\"']|$)"; then
+    deny G1 "environment=clive 빌드는 금지다(cloud_live 배포 — dobby-order C1). 라이브 반영은 사용자가 별도 릴리스 절차로 한다."
   fi
 
   # (4) git merge — 현재 체크아웃이 베이스 브랜치면 베이스로의 머지이므로 차단
