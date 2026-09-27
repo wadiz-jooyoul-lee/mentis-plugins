@@ -361,6 +361,39 @@ dobby_review_path() {
   local dir; dir="$(_order_dir "$1")/reviews/round-$2"; mkdir -p "$dir"
   printf '%s/%s.md' "$dir" "$3"
 }
+# _order_worktree KEY — status.md '## 워크트리 / 브랜치' 표의 첫 경로(물결표 펼침). 없으면 빈 문자열.
+_order_worktree() {
+  local f p
+  f="$(_order_dir "$1")/status.md"
+  [ -f "$f" ] || return 0
+  p="$(awk '
+    /^## /{ins=(index($0,"워크트리")>0)?1:0; next}
+    ins==1 && /^\|/{
+      n=split($0,a,"|"); v=a[4]; gsub(/^[ \t]+|[ \t]+$/,"",v); gsub(/`/,"",v)
+      if(v!="" && v!="경로" && v !~ /^-+$/){print v; exit}
+    }' "$f")"
+  printf '%s' "${p/#\~/$HOME}"
+}
+
+# _touches_public_surface WORKTREE — 이번 변경이 **바깥에 보이는 면**을 건드렸는가(0=그렇다).
+# export 가 붙은 줄이 추가·수정됐으면 소비처가 영향을 받을 수 있다는 뜻이다.
+# 리뷰는 미커밋 변경 대상이므로(C1) 워킹트리와 스테이지를 함께 본다.
+_touches_public_surface() {
+  local wt="$1" d f
+  [ -d "$wt" ] || return 1
+  d="$( { git -C "$wt" diff -U0; git -C "$wt" diff --cached -U0; } 2>/dev/null )"
+  printf '%s' "$d" | grep -qE '^[+-][^+-].*\bexport\b' && return 0
+  # ⛔ 새로 만든 파일은 아직 추적되지 않아 diff 에 안 나온다. 내용을 직접 본다.
+  # (시험에서 잡힌 구멍이다 — 새 파일이 export 를 통째로 들고 와도 그냥 통과했다.)
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    grep -qE '\bexport\b' "$wt/$f" 2>/dev/null && return 0
+  done <<EOF
+$(git -C "$wt" ls-files --others --exclude-standard 2>/dev/null)
+EOF
+  return 1
+}
+
 
 # dobby_blocking KEY ROUND — reviews/round-N/*.md에서 카드 헤더(`## [blocker|major] …`)를 세어
 # blocking 수를 stdout으로 낸다(P6→통합 전이 판정용). 카드 형식이 하나도 없는 리뷰 파일이 있으면
@@ -374,12 +407,38 @@ dobby_blocking() {
   fi
   for f in "$dir"/*.md; do
     [ -f "$f" ] || continue
+    # 카드 헤더가 없으면 **blocking 1건으로 센다**(예전에는 경고만 하고 0을 더했다).
+    #
+    # 왜 바꿨나(실측): 병합 요청 자동리뷰를 받아 적은 파일이 118줄·131줄로 꼼꼼했는데
+    # `## 1. …` + 표라서 0건으로 집계됐다. 라운드가 "깨끗함"으로 닫히고, 그 안의 실제 지적이
+    # blocking 판정·대시보드 카드·회고 집계에서 통째로 사라졌다(FE1-1943·FE1-1983).
+    # 경고는 읽히지 않는다. 라운드가 안 닫히게 해야 고친다 — 머리글만 바꾸면 바로 닫힌다.
     if ! grep -qE '^## \[(blocker|major|minor|nit)\]' "$f"; then
-      printf 'dobby-lib: ⚠ %s 에 심각도 카드 헤더(## [blocker|major|minor|nit] …)가 없음 — 이 파일은 직접 읽어 blocking을 판정하세요\n' "$(basename "$f")" >&2
+      printf 'dobby-lib: ⛔ %s 에 심각도 카드 헤더(## [blocker|major|minor|nit] …)가 없어 집계되지 않습니다 — blocking 1건으로 셉니다. 각 지적의 머리글을 카드로 바꾸세요(본문은 그대로 두면 됩니다).\n' "$(basename "$f")" >&2
+      n=$((n + 1))
+      continue
     fi
     c="$(grep -cE '^## \[(blocker|major)\]' "$f" 2>/dev/null)" || c=0
     n=$((n + c))
   done
+
+  # ⛔ 소비처 확인 절 요구 — 바깥에 보이는 면(export)을 건드렸을 때만.
+  #
+  # 왜(실측 FE1-1953): `placeholderData` 로 `data` 는 채웠지만 `isFetched` 는 못 바꾸는데,
+  # 호출부 2곳이 `isFetched` 로 렌더를 갈라 **이 변경이 막으려던 카드 재생성이 PC 홈에서는
+  # 그대로 남았다**. 우리 리뷰 4라운드 32건이 전부 놓쳤고 병합 요청 자동리뷰가 잡았다 —
+  # 호출부가 diff 밖이라 diff 만 보면 안 보인다. "회귀(소비처 영향)를 보라"는 글은 있었다.
+  # 그래서 **적었는지**를 센다. 적으려면 실제로 찾아봐야 한다.
+  #
+  # 문서만 고친 라운드에는 요구하지 않는다(export 변경이 없으면 건너뛴다).
+  local wt; wt="$(_order_worktree "$key")"
+  if [ -n "$wt" ] && _touches_public_surface "$wt"; then
+    if ! grep -qlE '^##+[ ]*확인한 소비처' "$dir"/*.md 2>/dev/null; then
+      printf 'dobby-lib: ⛔ 이번 변경이 export 를 건드렸는데 리뷰에 `## 확인한 소비처` 가 없습니다 — blocking 1건으로 셉니다. 바뀐 심볼을 쓰는 곳을 전수 grep 해 몇 곳이며 어떤 영향인지 적으세요(없으면 "소비처 없음"이라고 적습니다).\n' >&2
+      n=$((n + 1))
+    fi
+  fi
+
   printf '%s' "$n"
 }
 
@@ -646,6 +705,14 @@ dobby_commit_push() {
     fi
   fi
   git -C "$wt" add -A >&2 || return 1
+  # 저장소 고유 금지 규칙(이번에 **추가된 줄**만) — 위반이 있으면 커밋하지 않는다.
+  # 리뷰어 프롬프트에 적어 두는 것으로는 안 지켜져, 나가는 길목에서 막는다.
+  if [ "${DOBBY_FORCE:-0}" != "1" ]; then
+    dobby_repo_lint "$wt" --cached || {
+      _die "저장소 규칙 위반이 있어 커밋하지 않는다. 위를 고치고 다시 하라(우회: DOBBY_FORCE=1)."
+      return 1
+    }
+  fi
   git -C "$wt" commit --no-verify -m "$msg" >&2 || return 1
   git -C "$wt" push origin "$br" >&2 2>/dev/null || git -C "$wt" push -u origin "$br" >&2
 }
@@ -1859,5 +1926,130 @@ dobby_ship_verify() {
   fi
   printf '배포 확인 완료: %s\n' "$need"
 }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# dobby_repo_lint — 저장소 고유 금지 규칙을 **이번 변경의 추가된 줄**에서 잡는다.
+#
+# 왜 "추가된 줄"만 보나: 규칙 대부분이 기존 코드에 이미 많이 깔려 있다(실측 wadiz-frontend:
+# static 배럴 import 1,143건 · changeCdnUrl 143건 · export * 65건). 저장소 전체를 검사하면
+# 전부 걸려 못 쓴다. 이번 오더가 **새로 넣은 것**만 본다.
+#
+# 왜 커밋 직전인가: 리뷰어 프롬프트에 "이것도 봐라"라고 적는 것은 지켜지지 않는다.
+# dobby_commit_push 가 이걸 불러 위반이 있으면 **거부**하므로 위반 코드가 물리적으로 못 나간다.
+# (우회: DOBBY_FORCE=1 — 기존 커밋 메시지 검사와 같은 관례)
+#
+# 규칙을 늘리려면 아래 case 에 줄을 더한다. 형식: 정규식 | 경로조건 | 제외경로 | 설명
+# 경로조건·제외경로가 빈칸이면 적용 안 함(`-`).
+# ─────────────────────────────────────────────────────────────────────────────
+
+# 저장소별 규칙표를 stdout 으로 낸다. 한 줄 = 규칙 하나.
+_repo_rules() {
+  # 한 줄 = 규칙 하나. 필드 구분자는 `|` 다.
+  # ⛔ 그래서 **정규식에 `|`(교대)를 쓰지 않는다.** 여러 갈래가 필요하면 규칙을 여러 줄로 쪼갠다.
+  #    (처음에 `(a|b)` 를 썼다가 필드가 잘못 잘려 규칙 3개가 조용히 안 걸렸다. 문자 클래스
+  #     `[23]?` 처럼 `|` 없이 쓸 수 있으면 그렇게 쓴다.)
+  # 형식: 정규식|경로조건|제외1|제외2|제외3|설명       (`-` = 적용 안 함)
+  case "$1" in
+    */wadiz-frontend)
+      cat <<'RULES'
+buildOptimizedImageURL|-|packages/core/src/image-optimization/|packages/ui/src/image-optimization/|packages/core/src/utils/url.js|@wadiz/core 의 buildOptimizedImageURL 을 직접 부르지 않습니다(설정 image-webp 를 안 읽어 스위치가 안 걸립니다). @wadiz/ui/image-optimization 의 getOptimizedImageURL 을 쓰세요.
+changeCdn[23]?Url|-|packages/utils/src/url|-|-|changeCdnUrl 계열은 옛 함수입니다. 새 호출부에는 getOptimizedImageURL 을 쓰세요.
+from '@wadiz/[a-z-]+'|^static/|-|-|-|static 은 webpack 4 라 트리쉐이킹이 제한적입니다. 배럴 대신 서브경로로 import 하세요(@wadiz/waffle/Button).
+^export \*|^apps/global/src/.*/index\.ts$|-|-|-|FSD 세그먼트 index.ts 는 export * 를 쓰지 않습니다. 명시적 named export 만 씁니다.
+^export \*|^apps/account/src/.*/index\.ts$|-|-|-|FSD 세그먼트 index.ts 는 export * 를 쓰지 않습니다. 명시적 named export 만 씁니다.
+.|^packages/artworks/src/index\.ts$|-|-|-|자동으로 생성하는 파일입니다. 임의로 수정하지 않습니다.
+.|^packages/waffle-icons/src/index\.ts$|-|-|-|자동으로 생성하는 파일입니다. 임의로 수정하지 않습니다.
+RULES
+      ;;
+  esac
+}
+
+# dobby_repo_lint WORKTREE [diff대상] — 위반을 출력하고, 있으면 1을 반환한다.
+# diff대상 기본값은 `--cached`(커밋 직전 스테이지). 검사만 해 보려면 `HEAD~1` 등을 넘긴다.
+dobby_repo_lint() {
+  local wt="$1" target="${2:---cached}" repo rules rf df n=0 out
+  [ -d "$wt" ] || { _die "워크트리가 없다: $wt"; return 1; }
+  repo="$(git -C "$wt" remote get-url origin 2>/dev/null | sed -E 's#.*github\.com[:/]##; s#\.git$##')"
+  rules="$(_repo_rules "$repo")"
+  [ -n "$rules" ] || return 0   # 규칙이 없는 저장소는 통과
+
+  # ⛔ 규칙을 `awk -v` 로 넘기지 않는다 — 맥 awk 는 줄바꿈이 든 값을 거부한다
+  # ("awk: newline in string"). 조용히 실패해서 아무것도 안 잡았다. 파일로 넘긴다.
+  rf="$(mktemp -t dobbyrules)" || return 0
+  df="$(mktemp -t dobbydiff)" || { rm -f "$rf"; return 0; }
+  printf '%s\n' "$rules" > "$rf"
+  git -C "$wt" diff "$target" -U0 > "$df" 2>/dev/null
+
+  if [ ! -s "$df" ]; then rm -f "$rf" "$df"; return 0; fi
+
+  out="$(awk '
+    # 첫 파일 = 규칙표
+    NR == FNR {
+      if ($0 == "") next
+      nr++
+      split($0, F, "|")
+      pat[nr]=F[1]; scope[nr]=F[2]; ex1[nr]=F[3]; ex2[nr]=F[4]; ex3[nr]=F[5]; msg[nr]=F[6]
+      next
+    }
+    # 둘째 파일 = diff
+    /^\+\+\+ b\// { file = substr($0, 7); next }
+    /^@@/ { split($0, H, "+"); split(H[2], L, ","); ln = L[1] + 0; next }
+    /^\+/ {
+      line = substr($0, 2)
+      for (i = 1; i <= nr; i++) {
+        if (pat[i] == "") continue
+        if (scope[i] != "-" && file !~ scope[i]) continue
+        if (ex1[i] != "-" && index(file, ex1[i]) > 0) continue
+        if (ex2[i] != "-" && index(file, ex2[i]) > 0) continue
+        if (ex3[i] != "-" && index(file, ex3[i]) > 0) continue
+        if (line ~ pat[i]) printf "  %s:%d\n    %s\n    → %s\n", file, ln, substr(line,1,110), msg[i]
+      }
+      ln++
+    }
+  ' "$rf" "$df")"
+  rm -f "$rf" "$df"
+
+  [ -n "$out" ] || return 0
+  n="$(printf '%s\n' "$out" | grep -c '→ ')"
+  printf '저장소 규칙 위반 %s건 (%s)\n%s\n' "$n" "$repo" "$out" >&2
+  return 1
+}
+
+# dobby_review_lint KEY [라운드] — 리뷰 파일이 집계 가능한 모양인지 본다. 어긋나면 1을 반환한다.
+#
+# 라운드를 주면 그 라운드만, 안 주면 전부 본다. **판정 게이트가 아니라 훑어보는 도구다** —
+# 라운드를 못 닫게 막는 일은 dobby_blocking 이 한다(그 라운드만 보므로 옛 오더를 벌하지 않는다).
+#
+# 잡는 것
+#   · round-N 폴더 밖에 있는 리뷰 파일 — dobby_blocking 이 아예 보지 않는다
+#   · `## [blocker|major|minor|nit] {제목}` 카드가 없는 파일 — 0건으로 집계된다
+dobby_review_lint() {
+  local key="$1" rd="${2:-}" root f bad=0 rel
+  root="$(_order_dir "$key")/reviews"
+  [ -d "$root" ] || return 0
+
+  if [ -z "$rd" ]; then
+    for f in "$root"/*.md; do
+      [ -f "$f" ] || continue
+      printf '  %s — round-N 폴더 밖이라 집계되지 않습니다. dobby_review_path %s {n} {슬러그} 가 준 경로에 두세요.\n' \
+        "reviews/$(basename "$f")" "$key" >&2
+      bad=$((bad + 1))
+    done
+  fi
+
+  for f in "$root"/round-${rd:-*}/*.md; do
+    [ -f "$f" ] || continue
+    grep -qE '^## \[(blocker|major|minor|nit)\]' "$f" && continue
+    rel="reviews/$(basename "$(dirname "$f")")/$(basename "$f")"
+    printf '  %s — `## [blocker|major|minor|nit] {제목}` 카드가 없습니다(%s줄). 머리글만 카드로 바꾸면 됩니다.\n' \
+      "$rel" "$(wc -l < "$f" | tr -d ' ')" >&2
+    bad=$((bad + 1))
+  done
+
+  [ "$bad" -eq 0 ] && return 0
+  printf '집계되지 않는 리뷰 파일 %s개 (%s)\n' "$bad" "$key" >&2
+  return 1
+}
+
 
 echo "dobby-lib loaded" >&2
