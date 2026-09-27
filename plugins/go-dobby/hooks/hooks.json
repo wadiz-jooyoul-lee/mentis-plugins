@@ -59,6 +59,20 @@
             "statusMessage": "go-dobby 스폰 등록"
           }
         ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/pre-edit.sh"
+            ],
+            "timeout": 5,
+            "statusMessage": "go-dobby 저장소 규칙 검사"
+          }
+        ]
       }
     ],
     "SessionStart": [
