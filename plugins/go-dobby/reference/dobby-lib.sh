@@ -1810,6 +1810,14 @@ dobby_discard_purge() {
 # 훅(pre-bash.sh G1)은 생 명령을 막는 마지막 방어선이고, 여기는 정상 경로다.
 # ─────────────────────────────────────────────────────────────────────────────
 
+# 배송을 맡는 저장소. **여기 없는 저장소는 이 스킬이 다루지 않는다.**
+#
+# 환경 브랜치 이름·리뷰봇 유무·빌드 방식이 저장소마다 달라, 한 틀로 돌리면 조용히 틀린 일을 한다.
+# 실측 wadiz-web/com.wadiz.web: 개발 환경이 `dev` 가 아니라 `cloud_dev` 고, 자동 코드리뷰
+# 워크플로가 없어 오지 않을 리뷰를 10분 기다리며, 빌드가 push 트리거라 걸면 두 번 돈다.
+# 그 저장소들은 사용자가 직접 배포한 뒤 검증만 이어서 한다.
+DOBBY_SHIP_REPOS="wadiz-frontend"
+
 # 배송이 갈 수 있는 환경. clive(=cloud_live)는 없다 — dobby-order C1.
 DOBBY_SHIP_ENVS="dev rc1 rc4 stage"
 # 그중 스킬이 직접 머지해도 되는 환경. stage 는 빠져 있다 — 스테이지 반영은 사람이 시점을 고른다.
@@ -1848,6 +1856,13 @@ dobby_ship_pr() {
   local key="$1" wt="$2" br="$3" env="$4" title="$5" body="$6" n dirty
   _ship_has "$env" "$DOBBY_SHIP_ENVS" || { _die "배송 환경이 아니다: '$env' (허용: $DOBBY_SHIP_ENVS)"; return 1; }
   [ -d "$wt" ] || { _die "워크트리가 없다: $wt"; return 1; }
+
+  # ⛔ 이 스킬이 맡는 저장소인가. 아니면 조용히 틀린 일을 하기 전에 멈춘다.
+  local name; name="$(basename "$(_ship_repo "$wt")")"
+  _ship_has "$name" "$DOBBY_SHIP_REPOS" || {
+    _die "이 스킬은 '$name' 저장소를 다루지 않는다(맡는 저장소: $DOBBY_SHIP_REPOS). 환경 브랜치 이름·리뷰봇·빌드 방식이 달라 한 틀로 돌리면 틀린 일을 한다. 이 저장소는 사용자가 직접 PR·머지·배포한 뒤 /dobby-test 로 검증만 이어서 하라."
+    return 1
+  }
 
   dirty="$(git -C "$wt" status --porcelain 2>/dev/null | head -5)"
   if [ -n "$dirty" ]; then
