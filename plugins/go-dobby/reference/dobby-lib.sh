@@ -1867,6 +1867,9 @@ dobby_ship_stage() {
 #   · 환경이 dev·rc1·rc4·stage 가 아니면 거부(clive 포함)
 #   · 워크트리에 미커밋 변경이 남아 있으면 거부 — 리뷰 통과분만 나간다(C1)
 #   · 같은 (브랜치→환경) PR 이 이미 열려 있으면 새로 만들지 않고 그 번호를 돌려준다
+#     (다리 브랜치 {브랜치}_into_{환경} 로 올라간 것까지 함께 본다)
+#   · 진짜 충돌이면 거부한다 — 충돌 해결은 /merge-branch 스킬이 한다
+#   · GitHub 이 충돌로 판정하면(git 은 깨끗한데 공통 조상이 여러 개) **다리 브랜치로 다시 올린다**
 # 해 주는 것:
 #   · dev 를 뺀 환경에 --reviewer wadiz-fe/fe1-team 을 **자동으로** 붙인다.
 #     리뷰 요청이 있어야 자동 코드리뷰가 돌아 승인이 붙는다. 스킬이 깜빡할 수 없게 여기서 붙인다.
@@ -1898,14 +1901,65 @@ $dirty"
     return 1
   fi
 
-  n="$(gh pr list --repo "$(_ship_repo "$wt")" --head "$br" --base "$env" --state open \
-        --json number -q '.[0].number' 2>/dev/null)"
+  # 이미 열린 PR — 다리 브랜치로 올라간 것까지 함께 본다.
+  local bridge="${br}_into_${env}" rp
+  rp="$(_ship_repo "$wt")"
+  n="$(gh pr list --repo "$rp" --head "$br" --base "$env" --state open --json number -q '.[0].number' 2>/dev/null)"
+  [ -n "$n" ] || n="$(gh pr list --repo "$rp" --head "$bridge" --base "$env" --state open --json number -q '.[0].number' 2>/dev/null)"
   if [ -n "$n" ]; then printf '%s' "$n"; return 0; fi
+
+  git -C "$wt" fetch -q origin "$env" "$br" 2>/dev/null
+
+  # ⛔ 진짜 충돌인지 먼저 본다. 체크아웃·브랜치 생성 없이 병합 결과만 미리 계산한다
+  # (merge-branch 스킬 4장). 작업 트리·HEAD·인덱스를 건드리지 않는다.
+  local tree
+  tree="$(git -C "$wt" merge-tree --write-tree "origin/$env" "origin/$br" 2>/dev/null | head -1)"
+  if [ -z "$tree" ] || ! git -C "$wt" merge-tree --write-tree "origin/$env" "origin/$br" >/dev/null 2>&1; then
+    _die "$br → $env 에 실제 충돌이 있다. 이 스킬은 충돌을 풀지 않는다 — /merge-branch $br $env 로 해결해 PR 을 만든 뒤 다시 하라."
+    return 1
+  fi
 
   local extra=()
   [ "$env" = "dev" ] || extra=(--reviewer wadiz-fe/fe1-team)
   ( cd "$wt" && gh pr create --base "$env" --head "$br" --title "$title" --body "$body" "${extra[@]}" ) >&2 || return 1
-  ( cd "$wt" && gh pr list --head "$br" --base "$env" --state open --json number -q '.[0].number' )
+  n="$(gh pr list --repo "$rp" --head "$br" --base "$env" --state open --json number -q '.[0].number')"
+  [ -n "$n" ] || { _die "PR 을 만들었는데 번호를 못 찾았다"; return 1; }
+
+  # GitHub 판정을 반드시 확인한다. UNKNOWN 이면 계산 중이므로 세 번까지 다시 본다.
+  local m i
+  for i in 1 2 3; do
+    m="$(gh pr view "$n" --repo "$rp" --json mergeable -q .mergeable 2>/dev/null)"
+    [ "$m" = "UNKNOWN" ] || break
+    sleep 3
+  done
+  [ "$m" = "CONFLICTING" ] || { printf '%s' "$n"; return 0; }
+
+  # ── 다리 브랜치로 다시 올린다 (merge-branch 스킬의 A → B 경로) ──────────
+  #
+  # git 은 깨끗한데 GitHub 이 충돌이라 한다. 공통 조상이 여러 개일 때 생긴다 — git 은
+  # 조상들을 재귀적으로 합친 가상 기준으로 병합하지만 GitHub 은 조상 하나만 쓴다.
+  # 병합 커밋을 미리 만들어 올리면 $env 가 그 커밋의 조상이 되어 모호성이 사라진다.
+  #
+  # 이 저장소에서는 예외가 아니라 **정상 경로**다(실측 FE1-1800: #29211·#29272·#29428 이
+  # 모두 _into_dev 였고, 다리 없이 올린 #29427 만 닫혔다. FE1-1943 도 _into_rc4).
+  printf 'dobby-lib: GitHub 이 PR #%s 를 충돌로 판정했다(git 은 깨끗함 — 공통 조상 여러 개). 다리 브랜치 %s 로 다시 올린다.\n' "$n" "$bridge" >&2
+
+  local commit
+  commit="$(git -C "$wt" commit-tree "$tree" -p "origin/$env" -p "origin/$br" \
+    -m "Merge branch '$br' into $env" 2>/dev/null)" || { _die "병합 커밋을 만들지 못했다"; return 1; }
+  git -C "$wt" push -q origin "${commit}:refs/heads/${bridge}" --force-with-lease 2>/dev/null \
+    || git -C "$wt" push -q origin "${commit}:refs/heads/${bridge}" 2>/dev/null \
+    || { _die "다리 브랜치 $bridge 를 올리지 못했다"; return 1; }
+
+  gh pr close "$n" --repo "$rp" \
+    --comment "GitHub 이 충돌로 판정해 닫습니다(git 병합은 깨끗합니다 — 공통 조상이 여러 개). 병합 커밋을 담은 $bridge 로 다시 올립니다." >&2 2>/dev/null
+
+  ( cd "$wt" && gh pr create --base "$env" --head "$bridge" \
+      --title "merge: $br → $env (충돌 해결)" --body "$body" "${extra[@]}" ) >&2 || return 1
+  n="$(gh pr list --repo "$rp" --head "$bridge" --base "$env" --state open --json number -q '.[0].number')"
+  [ -n "$n" ] || { _die "다리 PR 번호를 못 찾았다"; return 1; }
+  dobby_event "$key" "PR 재생성 — #$n ($bridge → $env, GitHub 충돌 판정으로 다리 브랜치 사용)"
+  printf '%s' "$n"
 }
 
 # 워크트리의 저장소(owner/repo).
