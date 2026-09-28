@@ -57,7 +57,7 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 | `dobby_ship_build KEY 환경 번들...` | dobby-ship 6단계 | 번들마다 CI/CD 워크플로 실행(run id stdout). **static 은 `build_entry_all=true` 를 무조건 붙인다** — 없으면 `--since` 로 바뀐 엔트리만 빌드돼 공용 패키지 변경이 반영 안 된다. admin 은 static 빌드의 옵션(`build_admin`)으로 얹는다. 모르는 번들은 거부 |
 | `dobby_ship_merge KEY PR번호` | dobby-ship 5단계 | 머지. **베이스가 dev·rc1·rc4 가 아니면·충돌이면·미반영 변경요청이 있으면 거부**(stage·정식 배포 베이스는 사용자가 직접) |
 | `dobby_ship_round KEY` | dobby-ship 리뷰 반영 직전 | 회차 stdout. **4회째면 거부**하고 배송 단계에 `리뷰 왕복 3회 — 사람 확인 필요` 기록 |
-| `dobby_ship_verify KEY "필요번들" "확인된번들"` | dobby-ship 8단계 | 배포 대조. **빠진 번들이 있으면 거부**(반쪽 배포로 테스트 차단 — 사례 FE1-1808) |
+| `dobby_ship_verify KEY "필요번들" "확인된번들"` | dobby-ship 9단계(테스트 **실패했을 때**) | 배포 대조. 빠진 번들이 있으면 1 반환. **게이트가 아니라 진단 도구다** — 배포 완료가 확인되면 바로 테스트하고, 실패하면 코드를 의심하기 전에 이것으로 반쪽 배포부터 가른다(사례 FE1-1808) |
 | `dobby_ship_stage KEY "단계"` | dobby-ship 단계 전이마다 | status.md `- **배송 단계**:` upsert(여러 번 불러도 한 줄). 다음 실행이 여기서 이어받는다 |
 | `dobby_commit_push 워크트리 브랜치 "메시지"` | P6 통과 후 | commit --no-verify + push. **⛔ 메시지에 내부 용어(`round-N`·리뷰 반영·슬러그)·금지 서명(Co-Authored-By 등) 감지 시 거부**(코드 강제) |
 | `dobby_bootstrap_inline KEY "제목" 종류 슬러그 "이름" "설명" [상태] [CWD]` | P4-L·P4-C·P4-W 인라인 분기 | status 골격+제목+종류+세션+상태표 1행+agent-logs(메인 세션 전사)를 한 번에 |
