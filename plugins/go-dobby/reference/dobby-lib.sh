@@ -1843,6 +1843,14 @@ DOBBY_SHIP_MERGE_ENVS="dev rc1 rc4"
 
 _ship_has() { case " $2 " in *" $1 "*) return 0 ;; esac; return 1; }
 
+# _words "a b c" — 공백으로 나눠 **한 줄에 하나씩** 출력한다.
+#
+# ⛔ 이 라이브러리는 `for x in $var` 같은 **단어 분리에 기대지 않는다.** bash 는 따옴표 없는
+#    확장을 공백으로 나누지만 **zsh 는 나누지 않는다**. 세션 셸이 zsh 면 "static global" 이
+#    통째로 한 덩어리가 돼 "모르는 번들"로 거부된다(실측: dobby-ship 빌드가 시작되지 않았다).
+#    새 코드도 목록을 돌 때는 반드시 이것을 거친다.
+_words() { printf '%s\n' "$1" | tr ' \t' '\n\n' | grep -v '^$'; }
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 배포 단계 — status.md '## 배포' 표에 **환경마다 한 행**.
 #
@@ -2111,7 +2119,13 @@ dobby_ship_round() {
 dobby_ship_verify() {
   local key="$1" need="$2" got="$3" env="${4:-}" miss="" b
   [ -n "$need" ] || { _die "필요한 번들 목록이 비었다"; return 1; }
-  for b in $need; do _ship_has "$b" "$got" || miss="$miss $b"; done
+  local need_n; need_n="$(_words "$need")"
+  while IFS= read -r b; do
+    [ -n "$b" ] || continue
+    _ship_has "$b" "$got" || miss="$miss $b"
+  done <<EOF
+$need_n
+EOF
   if [ -n "$miss" ]; then
     [ -n "$env" ] && dobby_ship_stage "$key" "$env" "배포 대기" "" "" "배포 미확인 —${miss}"
     _die "배포가 확인되지 않은 번들이 있다:${miss} (필요: $need / 확인: $got). 테스트 실패가 코드 결함이 아니라 **반쪽 배포** 때문일 수 있다 — 빠진 번들을 다시 빌드하고 배포를 기다린 뒤 회차를 다시 열어라."
@@ -2355,38 +2369,45 @@ dobby_review_lint() {
 #    관측돼 코드 결함으로 오진한다(사례 FE1-1808). 저장소의 정기배포 워크플로도 이 값을 쓴다.
 dobby_ship_build() {
   local key="$1" env="$2"; shift 2
-  local b wf args rid out cell
+  local b wf rid out cell
   _ship_has "$env" "$DOBBY_SHIP_ENVS" || { _die "배포 환경이 아니다: '$env'"; return 1; }
   [ "$#" -gt 0 ] || { _die "빌드할 번들이 없다"; return 1; }
 
+  # 인자를 따로 주든("static" "global") 한 덩어리로 주든("static global") 똑같이 받는다.
+  # 셸마다 단어 분리가 달라 호출부가 어느 쪽으로 넘길지 정할 수 없다(_words 주석 참조).
+  local raw="$*"
+
   # admin 은 static 빌드에 옵션으로 얹힌다 — 따로 걸지 않는다.
   local want_admin=0 list=""
-  for b in "$@"; do
+  while IFS= read -r b; do
     case "$b" in
       admin) want_admin=1; _ship_has "static" "$list" || list="$list static" ;;
       *) _ship_has "$b" "$list" || list="$list $b" ;;
     esac
-  done
+  done <<EOF
+$(_words "$raw")
+EOF
 
-  for b in $list; do
-    args=""
+  while IFS= read -r b; do
+    local -a args=()
     case "$b" in
-      static)  wf="app-static-ci-cd.yml";         args="-f build_entry_all=true"
-               [ "$want_admin" = 1 ] && args="$args -f build_admin=true" ;;
+      static)  wf="app-static-ci-cd.yml";         args=(-f build_entry_all=true)
+               [ "$want_admin" = 1 ] && args+=(-f build_admin=true) ;;
       global)  wf="app-global-ci-cd.yml" ;;
       account) wf="app-global-account-ci-cd.yml" ;;
       studio)  wf="app-studio-ci-cd.yml" ;;
       *) _die "빌드 워크플로를 모르는 번들이다: '$b' (아는 것: static global account studio)"; return 1 ;;
     esac
-    # shellcheck disable=SC2086
-    gh workflow run "$wf" -f environment="$env" -f runner=self-hosted $args >&2 || {
+    gh workflow run "$wf" -f environment="$env" -f runner=self-hosted "${args[@]}" >&2 || {
       _die "$wf 를 걸지 못했다"; return 1; }
     sleep 3
     rid="$(gh run list --workflow="$wf" --limit 1 --json databaseId -q '.[0].databaseId' 2>/dev/null)"
     printf '%s %s\n' "$b" "$rid"
     out="$out $b#$rid"
     cell="${cell:+$cell · }$b#$rid"
-  done
+  done <<EOF
+$(_words "$list")
+EOF
   dobby_event "$key" "빌드 시작 —${out} @ $env"
   dobby_ship_stage "$key" "$env" "배포 대기" "" "$cell"
 }
