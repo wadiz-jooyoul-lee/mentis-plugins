@@ -285,14 +285,30 @@ dobby_ship_merge {키} {PR번호}
 | `static/services/admin/` | `app-static-ci-cd.yml` (+ `build_entry_all=true` + `build_admin=true`) |
 | `static/` (admin 제외) | `app-static-ci-cd.yml` (+ `build_entry_all=true`) |
 | `studio/` | `app-studio-ci-cd.yml` |
-| `packages/`·`libraries/` | 그것을 쓰는 번들 **전부** |
+| `packages/`·`libraries/` | 아래 ②로 가른다 |
 
-⛔ `packages/`·`libraries/`는 공용이다. 직접 고치지 않은 번들도 그 꾸러미를 쓰면 다시 빌드해야 한다. 어느 번들이 쓰는지는 import 를 따라가 확인한다 — 짐작하지 않는다.
+### ⛔ 공용 꾸러미를 고쳤다고 그것을 쓰는 번들을 전부 빌드하지 않는다
+
+배럴(`@wadiz/api/web`)을 여러 번들이 나눠 쓰므로, "쓰면 빌드"로 정하면 **동작이 하나도 안 바뀌는 번들까지** 빌드한다. 실측 FE1-1787: 친구 관리 화면만 고쳤는데 `account`·`admin` 이 켜졌다 — 둘 다 그 화면을 그리지 않는데, 바뀐 `packages/api/src/web/social.service.ts` 가 든 배럴을 함께 import 하기 때문이다.
+
+두 단계로 가른다.
+
+1. **직접 고친 번들은 무조건 빌드한다** — `apps/global/`·`static/`·`studio/` 안의 파일을 고친 번들.
+2. **공용 꾸러미만 닿는 번들**은 **바뀐 파일이 내보내는 이름**을 그 번들 소스에서 찾아본다.
+
+```bash
+# 예: packages/api/src/web/social.service.ts 가 바뀌었을 때
+grep -n "^export" packages/api/src/web/social.service.ts          # 내보내는 이름을 뽑고
+grep -rn "{그 이름}" apps/account/src static/services/admin        # 그 번들이 쓰는지 본다
+```
+
+쓰면 빌드하고, **안 쓰면 빌드하지 않는다.** 확인이 안 되면 빌드한다(안전 쪽). 빌드하지 않기로 한 번들은 사용자에게 알릴 때 이유와 함께 적는다.
 
 **묻는다.**
 
 ```
 바뀐 파일 23개 → 다시 빌드할 번들: static, global
+             (account·admin 은 공용 꾸러미만 닿고 쓰지 않아 제외)
 rc4 로 빌드할까요?
 ```
 
