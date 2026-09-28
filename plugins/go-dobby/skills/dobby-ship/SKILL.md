@@ -271,8 +271,8 @@ dobby_ship_merge {키} {PR번호}
 |---|---|
 | `apps/global/` | `app-global-ci-cd.yml` |
 | `apps/account/` | `app-global-account-ci-cd.yml` |
-| `static/services/admin/` | `app-static-ci-cd.yml` (+ `build_admin=true`) |
-| `static/` (admin 제외) | `app-static-ci-cd.yml` |
+| `static/services/admin/` | `app-static-ci-cd.yml` (+ `build_entry_all=true` + `build_admin=true`) |
+| `static/` (admin 제외) | `app-static-ci-cd.yml` (+ `build_entry_all=true`) |
 | `studio/` | `app-studio-ci-cd.yml` |
 | `packages/`·`libraries/` | 그것을 쓰는 번들 **전부** |
 
@@ -285,15 +285,50 @@ dobby_ship_merge {키} {PR번호}
 rc4 로 빌드할까요?
 ```
 
-승인받으면 번들마다 건다.
+승인받으면 번들마다 건다. **→ 헬퍼 `dobby_ship_build {키} {환경} {번들...}`**
 
 ```bash
-gh workflow run app-static-ci-cd.yml -f environment={환경} -f runner=self-hosted
-gh workflow run app-global-ci-cd.yml -f environment={환경} -f runner=self-hosted
+dobby_ship_build {키} {환경} static global
 ```
 
-- `admin` 이 포함되면 `-f build_admin=true` 를 함께 준다.
-- 건 직후 `gh run list --workflow={파일} --limit 1 --json databaseId,url` 로 run id를 받아 적어 둔다.
+헬퍼가 번들마다 맞는 워크플로와 **빠지면 안 되는 옵션**을 붙여 준다.
+
+```bash
+# static — entry_all 을 반드시 붙인다
+gh workflow run app-static-ci-cd.yml -f environment={환경} -f runner=self-hosted -f build_entry_all=true
+# admin 이 포함되면 build_admin 도
+gh workflow run app-static-ci-cd.yml -f environment={환경} -f runner=self-hosted -f build_entry_all=true -f build_admin=true
+# 나머지
+gh workflow run app-global-ci-cd.yml         -f environment={환경} -f runner=self-hosted
+gh workflow run app-global-account-ci-cd.yml -f environment={환경} -f runner=self-hosted
+gh workflow run app-studio-ci-cd.yml         -f environment={환경} -f runner=self-hosted
+```
+
+### ⛔ static 은 `build_entry_all=true` 가 없으면 반쪽만 빌드된다
+
+`build-static.sh` 가 이 값으로 갈린다.
+
+```bash
+if [[ $BUILD_ENTRY_ALL == true || -z $GIT_PREVIOUS_TAG ]]; then
+    yarn build $BUILD_OPTIONS                            # 엔트리 전부
+else
+    yarn build $BUILD_OPTIONS --since $GIT_PREVIOUS_TAG  # 직전 태그 이후 바뀐 것만
+fi
+```
+
+빼면 lerna 가 "바뀐 패키지"만 골라 빌드한다. **공용 패키지(`packages/`)를 고쳤을 때 그것을 쓰는 엔트리가 안 잡히면 옛 번들이 그대로 남는다.** 그 상태로 테스트하면 수정 전 동작이 관측돼 코드 결함으로 오진한다(사례 FE1-1808).
+
+저장소 자신의 정기배포도 이 값을 쓴다.
+
+```bash
+# schedule-prepare-branch-for-regular-release.yml
+gh workflow run app-static-ci-cd.yml --field environment=stage \
+  --field runner=self-hosted --field build_entry_all=true
+```
+
+실행 이름 꼬리의 ` - all` 이 이 값이 켜졌다는 표시다 — `static - CI/CD - dev - all (self-hosted)`.
+
+건 직후 `gh run list --workflow={파일} --limit 1 --json databaseId,url` 로 run id 를 받아 적어 둔다.
 
 → `dobby_event {키} "빌드 시작 — {번들들} @ {환경}"`
 

@@ -54,6 +54,7 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 | `dobby_testrun_new KEY [전체시나리오수] [환경]` | dobby-test 시작 | 회차 자동 계산 + test-runs/{시각}/ + result.md 골격(`- **환경**:` 줄·`조건` 칸 포함) + status.md 이력 표 행 추가(경로 stdout) |
 | `dobby_testrun_update KEY 폴더시각 상태 [성공/실패/skip]` | 시나리오마다·마감 | 이력 표의 그 회차 행만 상태·집계 수정(통독 없음) |
 | `dobby_ship_pr KEY 워크트리 브랜치 환경 "제목" "본문"` | dobby-ship 2단계 | PR 생성(번호 stdout). **환경이 dev·rc1·rc4·stage 가 아니면·미커밋이 남아 있으면 거부**, 이미 열린 PR 은 재사용, dev 외에는 `--reviewer wadiz-fe/fe1-team` 자동 부착 |
+| `dobby_ship_build KEY 환경 번들...` | dobby-ship 6단계 | 번들마다 CI/CD 워크플로 실행(run id stdout). **static 은 `build_entry_all=true` 를 무조건 붙인다** — 없으면 `--since` 로 바뀐 엔트리만 빌드돼 공용 패키지 변경이 반영 안 된다. admin 은 static 빌드의 옵션(`build_admin`)으로 얹는다. 모르는 번들은 거부 |
 | `dobby_ship_merge KEY PR번호` | dobby-ship 5단계 | 머지. **베이스가 dev·rc1·rc4 가 아니면·충돌이면·미반영 변경요청이 있으면 거부**(stage·정식 배포 베이스는 사용자가 직접) |
 | `dobby_ship_round KEY` | dobby-ship 리뷰 반영 직전 | 회차 stdout. **4회째면 거부**하고 배송 단계에 `리뷰 왕복 3회 — 사람 확인 필요` 기록 |
 | `dobby_ship_verify KEY "필요번들" "확인된번들"` | dobby-ship 8단계 | 배포 대조. **빠진 번들이 있으면 거부**(반쪽 배포로 테스트 차단 — 사례 FE1-1808) |

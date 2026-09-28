@@ -2148,4 +2148,49 @@ dobby_review_lint() {
 }
 
 
+# dobby_ship_build KEY 환경 번들... — 번들마다 CI/CD 워크플로를 건다. run id 들을 stdout.
+#
+# 번들→워크플로 대응과 **빠지면 안 되는 옵션**을 여기서 붙인다. 스킬이 생 명령을 치면
+# 옵션을 빠뜨린다(실측: static 빌드에 build_entry_all 이 빠져 반쪽만 빌드됐다).
+#
+# ⛔ static 은 build_entry_all=true 가 필수다. build-static.sh 가 이 값으로 갈린다 —
+#    없으면 `yarn build --since {직전 태그}` 로 바뀐 엔트리만 만든다. 공용 패키지를 고쳤을 때
+#    그것을 쓰는 엔트리가 안 잡히면 옛 번들이 남고, 그 상태로 테스트하면 수정 전 동작이
+#    관측돼 코드 결함으로 오진한다(사례 FE1-1808). 저장소의 정기배포 워크플로도 이 값을 쓴다.
+dobby_ship_build() {
+  local key="$1" env="$2"; shift 2
+  local b wf args rid out
+  _ship_has "$env" "$DOBBY_SHIP_ENVS" || { _die "배송 환경이 아니다: '$env'"; return 1; }
+  [ "$#" -gt 0 ] || { _die "빌드할 번들이 없다"; return 1; }
+
+  # admin 은 static 빌드에 옵션으로 얹힌다 — 따로 걸지 않는다.
+  local want_admin=0 list=""
+  for b in "$@"; do
+    case "$b" in
+      admin) want_admin=1; _ship_has "static" "$list" || list="$list static" ;;
+      *) _ship_has "$b" "$list" || list="$list $b" ;;
+    esac
+  done
+
+  for b in $list; do
+    args=""
+    case "$b" in
+      static)  wf="app-static-ci-cd.yml";         args="-f build_entry_all=true"
+               [ "$want_admin" = 1 ] && args="$args -f build_admin=true" ;;
+      global)  wf="app-global-ci-cd.yml" ;;
+      account) wf="app-global-account-ci-cd.yml" ;;
+      studio)  wf="app-studio-ci-cd.yml" ;;
+      *) _die "빌드 워크플로를 모르는 번들이다: '$b' (아는 것: static global account studio)"; return 1 ;;
+    esac
+    # shellcheck disable=SC2086
+    gh workflow run "$wf" -f environment="$env" -f runner=self-hosted $args >&2 || {
+      _die "$wf 를 걸지 못했다"; return 1; }
+    sleep 3
+    rid="$(gh run list --workflow="$wf" --limit 1 --json databaseId -q '.[0].databaseId' 2>/dev/null)"
+    printf '%s %s\n' "$b" "$rid"
+    out="$out $b#$rid"
+  done
+  dobby_event "$key" "빌드 시작 —${out} @ $env"
+}
+
 echo "dobby-lib loaded" >&2
