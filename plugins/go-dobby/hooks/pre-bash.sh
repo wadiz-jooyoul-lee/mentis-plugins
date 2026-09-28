@@ -192,7 +192,7 @@ if in_dobby_scope; then
     # shellcheck disable=SC2086
     MBASE="$( (cd "${CWD:-.}" 2>/dev/null && gh pr view $PRREF --json baseRefName -q .baseRefName) 2>/dev/null )"
     case "$MBASE" in
-      dev|rc1|rc4) : ;;  # 허용 — dobby-ship 배송 경로
+      dev|rc1|rc4) : ;;  # 허용 — dobby-ship 배포 경로
       "")
         deny G1 "머지 대상 PR 의 베이스를 확인하지 못했다(gh 조회 실패). 베이스를 모르면 머지하지 않는다 — PR 번호를 명시하거나 워크트리 안에서 실행하라."
         ;;

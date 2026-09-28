@@ -1812,14 +1812,14 @@ dobby_discard_purge() {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# dobby-ship — 배송(PR → 리뷰 → 머지 → 빌드 → 배포 확인) 헬퍼
+# dobby-ship — 배포(PR → 리뷰 → 머지 → 빌드 → 배포 확인) 헬퍼
 #
 # 스킬 문서에 "⛔ …하지 마라"라고 적어 둔 것은 지켜지지 않는다(실측: 시나리오 표 머리글이
 # 회차 75개에 20가지 넘게 나왔다). 지켜야 하는 것은 **거부하는 함수**로 내린다.
 # 훅(pre-bash.sh G1)은 생 명령을 막는 마지막 방어선이고, 여기는 정상 경로다.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# 배송을 시작할 수 있는 현재 단계(status.md `- **단계**:`).
+# 배포을 시작할 수 있는 현재 단계(status.md `- **단계**:`).
 #
 # 정본은 착수·분석·구현·리뷰·통합·검증·해결·종료 여덟이다(dobby-start status.md 스키마).
 # ⛔ `완료` 는 **에이전트 상태표**의 값이지 단계가 아니다 — P7 설명의 "구현 에이전트 상태를
@@ -1828,7 +1828,7 @@ dobby_discard_purge() {
 # dobby-order 가 끝나는 지점이 `통합` 이므로 그것이 기본 진입 조건이다.
 DOBBY_SHIP_PHASES="통합 검증 해결 종료 완료"
 
-# 배송을 맡는 저장소. **여기 없는 저장소는 이 스킬이 다루지 않는다.**
+# 배포을 맡는 저장소. **여기 없는 저장소는 이 스킬이 다루지 않는다.**
 #
 # 환경 브랜치 이름·리뷰봇 유무·빌드 방식이 저장소마다 달라, 한 틀로 돌리면 조용히 틀린 일을 한다.
 # 실측 wadiz-web/com.wadiz.web: 개발 환경이 `dev` 가 아니라 `cloud_dev` 고, 자동 코드리뷰
@@ -1836,28 +1836,108 @@ DOBBY_SHIP_PHASES="통합 검증 해결 종료 완료"
 # 그 저장소들은 사용자가 직접 배포한 뒤 검증만 이어서 한다.
 DOBBY_SHIP_REPOS="wadiz-frontend"
 
-# 배송이 갈 수 있는 환경. clive(=cloud_live)는 없다 — dobby-order C1.
+# 배포이 갈 수 있는 환경. clive(=cloud_live)는 없다 — dobby-order C1.
 DOBBY_SHIP_ENVS="dev rc1 rc4 stage"
 # 그중 스킬이 직접 머지해도 되는 환경. stage 는 빠져 있다 — 스테이지 반영은 사람이 시점을 고른다.
 DOBBY_SHIP_MERGE_ENVS="dev rc1 rc4"
 
 _ship_has() { case " $2 " in *" $1 "*) return 0 ;; esac; return 1; }
 
-# dobby_ship_stage KEY "단계" — status.md '## 이슈/작업'에 '- **배송 단계**: …'를 upsert.
-# 다음에 dobby-ship 이 불렸을 때 **어디부터 이어서 할지**를 이 줄로 정한다.
+# ─────────────────────────────────────────────────────────────────────────────
+# 배포 단계 — status.md '## 배포' 표에 **환경마다 한 행**.
+#
+# 왜 한 줄이 아니라 표인가: 한 오더가 여러 번, 여러 환경으로 나간다(실측 FE1-1800 은 dev 로
+# 두 번, FE1-1943 은 rc4 로). 한 줄을 덮어쓰면 "dev 는 끝났고 rc4 는 리뷰 대기" 를 적을 수 없다.
+#
+# 단계는 아홉 개뿐이고 스킬 10단계와 하나씩 맞물린다. 여기 없는 값은 거부한다 —
+# 실측: 검사가 없던 때 남은 두 건 중 한 건이 서식과 달랐다(`배포 완료` 대신 `배포 완료`).
+DOBBY_SHIP_STAGE_LIST="PR 생성 / 리뷰 대기 / 리뷰 반영 N회차 / 머지 대기 / 빌드 대기 / 배포 대기 / 배포 확인 / 검증 중 / 반영 완료"
+
+_ship_stage_ok() {
+  case "$1" in
+    "PR 생성"|"리뷰 대기"|"머지 대기"|"빌드 대기"|"배포 대기"|"배포 확인"|"검증 중"|"반영 완료") return 0 ;;
+    "리뷰 반영 "[0-9]*회차) return 0 ;;
+  esac
+  return 1
+}
+
+# dobby_ship_stage KEY 환경 단계 [PR] [빌드] [비고]
+#
+# 같은 환경 행이 있으면 갱신하고, 없으면 추가한다. 갱신 시각은 자동으로 적는다.
+#   · PR·빌드 를 비워 두면 **그 칸은 그대로 둔다** — 머지 단계에서 PR 번호가 지워지지 않게.
+#     지우려면 '-' 를 넘긴다.
+#   · 비고는 비워 두면 **지운다.** 비고는 "지금 막혀 있다"는 뜻이라 단계가 나아가면 사라져야 한다.
+#     비고가 있으면 단계 칸에 ⚠ 가 붙는다 — 막힘은 단계가 아니라 사고다.
+#   · 옛 한 줄(`- **배포 단계**:` / `- **배포 단계**:`)이 남아 있으면 이때 지운다.
 dobby_ship_stage() {
-  local key="$1" st="$2" f
+  local key="$1" env="$2" st="$3" pr="${4:-}" bd="${5:-}" note="${6:-}" f ts
+  [ -n "$env" ] && [ -n "$st" ] || { _die "쓰임: dobby_ship_stage KEY 환경 단계 [PR] [빌드] [비고]"; return 1; }
+  _ship_has "$env" "$DOBBY_SHIP_ENVS" \
+    || { _die "배포 환경이 아니다: '$env' (허용: $DOBBY_SHIP_ENVS)"; return 1; }
+  _ship_stage_ok "$st" \
+    || { _die "배포 단계 어휘가 아니다: '$st' (허용: $DOBBY_SHIP_STAGE_LIST)"; return 1; }
+  f="$(_order_dir "$key")/status.md"
+  [ -f "$f" ] || { _die "status.md 가 없다: $key"; return 1; }
+  ts="$(date '+%Y-%m-%d %H:%M')"
+
+  # 표가 없으면 '## 현재 단계' 다음에 빈 표를 만든다.
+  if ! grep -q '^##[[:space:]]*배포[[:space:]]*$' "$f"; then
+    awk '
+      function head() { print "## 배포"; print "| 환경 | 단계 | PR | 빌드 | 갱신 | 비고 |"; print "|---|---|---|---|---|---|" }
+      /^## / { if (p) { head(); print ""; p=0; ins=1 } p = ($0 ~ /현재 단계/) }
+      { print }
+      END { if (!ins) { print ""; head() } }
+    ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  fi
+
+  awk -v env="$env" -v st="$st" -v pr="$pr" -v bd="$bd" -v note="$note" -v ts="$ts" '
+    function trim(x) { gsub(/^[ \t]+|[ \t]+$/, "", x); return x }
+    function emit(  s, p2, b2) {
+      s = st; if (note != "") s = s " ⚠"
+      p2 = (keep_pr != "" ? keep_pr : "-"); if (pr != "") p2 = pr
+      b2 = (keep_bd != "" ? keep_bd : "-"); if (bd != "") b2 = bd
+      if (p2 == "-" && pr == "-") p2 = "-"
+      printf "| %s | %s | %s | %s | %s | %s |\n", env, s, p2, b2, ts, note
+      keep_pr = ""; keep_bd = ""; found = 1
+    }
+    /^[ \t]*-[ \t]*\*\*배[포송] 단계\*\*/ { next }            # 옛 한 줄(배포·배송)은 버린다
+    /^## / { if (insec && !found && seen) emit(); insec = ($0 ~ /^##[ \t]*배포[ \t]*$/) }
+    {
+      if (insec && $0 ~ /^[ \t]*\|/) {
+        seen = 1
+        split($0, c, "|")
+        if (trim(c[2]) == env) {
+          keep_pr = trim(c[4]); if (keep_pr == "-") keep_pr = ""
+          keep_bd = trim(c[5]); if (keep_bd == "-") keep_bd = ""
+          emit(); next
+        }
+        print; next
+      }
+      if (insec && seen && !found) emit()
+      print
+    }
+    END { if (insec && !found && seen) emit() }
+  ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+
+# dobby_ship_repo KEY owner/repo — '## 배포' 섹션에 저장소 한 줄을 적는다.
+#
+# 대시보드가 PR·빌드 링크를 만들 때 쓴다. **워크트리만 봐서는 어느 저장소의 PR 인지 알 수 없다**
+# — 멀티레포 오더는 후보가 여러 개다(실측 FE1-1301: com.wadiz.web 이 먼저 잡혀 링크가 404).
+# 표를 만든 뒤에만 적는다(섹션이 있어야 한다).
+dobby_ship_repo() {
+  local key="$1" rp="$2" f
+  [ -n "$rp" ] || return 0
   f="$(_order_dir "$key")/status.md"
   [ -f "$f" ] || return 0
-  [ -n "$st" ] || return 0
-  awk -v s="$st" '
-    /^##/ { insec = ($0 ~ /이슈\/작업/) }
-    {
-      if (insec && $0 ~ /^[ \t]*-[ \t]*\*\*배송 단계\*\*/) { if (!done) { print "- **배송 단계**: " s; done=1 } next }
-      print
-      if (insec && !done && $0 ~ /^[ \t]*-[ \t]*\*\*닫히는 조건\*\*/) { print "- **배송 단계**: " s; done=1 }
+  grep -q '^##[[:space:]]*배포[[:space:]]*$' "$f" || return 0
+  awk -v rp="$rp" '
+    /^## / {
+      insec = ($0 ~ /^##[ \t]*배포[ \t]*$/)
+      if (insec) { print; print "- **저장소**: " rp; next }
     }
-    END { if (!done) print "- **배송 단계**: " s }
+    /^[ \t]*-[ \t]*\*\*저장소\*\*/ { if (insec) next }
+    { print }
   ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
 }
 
@@ -1875,14 +1955,14 @@ dobby_ship_stage() {
 #     리뷰 요청이 있어야 자동 코드리뷰가 돌아 승인이 붙는다. 스킬이 깜빡할 수 없게 여기서 붙인다.
 dobby_ship_pr() {
   local key="$1" wt="$2" br="$3" env="$4" title="$5" body="$6" n dirty
-  _ship_has "$env" "$DOBBY_SHIP_ENVS" || { _die "배송 환경이 아니다: '$env' (허용: $DOBBY_SHIP_ENVS)"; return 1; }
+  _ship_has "$env" "$DOBBY_SHIP_ENVS" || { _die "배포 환경이 아니다: '$env' (허용: $DOBBY_SHIP_ENVS)"; return 1; }
   [ -d "$wt" ] || { _die "워크트리가 없다: $wt"; return 1; }
 
   # ⛔ 통합까지 끝난 오더인가. 리뷰를 통과한 것만 내보낸다(C1).
   local ph; ph="$(_order_phase "$key")"
   if [ -n "$ph" ]; then
     _ship_has "$ph" "$DOBBY_SHIP_PHASES" || {
-      _die "현재 단계가 '$ph' 다 — 배송은 통합이 끝난 뒤에 한다(허용: $DOBBY_SHIP_PHASES). dobby-order 를 먼저 P7 통합까지 진행하라."
+      _die "현재 단계가 '$ph' 다 — 배포은 통합이 끝난 뒤에 한다(허용: $DOBBY_SHIP_PHASES). dobby-order 를 먼저 P7 통합까지 진행하라."
       return 1
     }
   fi
@@ -1906,7 +1986,11 @@ $dirty"
   rp="$(_ship_repo "$wt")"
   n="$(gh pr list --repo "$rp" --head "$br" --base "$env" --state open --json number -q '.[0].number' 2>/dev/null)"
   [ -n "$n" ] || n="$(gh pr list --repo "$rp" --head "$bridge" --base "$env" --state open --json number -q '.[0].number' 2>/dev/null)"
-  if [ -n "$n" ]; then printf '%s' "$n"; return 0; fi
+  if [ -n "$n" ]; then
+    dobby_ship_stage "$key" "$env" "PR 생성" "#$n"
+    dobby_ship_repo "$key" "$rp"
+    printf '%s' "$n"; return 0
+  fi
 
   git -C "$wt" fetch -q origin "$env" "$br" 2>/dev/null
 
@@ -1932,7 +2016,10 @@ $dirty"
     [ "$m" = "UNKNOWN" ] || break
     sleep 3
   done
-  [ "$m" = "CONFLICTING" ] || { printf '%s' "$n"; return 0; }
+  [ "$m" = "CONFLICTING" ] || {
+    dobby_ship_stage "$key" "$env" "PR 생성" "#$n"; dobby_ship_repo "$key" "$rp"
+    printf '%s' "$n"; return 0
+  }
 
   # ── 다리 브랜치로 다시 올린다 (merge-branch 스킬의 A → B 경로) ──────────
   #
@@ -1959,6 +2046,8 @@ $dirty"
   n="$(gh pr list --repo "$rp" --head "$bridge" --base "$env" --state open --json number -q '.[0].number')"
   [ -n "$n" ] || { _die "다리 PR 번호를 못 찾았다"; return 1; }
   dobby_event "$key" "PR 재생성 — #$n ($bridge → $env, GitHub 충돌 판정으로 다리 브랜치 사용)"
+  dobby_ship_stage "$key" "$env" "PR 생성" "#$n"
+  dobby_ship_repo "$key" "$rp"
   printf '%s' "$n"
 }
 
@@ -1990,21 +2079,23 @@ dobby_ship_merge() {
 
   gh pr merge "$pr" --merge >&2 || return 1
   dobby_event "$key" "PR #$pr 머지 → $base"
+  dobby_ship_stage "$key" "$base" "빌드 대기" "#$pr"
 }
 
 # dobby_ship_round KEY — 리뷰 반영 라운드를 하나 올린다. 4회째면 거부한다. 현재 회차 stdout.
 # 리뷰↔수정이 무한히 오가는 것을 막는다(글로 적은 "3라운드 상한"을 코드로).
 dobby_ship_round() {
-  local key="$1" f n
+  local key="$1" env="${2:-}" f n
   f="$(_order_dir "$key")/status.md"
   [ -f "$f" ] || { _die "status.md 가 없다: $key"; return 1; }
   n="$(grep -cE '^- .* PR 리뷰 [0-9]+회차' "$(_order_dir "$key")/orchestration.md" 2>/dev/null)" || n=0
   n=$((n + 1))
   if [ "$n" -gt 3 ]; then
-    dobby_ship_stage "$key" "리뷰 왕복 3회 — 사람 확인 필요"
+    [ -n "$env" ] && dobby_ship_stage "$key" "$env" "리뷰 대기" "" "" "리뷰 왕복 3회 — 사람 확인 필요"
     _die "리뷰 반영이 3회를 넘었다($n회째). 무엇이 반복해서 걸리는지 정리해 사용자에게 알리고 멈춰라."
     return 1
   fi
+  [ -n "$env" ] && dobby_ship_stage "$key" "$env" "리뷰 반영 ${n}회차"
   printf '%s' "$n"
 }
 
@@ -2018,11 +2109,11 @@ dobby_ship_round() {
 # 재배포 후 같은 절차로 9/0/0 통과 — 방법이 아니라 순서가 문제였다.
 # 인자는 공백으로 구분한 번들 이름 목록이다. 예: dobby_ship_verify FE1-1943 "static global" "static"
 dobby_ship_verify() {
-  local key="$1" need="$2" got="$3" miss="" b
+  local key="$1" need="$2" got="$3" env="${4:-}" miss="" b
   [ -n "$need" ] || { _die "필요한 번들 목록이 비었다"; return 1; }
   for b in $need; do _ship_has "$b" "$got" || miss="$miss $b"; done
   if [ -n "$miss" ]; then
-    dobby_ship_stage "$key" "배포 일부 미확인 —${miss}"
+    [ -n "$env" ] && dobby_ship_stage "$key" "$env" "배포 대기" "" "" "배포 미확인 —${miss}"
     _die "배포가 확인되지 않은 번들이 있다:${miss} (필요: $need / 확인: $got). 테스트 실패가 코드 결함이 아니라 **반쪽 배포** 때문일 수 있다 — 빠진 번들을 다시 빌드하고 배포를 기다린 뒤 회차를 다시 열어라."
     return 1
   fi
@@ -2165,8 +2256,8 @@ dobby_review_lint() {
 #    관측돼 코드 결함으로 오진한다(사례 FE1-1808). 저장소의 정기배포 워크플로도 이 값을 쓴다.
 dobby_ship_build() {
   local key="$1" env="$2"; shift 2
-  local b wf args rid out
-  _ship_has "$env" "$DOBBY_SHIP_ENVS" || { _die "배송 환경이 아니다: '$env'"; return 1; }
+  local b wf args rid out cell
+  _ship_has "$env" "$DOBBY_SHIP_ENVS" || { _die "배포 환경이 아니다: '$env'"; return 1; }
   [ "$#" -gt 0 ] || { _die "빌드할 번들이 없다"; return 1; }
 
   # admin 은 static 빌드에 옵션으로 얹힌다 — 따로 걸지 않는다.
@@ -2195,8 +2286,10 @@ dobby_ship_build() {
     rid="$(gh run list --workflow="$wf" --limit 1 --json databaseId -q '.[0].databaseId' 2>/dev/null)"
     printf '%s %s\n' "$b" "$rid"
     out="$out $b#$rid"
+    cell="${cell:+$cell · }$b#$rid"
   done
   dobby_event "$key" "빌드 시작 —${out} @ $env"
+  dobby_ship_stage "$key" "$env" "배포 대기" "" "$cell"
 }
 
 # dobby_testrun_prune 결과폴더 — 그 회차에서 **아무도 안 가리키는 그림**을 지운다.
