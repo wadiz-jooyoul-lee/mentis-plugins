@@ -49,6 +49,7 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 | `dobby_event KEY "사건 — 설명"` | 타임라인 사건마다 | 이벤트 로그 1줄 append |
 | `dobby_log KEY 슬러그 로그경로 [라운드]` | 스폰 직후 | agent-logs.json 기록(라운드는 하위키 병합) |
 | `dobby_phase KEY 단계` | 단계 전이 | status.md 현재 단계/갱신 |
+| `dobby_review_brief 워크트리...` | P5 리뷰 프롬프트를 만들 때 | 바뀐 것·저장소 금지 규칙 검사 결과·사라진 심볼의 소비처 표를 markdown 으로. 리뷰어가 여러 턴에 걸쳐 알아내던 것을 한 번에 준다 |
 | `dobby_review_path KEY 라운드 슬러그` | P5 | reviews/round-N/{슬러그}.md 경로(폴더 생성) |
 | `dobby_blocking KEY 라운드` | P6 전이 판정 | reviews/round-N의 `## [blocker\|major]` 카드 헤더 집계(숫자 stdout). 카드 형식 없는 파일은 경고 — 그 파일만 직접 읽어 판정 |
 | `dobby_testrun_new KEY [전체시나리오수] [환경]` | dobby-test 시작 | 회차 자동 계산 + test-runs/{시각}/ + result.md 골격(`- **환경**:` 줄·`조건` 칸 포함) + status.md 이력 표 행 추가(경로 stdout) |

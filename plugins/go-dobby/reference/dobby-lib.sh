@@ -2121,6 +2121,76 @@ dobby_ship_verify() {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
+# dobby_review_brief 워크트리... — 리뷰 에이전트에게 **미리 붙여 줄 사실**을 한 번에 만든다.
+#
+# 왜: 리뷰 비용은 내용이 아니라 **왕복 횟수**다. 실측(리뷰 24건) — 명령으로 받아 본 내용은
+# 다 합쳐 0.42M 토큰인데 소비는 204M 이었다. 한 번 부를 때마다 그때까지 쌓인 문맥을 통째로
+# 다시 읽기 때문이다(FE1-2005: 문맥 79K→250K 로 167회 = 28.7M).
+#
+# 그래서 리뷰어가 **여러 턴에 걸쳐 스스로 알아내던 것**을 여기서 한 번에 준다.
+#   ① 무엇이 바뀌었나(미커밋 기준 diff 통계·파일 목록)
+#   ② 저장소 고유 금지 규칙 검사 결과(dobby_repo_lint — 리뷰어가 CLAUDE.md 를 다시 읽을 필요 없음)
+#   ③ 사라지거나 바뀐 심볼의 소비처(전수 grep) — 루브릭 A-1 이 심볼마다 시키던 일
+#
+# 출력은 markdown 이라 프롬프트에 그대로 붙인다.
+dobby_review_brief() {
+  local wt n
+  [ "$#" -gt 0 ] || { _die "쓰임: dobby_review_brief 워크트리..."; return 1; }
+  for wt in "$@"; do
+    [ -d "$wt" ] || { printf '### %s — 워크트리가 없다\n\n' "$wt"; continue; }
+    printf '### %s\n\n' "$(basename "$wt")"
+
+    printf '**바뀐 것(미커밋 포함)**\n\n```\n'
+    git -C "$wt" diff HEAD --stat 2>/dev/null | tail -40
+    git -C "$wt" status --porcelain 2>/dev/null | grep '^??' | head -20
+    printf '```\n\n'
+
+    local lint rc
+    lint="$(dobby_repo_lint "$wt" HEAD 2>&1)"; rc=$?
+    if [ "$rc" -ne 0 ] && [ -n "$lint" ]; then
+      printf '**저장소 고유 금지 규칙 — 위반 있음**\n\n```\n%s\n```\n\n' "$lint"
+    else
+      printf '**저장소 고유 금지 규칙 — 위반 없음**(헬퍼가 검사함. 같은 것을 다시 보지 않는다)\n\n'
+    fi
+
+    printf '**사라지거나 바뀐 심볼의 소비처**\n\n'
+    local syms; syms="$(_review_symbols "$wt")"
+    if [ -z "$syms" ]; then
+      printf '내보내기·공개 메서드 변경 없음.\n\n'
+    else
+      printf '| 심볼 | 쓰는 곳 | 위치(최대 3) |\n|---|---|---|\n'
+      local sym hits cnt loc
+      while IFS= read -r sym; do
+        [ -n "$sym" ] || continue
+        hits="$(grep -rIn --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=dist \
+                 --exclude-dir=build --exclude-dir=.next --exclude-dir=coverage \
+                 -F -- "$sym" "$wt" 2>/dev/null)"
+        cnt="$(printf '%s' "$hits" | grep -c . )"
+        loc="$(printf '%s\n' "$hits" | cut -d: -f1 | sort -u | head -3 \
+               | sed "s#^$wt/##" | awk '{printf "%s%s", (NR>1 ? " · " : ""), $0} END{print ""}')"
+        [ "$cnt" -gt 0 ] || loc='소비처 없음'
+        printf '| `%s` | %s | %s |\n' "$sym" "$cnt" "$loc"
+      done <<EOF
+$syms
+EOF
+      printf '\n'
+    fi
+  done
+}
+
+# _review_symbols 워크트리 — 이번 변경에서 **지워지거나 바뀐** 내보내기·공개 메서드 이름.
+# 지운 줄(^-)에서만 뽑는다. 너무 흔한 짧은 이름(3자 이하)은 grep 이 의미 없어 뺀다.
+_review_symbols() {
+  git -C "$1" diff HEAD -U0 2>/dev/null \
+    | grep '^-' | grep -v '^---' \
+    | sed -E -n \
+        -e 's/.*export[[:space:]]+(const|let|var|function|class|type|interface|enum)[[:space:]]+([A-Za-z_$][A-Za-z0-9_$]*).*/\2/p' \
+        -e 's/.*export[[:space:]]+default[[:space:]]+function[[:space:]]+([A-Za-z_$][A-Za-z0-9_$]*).*/\1/p' \
+        -e 's/.*(public|protected|private)[[:space:]]+[A-Za-z0-9_<>,\[\][:space:]]+[[:space:]]([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*\(.*/\2/p' \
+    | awk 'length($0) > 3' | sort -u | head -20
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
 # dobby_repo_lint — 저장소 고유 금지 규칙을 **이번 변경의 추가된 줄**에서 잡는다.
 #
 # 왜 "추가된 줄"만 보나: 규칙 대부분이 기존 코드에 이미 많이 깔려 있다(실측 wadiz-frontend:
