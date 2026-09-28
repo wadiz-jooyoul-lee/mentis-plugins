@@ -361,6 +361,15 @@ dobby_review_path() {
   local dir; dir="$(_order_dir "$1")/reviews/round-$2"; mkdir -p "$dir"
   printf '%s/%s.md' "$dir" "$3"
 }
+# _order_phase KEY — status.md `## 현재 단계`의 `- **단계**:` 값. 없으면 빈 문자열.
+_order_phase() {
+  local f
+  f="$(_order_dir "$1")/status.md"
+  [ -f "$f" ] || return 0
+  grep -m1 -E '^[ \t]*-[ \t]*\*\*단계\*\*' "$f" 2>/dev/null \
+    | sed -E 's/.*[:：][ \t]*//; s/[*`]//g; s/[ \t]+$//'
+}
+
 # _order_worktree KEY — status.md '## 워크트리 / 브랜치' 표의 첫 경로(물결표 펼침). 없으면 빈 문자열.
 _order_worktree() {
   local f p
@@ -1810,6 +1819,15 @@ dobby_discard_purge() {
 # 훅(pre-bash.sh G1)은 생 명령을 막는 마지막 방어선이고, 여기는 정상 경로다.
 # ─────────────────────────────────────────────────────────────────────────────
 
+# 배송을 시작할 수 있는 현재 단계(status.md `- **단계**:`).
+#
+# 정본은 착수·분석·구현·리뷰·통합·검증·해결·종료 여덟이다(dobby-start status.md 스키마).
+# ⛔ `완료` 는 **에이전트 상태표**의 값이지 단계가 아니다 — P7 설명의 "구현 에이전트 상태를
+#    `완료`로 갱신한다"를 단계로 잘못 읽기 쉽다. 실제 메타에 `완료` 로 적힌 오더가 4개 있어
+#    받아는 주되, 정본으로 쓰지 않는다.
+# dobby-order 가 끝나는 지점이 `통합` 이므로 그것이 기본 진입 조건이다.
+DOBBY_SHIP_PHASES="통합 검증 해결 종료 완료"
+
 # 배송을 맡는 저장소. **여기 없는 저장소는 이 스킬이 다루지 않는다.**
 #
 # 환경 브랜치 이름·리뷰봇 유무·빌드 방식이 저장소마다 달라, 한 틀로 돌리면 조용히 틀린 일을 한다.
@@ -1849,6 +1867,9 @@ dobby_ship_stage() {
 #   · 환경이 dev·rc1·rc4·stage 가 아니면 거부(clive 포함)
 #   · 워크트리에 미커밋 변경이 남아 있으면 거부 — 리뷰 통과분만 나간다(C1)
 #   · 같은 (브랜치→환경) PR 이 이미 열려 있으면 새로 만들지 않고 그 번호를 돌려준다
+#     (다리 브랜치 {브랜치}_into_{환경} 로 올라간 것까지 함께 본다)
+#   · 진짜 충돌이면 거부한다 — 충돌 해결은 /merge-branch 스킬이 한다
+#   · GitHub 이 충돌로 판정하면(git 은 깨끗한데 공통 조상이 여러 개) **다리 브랜치로 다시 올린다**
 # 해 주는 것:
 #   · dev 를 뺀 환경에 --reviewer wadiz-fe/fe1-team 을 **자동으로** 붙인다.
 #     리뷰 요청이 있어야 자동 코드리뷰가 돌아 승인이 붙는다. 스킬이 깜빡할 수 없게 여기서 붙인다.
@@ -1856,6 +1877,15 @@ dobby_ship_pr() {
   local key="$1" wt="$2" br="$3" env="$4" title="$5" body="$6" n dirty
   _ship_has "$env" "$DOBBY_SHIP_ENVS" || { _die "배송 환경이 아니다: '$env' (허용: $DOBBY_SHIP_ENVS)"; return 1; }
   [ -d "$wt" ] || { _die "워크트리가 없다: $wt"; return 1; }
+
+  # ⛔ 통합까지 끝난 오더인가. 리뷰를 통과한 것만 내보낸다(C1).
+  local ph; ph="$(_order_phase "$key")"
+  if [ -n "$ph" ]; then
+    _ship_has "$ph" "$DOBBY_SHIP_PHASES" || {
+      _die "현재 단계가 '$ph' 다 — 배송은 통합이 끝난 뒤에 한다(허용: $DOBBY_SHIP_PHASES). dobby-order 를 먼저 P7 통합까지 진행하라."
+      return 1
+    }
+  fi
 
   # ⛔ 이 스킬이 맡는 저장소인가. 아니면 조용히 틀린 일을 하기 전에 멈춘다.
   local name; name="$(basename "$(_ship_repo "$wt")")"
@@ -1871,14 +1901,65 @@ $dirty"
     return 1
   fi
 
-  n="$(gh pr list --repo "$(_ship_repo "$wt")" --head "$br" --base "$env" --state open \
-        --json number -q '.[0].number' 2>/dev/null)"
+  # 이미 열린 PR — 다리 브랜치로 올라간 것까지 함께 본다.
+  local bridge="${br}_into_${env}" rp
+  rp="$(_ship_repo "$wt")"
+  n="$(gh pr list --repo "$rp" --head "$br" --base "$env" --state open --json number -q '.[0].number' 2>/dev/null)"
+  [ -n "$n" ] || n="$(gh pr list --repo "$rp" --head "$bridge" --base "$env" --state open --json number -q '.[0].number' 2>/dev/null)"
   if [ -n "$n" ]; then printf '%s' "$n"; return 0; fi
+
+  git -C "$wt" fetch -q origin "$env" "$br" 2>/dev/null
+
+  # ⛔ 진짜 충돌인지 먼저 본다. 체크아웃·브랜치 생성 없이 병합 결과만 미리 계산한다
+  # (merge-branch 스킬 4장). 작업 트리·HEAD·인덱스를 건드리지 않는다.
+  local tree
+  tree="$(git -C "$wt" merge-tree --write-tree "origin/$env" "origin/$br" 2>/dev/null | head -1)"
+  if [ -z "$tree" ] || ! git -C "$wt" merge-tree --write-tree "origin/$env" "origin/$br" >/dev/null 2>&1; then
+    _die "$br → $env 에 실제 충돌이 있다. 이 스킬은 충돌을 풀지 않는다 — /merge-branch $br $env 로 해결해 PR 을 만든 뒤 다시 하라."
+    return 1
+  fi
 
   local extra=()
   [ "$env" = "dev" ] || extra=(--reviewer wadiz-fe/fe1-team)
   ( cd "$wt" && gh pr create --base "$env" --head "$br" --title "$title" --body "$body" "${extra[@]}" ) >&2 || return 1
-  ( cd "$wt" && gh pr list --head "$br" --base "$env" --state open --json number -q '.[0].number' )
+  n="$(gh pr list --repo "$rp" --head "$br" --base "$env" --state open --json number -q '.[0].number')"
+  [ -n "$n" ] || { _die "PR 을 만들었는데 번호를 못 찾았다"; return 1; }
+
+  # GitHub 판정을 반드시 확인한다. UNKNOWN 이면 계산 중이므로 세 번까지 다시 본다.
+  local m i
+  for i in 1 2 3; do
+    m="$(gh pr view "$n" --repo "$rp" --json mergeable -q .mergeable 2>/dev/null)"
+    [ "$m" = "UNKNOWN" ] || break
+    sleep 3
+  done
+  [ "$m" = "CONFLICTING" ] || { printf '%s' "$n"; return 0; }
+
+  # ── 다리 브랜치로 다시 올린다 (merge-branch 스킬의 A → B 경로) ──────────
+  #
+  # git 은 깨끗한데 GitHub 이 충돌이라 한다. 공통 조상이 여러 개일 때 생긴다 — git 은
+  # 조상들을 재귀적으로 합친 가상 기준으로 병합하지만 GitHub 은 조상 하나만 쓴다.
+  # 병합 커밋을 미리 만들어 올리면 $env 가 그 커밋의 조상이 되어 모호성이 사라진다.
+  #
+  # 이 저장소에서는 예외가 아니라 **정상 경로**다(실측 FE1-1800: #29211·#29272·#29428 이
+  # 모두 _into_dev 였고, 다리 없이 올린 #29427 만 닫혔다. FE1-1943 도 _into_rc4).
+  printf 'dobby-lib: GitHub 이 PR #%s 를 충돌로 판정했다(git 은 깨끗함 — 공통 조상 여러 개). 다리 브랜치 %s 로 다시 올린다.\n' "$n" "$bridge" >&2
+
+  local commit
+  commit="$(git -C "$wt" commit-tree "$tree" -p "origin/$env" -p "origin/$br" \
+    -m "Merge branch '$br' into $env" 2>/dev/null)" || { _die "병합 커밋을 만들지 못했다"; return 1; }
+  git -C "$wt" push -q origin "${commit}:refs/heads/${bridge}" --force-with-lease 2>/dev/null \
+    || git -C "$wt" push -q origin "${commit}:refs/heads/${bridge}" 2>/dev/null \
+    || { _die "다리 브랜치 $bridge 를 올리지 못했다"; return 1; }
+
+  gh pr close "$n" --repo "$rp" \
+    --comment "GitHub 이 충돌로 판정해 닫습니다(git 병합은 깨끗합니다 — 공통 조상이 여러 개). 병합 커밋을 담은 $bridge 로 다시 올립니다." >&2 2>/dev/null
+
+  ( cd "$wt" && gh pr create --base "$env" --head "$bridge" \
+      --title "merge: $br → $env (충돌 해결)" --body "$body" "${extra[@]}" ) >&2 || return 1
+  n="$(gh pr list --repo "$rp" --head "$bridge" --base "$env" --state open --json number -q '.[0].number')"
+  [ -n "$n" ] || { _die "다리 PR 번호를 못 찾았다"; return 1; }
+  dobby_event "$key" "PR 재생성 — #$n ($bridge → $env, GitHub 충돌 판정으로 다리 브랜치 사용)"
+  printf '%s' "$n"
 }
 
 # 워크트리의 저장소(owner/repo).
@@ -1927,8 +2008,14 @@ dobby_ship_round() {
   printf '%s' "$n"
 }
 
-# dobby_ship_verify KEY "필요번들" "확인된번들" — 배포 대조. 빠진 게 있으면 거부한다.
-# 반쪽 배포 상태로 테스트하면 수정 전 동작이 관측돼 코드 결함으로 오진한다(사례 FE1-1808).
+# dobby_ship_verify KEY "필요번들" "확인된번들" — 배포 대조. 빠진 게 있으면 1을 반환한다.
+#
+# **테스트 앞의 게이트가 아니라 실패했을 때 쓰는 진단 도구다.** 배포 완료가 확인되면 바로
+# 테스트로 가고(스킬 8단계), 실패하면 코드를 의심하기 전에 이것으로 반쪽 배포부터 가른다.
+# 맞아떨어질 때는 아무것도 알려 주지 않으면서 기다리게만 하므로 미리 세지 않는다.
+#
+# 사례 FE1-1808: 빌드가 머지보다 68분 앞선 상태로 회차를 열어 0성공/3실패/4건너뜀.
+# 재배포 후 같은 절차로 9/0/0 통과 — 방법이 아니라 순서가 문제였다.
 # 인자는 공백으로 구분한 번들 이름 목록이다. 예: dobby_ship_verify FE1-1943 "static global" "static"
 dobby_ship_verify() {
   local key="$1" need="$2" got="$3" miss="" b
@@ -1936,7 +2023,7 @@ dobby_ship_verify() {
   for b in $need; do _ship_has "$b" "$got" || miss="$miss $b"; done
   if [ -n "$miss" ]; then
     dobby_ship_stage "$key" "배포 일부 미확인 —${miss}"
-    _die "배포가 확인되지 않은 번들이 있다:${miss} (필요: $need / 확인: $got). 반쪽 배포로 테스트하면 안 된다 — 더 기다리거나 사용자에게 알려라."
+    _die "배포가 확인되지 않은 번들이 있다:${miss} (필요: $need / 확인: $got). 테스트 실패가 코드 결함이 아니라 **반쪽 배포** 때문일 수 있다 — 빠진 번들을 다시 빌드하고 배포를 기다린 뒤 회차를 다시 열어라."
     return 1
   fi
   printf '배포 확인 완료: %s\n' "$need"
@@ -2066,5 +2153,86 @@ dobby_review_lint() {
   return 1
 }
 
+
+# dobby_ship_build KEY 환경 번들... — 번들마다 CI/CD 워크플로를 건다. run id 들을 stdout.
+#
+# 번들→워크플로 대응과 **빠지면 안 되는 옵션**을 여기서 붙인다. 스킬이 생 명령을 치면
+# 옵션을 빠뜨린다(실측: static 빌드에 build_entry_all 이 빠져 반쪽만 빌드됐다).
+#
+# ⛔ static 은 build_entry_all=true 가 필수다. build-static.sh 가 이 값으로 갈린다 —
+#    없으면 `yarn build --since {직전 태그}` 로 바뀐 엔트리만 만든다. 공용 패키지를 고쳤을 때
+#    그것을 쓰는 엔트리가 안 잡히면 옛 번들이 남고, 그 상태로 테스트하면 수정 전 동작이
+#    관측돼 코드 결함으로 오진한다(사례 FE1-1808). 저장소의 정기배포 워크플로도 이 값을 쓴다.
+dobby_ship_build() {
+  local key="$1" env="$2"; shift 2
+  local b wf args rid out
+  _ship_has "$env" "$DOBBY_SHIP_ENVS" || { _die "배송 환경이 아니다: '$env'"; return 1; }
+  [ "$#" -gt 0 ] || { _die "빌드할 번들이 없다"; return 1; }
+
+  # admin 은 static 빌드에 옵션으로 얹힌다 — 따로 걸지 않는다.
+  local want_admin=0 list=""
+  for b in "$@"; do
+    case "$b" in
+      admin) want_admin=1; _ship_has "static" "$list" || list="$list static" ;;
+      *) _ship_has "$b" "$list" || list="$list $b" ;;
+    esac
+  done
+
+  for b in $list; do
+    args=""
+    case "$b" in
+      static)  wf="app-static-ci-cd.yml";         args="-f build_entry_all=true"
+               [ "$want_admin" = 1 ] && args="$args -f build_admin=true" ;;
+      global)  wf="app-global-ci-cd.yml" ;;
+      account) wf="app-global-account-ci-cd.yml" ;;
+      studio)  wf="app-studio-ci-cd.yml" ;;
+      *) _die "빌드 워크플로를 모르는 번들이다: '$b' (아는 것: static global account studio)"; return 1 ;;
+    esac
+    # shellcheck disable=SC2086
+    gh workflow run "$wf" -f environment="$env" -f runner=self-hosted $args >&2 || {
+      _die "$wf 를 걸지 못했다"; return 1; }
+    sleep 3
+    rid="$(gh run list --workflow="$wf" --limit 1 --json databaseId -q '.[0].databaseId' 2>/dev/null)"
+    printf '%s %s\n' "$b" "$rid"
+    out="$out $b#$rid"
+  done
+  dobby_event "$key" "빌드 시작 —${out} @ $env"
+}
+
+# dobby_testrun_prune 결과폴더 — 그 회차에서 **아무도 안 가리키는 그림**을 지운다.
+#
+# 테스트 중 화면을 확인하려고 찍은 그림이 결과 폴더에 그대로 남는다. 근거로 쓴 것은
+# result.md·summary.html 이 파일 이름으로 가리키므로, **가리키지 않는 것만** 지우면
+# 근거는 하나도 잃지 않는다. 사람이 고를 필요가 없다.
+#
+# 실측(회차 76개): 그림 66개 중 63개는 본문이 가리키고(87.7MB) 3개만 안 쓰였다(3.3MB).
+# 그중 하나는 스킬이 금지한 "요약 화면을 따로 찍은 것"이었다.
+#
+# ⛔ 안전: test-runs 폴더 안에서만 돌고, 그림 확장자만 지운다. 그 밖이면 아무것도 하지 않는다.
+dobby_testrun_prune() {
+  local dir="$1" f n del=0 kb=0 sz
+  [ -d "$dir" ] || { _die "폴더가 없다: $dir"; return 1; }
+  case "$dir" in
+    *"/test-runs/"*) : ;;
+    *) _die "test-runs 회차 폴더가 아니다: $dir"; return 1 ;;
+  esac
+
+  while IFS= read -r f; do
+    [ -f "$f" ] || continue
+    n="$(basename "$f")"
+    # 같은 폴더의 글(md·html)이 파일 이름을 가리키면 근거다 — 남긴다.
+    grep -rqF -- "$n" "$dir" --include="*.md" --include="*.html" 2>/dev/null && continue
+    sz="$(du -k "$f" 2>/dev/null | cut -f1)"; kb=$((kb + ${sz:-0}))
+    rm -f "$f" && del=$((del + 1))
+    printf '  지움 %s\n' "$n" >&2
+  done <<EOF
+$(find "$dir" -maxdepth 1 -type f \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.webp' -o -iname '*.gif' \) 2>/dev/null)
+EOF
+
+  if [ "$del" -gt 0 ]; then
+    printf '안 쓰는 그림 %s개 지움 (%sKB)\n' "$del" "$kb" >&2
+  fi
+  printf '%s' "$del"
+}
 
 echo "dobby-lib loaded" >&2

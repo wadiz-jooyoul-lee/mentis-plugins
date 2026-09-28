@@ -8,8 +8,8 @@ description: 구현·리뷰가 끝난 오더를 배포 환경까지 밀어 넣�
 리뷰까지 끝난 오더를 **배포 환경에 올려 테스트가 시작되는 데까지** 밀어 넣는다.
 
 ```
-PR 생성 → 자동 코드리뷰 → (반영) → 머지 → 빌드 → 배포 확인 → dobby-test
-                  ↑______________|              ⛔사람   ⛔사람
+PR 생성 → 자동 코드리뷰 → (반영) → 머지 → 빌드 → 배포 완료 → dobby-test
+                  ↑______________|       ⛔사람  ⛔사람        └ 실패하면 번들 대조
 ```
 
 `dobby-order`는 **자기 브랜치 푸시까지**만 한다(제약 C1). 그 다음 한 칸을 이 스킬이 맡는다.
@@ -91,13 +91,17 @@ PR 베이스 브랜치이자 빌드 워크플로의 `environment` 입력값이�
 
 | 확인 | 아니면 |
 |---|---|
-| `status.md` 현재 단계가 `완료`(또는 `검증`·`해결`) | 아직 구현·리뷰가 안 끝났다고 알리고 멈춘다 |
+| `status.md` 현재 단계가 **`통합` 이후**다 (통합·검증·해결·종료) | 아직 통합이 안 끝났다고 알리고 멈춘다 |
 | `## 워크트리 / 브랜치` 표에 `wadiz-frontend` 가 있다 | 이 스킬이 맡는 저장소가 아니라고 알리고 멈춘다 |
 | `## 워크트리 / 브랜치` 표에 브랜치가 있다 | 워크트리가 없다고 알리고 멈춘다 |
 | 그 브랜치가 원격에 푸시돼 있다 (`git ls-remote`) | `dobby-order`가 P6까지 못 갔다는 뜻이다. 멈춘다 |
 | 환경을 골랐다 (dev·rc1·rc4·stage 중 하나) | 묻고 멈춘다 |
 
 ⛔ **미커밋 변경이 남아 있으면 멈춘다.** 리뷰를 통과한 것만 나가야 한다(C1).
+
+**단계 이름을 헷갈리지 않는다.** 정본은 `착수·분석·구현·리뷰·통합·검증·해결·종료` 여덟이다. `완료` 는 **에이전트 상태표**의 값이지 단계가 아니다 — `dobby-order` P7 의 "구현 에이전트 상태를 `완료`로 갱신한다"를 단계로 잘못 읽기 쉽다. **`dobby-order` 가 끝나는 지점이 `통합`** 이므로 그것이 기본 진입 조건이다(실제 메타에 `완료` 로 적힌 오더가 4개 있어 받아는 준다).
+
+이 검사는 `dobby_ship_pr` 이 **거부로 강제한다** — 표만 보고 넘어갈 수 없다.
 
 ### 2. PR 생성 — `dobby_ship_pr`
 
@@ -113,6 +117,29 @@ PR="$(dobby_ship_pr {키} {워크트리} {브랜치} {환경} "{제목}" "{본�
 | 워크트리에 미커밋 변경이 있으면 거부 | 리뷰를 통과한 것만 나간다(C1) |
 | 같은 (브랜치→환경) PR 이 열려 있으면 그 번호를 돌려준다 | 중복 생성을 막는다 |
 | `dev` 를 뺀 환경에 `--reviewer wadiz-fe/fe1-team` 을 **자동으로 붙인다** | 깜빡하면 리뷰가 안 달려 4번에서 10분을 헛되이 기다린다 |
+| **GitHub 이 충돌로 판정하면 다리 브랜치로 다시 올린다** | 이 저장소의 정상 경로다(아래) |
+| 진짜 충돌이면 거부한다 | 충돌 해결은 `/merge-branch` 가 한다 |
+
+### 충돌은 헬퍼가 갈라 준다
+
+| 상황 | 헬퍼가 하는 일 |
+|---|---|
+| 깨끗함 | 그대로 PR 을 연다 |
+| **GitHub 만 충돌이라 함** | **다리 브랜치 `{브랜치}_into_{환경}` 로 다시 올린다** (자동) |
+| 진짜 충돌 | **거부한다** — `/merge-branch {브랜치} {환경}` 으로 풀고 다시 오라고 알린다 |
+
+가운데가 **이 저장소의 정상 경로다.** git 은 깨끗한데 GitHub 이 충돌이라 하는 경우인데, **공통 조상이 여러 개**일 때 생긴다 — git 은 조상들을 재귀적으로 합친 가상 기준으로 병합하지만 GitHub 은 조상 하나만 쓴다. 병합 커밋을 미리 만들어 올리면 환경 브랜치가 그 커밋의 조상이 되어 모호성이 사라진다(`merge-branch` 스킬의 5.4 → 6.2.1 경로를 그대로 따른다).
+
+실측으로 **예외가 아니라 기본**이다.
+
+```
+FE1-1800  #29211 · #29272 · #29428   feature/FE1-1800_into_dev → dev   전부 머지됨
+          #29427                      feature/FE1-1800     → dev       닫힘
+FE1-1943  #29384                      feature/FE1-1943_into_rc4 → rc4  머지됨
+```
+
+병합 결과는 **체크아웃 없이** `git merge-tree --write-tree` 로 미리 계산한다 — 작업 트리·HEAD·인덱스를 건드리지 않는다.
+
 
 **제목·본문만 쓰면 된다.**
 
@@ -244,8 +271,8 @@ dobby_ship_merge {키} {PR번호}
 |---|---|
 | `apps/global/` | `app-global-ci-cd.yml` |
 | `apps/account/` | `app-global-account-ci-cd.yml` |
-| `static/services/admin/` | `app-static-ci-cd.yml` (+ `build_admin=true`) |
-| `static/` (admin 제외) | `app-static-ci-cd.yml` |
+| `static/services/admin/` | `app-static-ci-cd.yml` (+ `build_entry_all=true` + `build_admin=true`) |
+| `static/` (admin 제외) | `app-static-ci-cd.yml` (+ `build_entry_all=true`) |
 | `studio/` | `app-studio-ci-cd.yml` |
 | `packages/`·`libraries/` | 그것을 쓰는 번들 **전부** |
 
@@ -258,15 +285,50 @@ dobby_ship_merge {키} {PR번호}
 rc4 로 빌드할까요?
 ```
 
-승인받으면 번들마다 건다.
+승인받으면 번들마다 건다. **→ 헬퍼 `dobby_ship_build {키} {환경} {번들...}`**
 
 ```bash
-gh workflow run app-static-ci-cd.yml -f environment={환경} -f runner=self-hosted
-gh workflow run app-global-ci-cd.yml -f environment={환경} -f runner=self-hosted
+dobby_ship_build {키} {환경} static global
 ```
 
-- `admin` 이 포함되면 `-f build_admin=true` 를 함께 준다.
-- 건 직후 `gh run list --workflow={파일} --limit 1 --json databaseId,url` 로 run id를 받아 적어 둔다.
+헬퍼가 번들마다 맞는 워크플로와 **빠지면 안 되는 옵션**을 붙여 준다.
+
+```bash
+# static — entry_all 을 반드시 붙인다
+gh workflow run app-static-ci-cd.yml -f environment={환경} -f runner=self-hosted -f build_entry_all=true
+# admin 이 포함되면 build_admin 도
+gh workflow run app-static-ci-cd.yml -f environment={환경} -f runner=self-hosted -f build_entry_all=true -f build_admin=true
+# 나머지
+gh workflow run app-global-ci-cd.yml         -f environment={환경} -f runner=self-hosted
+gh workflow run app-global-account-ci-cd.yml -f environment={환경} -f runner=self-hosted
+gh workflow run app-studio-ci-cd.yml         -f environment={환경} -f runner=self-hosted
+```
+
+### ⛔ static 은 `build_entry_all=true` 가 없으면 반쪽만 빌드된다
+
+`build-static.sh` 가 이 값으로 갈린다.
+
+```bash
+if [[ $BUILD_ENTRY_ALL == true || -z $GIT_PREVIOUS_TAG ]]; then
+    yarn build $BUILD_OPTIONS                            # 엔트리 전부
+else
+    yarn build $BUILD_OPTIONS --since $GIT_PREVIOUS_TAG  # 직전 태그 이후 바뀐 것만
+fi
+```
+
+빼면 lerna 가 "바뀐 패키지"만 골라 빌드한다. **공용 패키지(`packages/`)를 고쳤을 때 그것을 쓰는 엔트리가 안 잡히면 옛 번들이 그대로 남는다.** 그 상태로 테스트하면 수정 전 동작이 관측돼 코드 결함으로 오진한다(사례 FE1-1808).
+
+저장소 자신의 정기배포도 이 값을 쓴다.
+
+```bash
+# schedule-prepare-branch-for-regular-release.yml
+gh workflow run app-static-ci-cd.yml --field environment=stage \
+  --field runner=self-hosted --field build_entry_all=true
+```
+
+실행 이름 꼬리의 ` - all` 이 이 값이 켜졌다는 표시다 — `static - CI/CD - dev - all (self-hosted)`.
+
+건 직후 `gh run list --workflow={파일} --limit 1 --json databaseId,url` 로 run id 를 받아 적어 둔다.
 
 → `dobby_event {키} "빌드 시작 — {번들들} @ {환경}"`
 
@@ -296,33 +358,38 @@ gh run watch {run-id} --exit-status
 
 **언제 보나**: 빌드를 건 뒤 **3분 뒤부터 1분 간격**으로, 최대 15분. 실측 배포 시간은 **가장 빠름 1분 56초 · 평균 4분 09초 · 가장 느림 8분 33초**(12건)라 3분이면 첫 조회부터 잡히는 것도 있다.
 
-### 8. 번들 대조
+### 8. 검증 실행
 
-```bash
-dobby_ship_verify {키} "static global" "static global" || exit
-```
-
-빠진 번들이 있으면 **거부하고** 배송 단계를 `배포 일부 미확인 — {빠진 것}`으로 적어 준다.
-
-```
-필요한 번들   static, global
-배포 확인     static-rc4 #2801 ✅   global-rc4 #3276 ✅
-              → 다 됐다
-```
-
-**하나라도 빠졌으면 테스트로 넘어가지 않는다.** 더 기다리거나(15분 상한), 상한을 넘으면 무엇이 빠졌는지 알린 뒤 멈춘다.
-
-⛔ **반쪽 배포 상태로 테스트하면 안 된다.** 수정 전 동작이 관측돼 코드 결함으로 오진한다(사례 FE1-1808: 빌드가 머지보다 68분 앞선 상태로 회차를 열어 0성공/3실패/4건너뜀. 재배포 후 같은 절차로 9/0/0 통과 — 방법이 아니라 **순서**가 문제였다).
-
-→ `dobby_event {키} "배포 확인 — {번들}@{환경} {빌드번호}"`
-
-### 9. 검증 실행
+배포가 **완료됐다고 확인되면 바로 테스트한다.** 번들이 다 올라갔는지 미리 세지 않는다.
 
 ```
 /dobby-test {키}
 ```
 
-환경 인자로 방금 배포한 환경을 넘긴다. `dobby-test`에도 선확인 단계가 있어 한 번 더 걸러 준다.
+환경 인자로 방금 배포한 환경을 넘긴다. `dobby-test` 에도 선확인 단계가 있어 한 번 더 걸러 준다.
+
+**왜 미리 안 세나**: 번들 대조는 맞아떨어질 때는 아무것도 알려 주지 않고, 기다리게만 한다. 반쪽 배포는 **테스트가 실패로 드러내 준다.** 그때 원인을 가르는 데 쓰는 편이 값이 크다.
+
+### 9. 실패했을 때 — 번들부터 본다
+
+테스트가 실패하면 **코드를 의심하기 전에 배포부터 확인한다.**
+
+```bash
+dobby_ship_verify {키} "static global" "static"
+```
+
+```
+배포가 확인되지 않은 번들이 있다: global
+(필요: static global / 확인: static)
+```
+
+빠진 게 있으면 **코드 결함이 아니라 반쪽 배포다.** 그 번들만 다시 빌드(6단계)하고 배포를 기다린 뒤 회차를 다시 연다.
+
+⛔ **반쪽 배포를 코드 결함으로 오진하지 않는다.** 사례 FE1-1808: 빌드가 머지보다 68분 앞선 상태로 회차를 열어 **0성공/3실패/4건너뜀**. 재배포 후 같은 절차로 9/0/0 통과 — 방법이 아니라 **순서**가 문제였다. 실패를 보면 먼저 이걸 의심한다.
+
+빠진 것이 없는데도 실패했으면 그때가 진짜 코드 문제다.
+
+→ `dobby_event {키} "배포 확인 — {번들}@{환경} {빌드번호}"`
 
 ### 10. 마감
 
