@@ -2199,4 +2199,40 @@ dobby_ship_build() {
   dobby_event "$key" "빌드 시작 —${out} @ $env"
 }
 
+# dobby_testrun_prune 결과폴더 — 그 회차에서 **아무도 안 가리키는 그림**을 지운다.
+#
+# 테스트 중 화면을 확인하려고 찍은 그림이 결과 폴더에 그대로 남는다. 근거로 쓴 것은
+# result.md·summary.html 이 파일 이름으로 가리키므로, **가리키지 않는 것만** 지우면
+# 근거는 하나도 잃지 않는다. 사람이 고를 필요가 없다.
+#
+# 실측(회차 76개): 그림 66개 중 63개는 본문이 가리키고(87.7MB) 3개만 안 쓰였다(3.3MB).
+# 그중 하나는 스킬이 금지한 "요약 화면을 따로 찍은 것"이었다.
+#
+# ⛔ 안전: test-runs 폴더 안에서만 돌고, 그림 확장자만 지운다. 그 밖이면 아무것도 하지 않는다.
+dobby_testrun_prune() {
+  local dir="$1" f n del=0 kb=0 sz
+  [ -d "$dir" ] || { _die "폴더가 없다: $dir"; return 1; }
+  case "$dir" in
+    *"/test-runs/"*) : ;;
+    *) _die "test-runs 회차 폴더가 아니다: $dir"; return 1 ;;
+  esac
+
+  while IFS= read -r f; do
+    [ -f "$f" ] || continue
+    n="$(basename "$f")"
+    # 같은 폴더의 글(md·html)이 파일 이름을 가리키면 근거다 — 남긴다.
+    grep -rqF -- "$n" "$dir" --include="*.md" --include="*.html" 2>/dev/null && continue
+    sz="$(du -k "$f" 2>/dev/null | cut -f1)"; kb=$((kb + ${sz:-0}))
+    rm -f "$f" && del=$((del + 1))
+    printf '  지움 %s\n' "$n" >&2
+  done <<EOF
+$(find "$dir" -maxdepth 1 -type f \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.webp' -o -iname '*.gif' \) 2>/dev/null)
+EOF
+
+  if [ "$del" -gt 0 ]; then
+    printf '안 쓰는 그림 %s개 지움 (%sKB)\n' "$del" "$kb" >&2
+  fi
+  printf '%s' "$del"
+}
+
 echo "dobby-lib loaded" >&2
