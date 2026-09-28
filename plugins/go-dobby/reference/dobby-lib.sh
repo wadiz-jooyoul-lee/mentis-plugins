@@ -2145,6 +2145,22 @@ dobby_review_brief() {
     git -C "$wt" status --porcelain 2>/dev/null | grep '^??' | head -20
     printf '```\n\n'
 
+    local gone; gone="$(git -C "$wt" diff HEAD --name-only --diff-filter=D 2>/dev/null)"
+    if [ -n "$gone" ]; then
+      printf '**지운 파일**\n\n```\n%s\n```\n\n' "$gone"
+    fi
+
+    # 변경 본문. 리뷰어가 sed·cat 으로 조각조각 읽던 것을 한 번에 준다.
+    # 너무 크면 붙이지 않는다 — 프롬프트가 부풀면 매 왕복이 그만큼 무거워진다.
+    local dl; dl="$(git -C "$wt" diff HEAD 2>/dev/null | wc -l | tr -d " ")"
+    if [ "${dl:-0}" -gt 0 ] && [ "${dl:-0}" -le "${DOBBY_REVIEW_DIFF_MAX:-1200}" ]; then
+      printf '**변경 본문**(%s줄 — 이미 붙였으니 다시 읽지 않아도 된다)\n\n```diff\n' "$dl"
+      git -C "$wt" diff HEAD 2>/dev/null
+      printf '```\n\n'
+    else
+      printf '변경 본문 %s줄로 커서 붙이지 않는다 — 워크트리에서 직접 읽어라.\n\n' "${dl:-0}"
+    fi
+
     local lint rc
     lint="$(dobby_repo_lint "$wt" HEAD 2>&1)"; rc=$?
     if [ "$rc" -ne 0 ] && [ -n "$lint" ]; then
@@ -2178,16 +2194,29 @@ EOF
   done
 }
 
-# _review_symbols 워크트리 — 이번 변경에서 **지워지거나 바뀐** 내보내기·공개 메서드 이름.
-# 지운 줄(^-)에서만 뽑는다. 너무 흔한 짧은 이름(3자 이하)은 grep 이 의미 없어 뺀다.
+# _review_symbols 워크트리 — 이번 변경에서 **지워지거나 바뀐** 것 중 소비처를 찾아야 하는 것.
+#
+# 이름만으로는 모자란다. 실측(FE1-2005 리뷰의 grep 패턴 29개): 식별자 형태는 24% 뿐이고
+# 나머지는 **문자열**이었다 — JSP 번들 이름(`reward-simple-pay-app`), 이벤트 이름
+# (`simple-pay:requested`), 화면 문구. 이 저장소가 JSP·번들·문자열 키로 엮여 있어서다.
+# 그래서 세 가지를 뽑는다: 내보내기·공개 메서드 이름 · 지운 줄의 문자열 리터럴 · 지운 파일 이름.
 _review_symbols() {
-  git -C "$1" diff HEAD -U0 2>/dev/null \
-    | grep '^-' | grep -v '^---' \
-    | sed -E -n \
+  local wt="$1" d
+  d="$(git -C "$wt" diff HEAD -U0 2>/dev/null | grep '^-' | grep -v '^---')"
+  {
+    # ① 내보내기·공개 메서드 이름
+    printf '%s\n' "$d" | sed -E -n \
         -e 's/.*export[[:space:]]+(const|let|var|function|class|type|interface|enum)[[:space:]]+([A-Za-z_$][A-Za-z0-9_$]*).*/\2/p' \
         -e 's/.*export[[:space:]]+default[[:space:]]+function[[:space:]]+([A-Za-z_$][A-Za-z0-9_$]*).*/\1/p' \
-        -e 's/.*(public|protected|private)[[:space:]]+[A-Za-z0-9_<>,\[\][:space:]]+[[:space:]]([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*\(.*/\2/p' \
-    | awk 'length($0) > 3' | sort -u | head -20
+        -e 's/.*(public|protected|private)[[:space:]]+[A-Za-z0-9_<>,\[\][:space:]]+[[:space:]]([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*\(.*/\2/p'
+    # ② 문자열 리터럴. import 경로(`/`·`@`·`.` 시작)는 뺀다 — 소비처 개념이 아니다.
+    printf '%s\n' "$d" | grep -oE "'[^']{4,40}'|\"[^\"]{4,40}\"" \
+      | sed -E "s/^['\"]//; s/['\"]$//" \
+      | grep -vE '^[@./]|/' | grep -E '^[A-Za-z0-9가-힣]'
+    # ③ 지운 파일 이름(확장자 뺀 것) — JSP·설정이 이름으로 부른다
+    git -C "$wt" diff HEAD --name-only --diff-filter=D 2>/dev/null \
+      | sed -E 's#.*/##; s/\.[A-Za-z0-9]+$//'
+  } | awk 'length($0) > 3' | sort -u | head -25
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
