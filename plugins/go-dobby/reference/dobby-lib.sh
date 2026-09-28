@@ -1851,11 +1851,11 @@ _ship_has() { case " $2 " in *" $1 "*) return 0 ;; esac; return 1; }
 #
 # 단계는 아홉 개뿐이고 스킬 10단계와 하나씩 맞물린다. 여기 없는 값은 거부한다 —
 # 실측: 검사가 없던 때 남은 두 건 중 한 건이 서식과 달랐다(`배포 완료` 대신 `배포 완료`).
-DOBBY_SHIP_STAGE_LIST="PR 생성 / 리뷰 대기 / 리뷰 반영 N회차 / 머지 대기 / 빌드 대기 / 배포 대기 / 배포 확인 / 검증 중 / 반영 완료"
+DOBBY_SHIP_STAGE_LIST="PR 생성 / 리뷰 대기 / 리뷰 반영 N회차 / 머지 대기 / 빌드 대기 / 배포 대기 / 배포 확인 / 검증 중 / 검증 완료"
 
 _ship_stage_ok() {
   case "$1" in
-    "PR 생성"|"리뷰 대기"|"머지 대기"|"빌드 대기"|"배포 대기"|"배포 확인"|"검증 중"|"반영 완료") return 0 ;;
+    "PR 생성"|"리뷰 대기"|"머지 대기"|"빌드 대기"|"배포 대기"|"배포 확인"|"검증 중"|"검증 완료") return 0 ;;
     "리뷰 반영 "[0-9]*회차) return 0 ;;
   esac
   return 1
@@ -2121,6 +2121,105 @@ dobby_ship_verify() {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
+# dobby_review_brief 워크트리... — 리뷰 에이전트에게 **미리 붙여 줄 사실**을 한 번에 만든다.
+#
+# 왜: 리뷰 비용은 내용이 아니라 **왕복 횟수**다. 실측(리뷰 24건) — 명령으로 받아 본 내용은
+# 다 합쳐 0.42M 토큰인데 소비는 204M 이었다. 한 번 부를 때마다 그때까지 쌓인 문맥을 통째로
+# 다시 읽기 때문이다(FE1-2005: 문맥 79K→250K 로 167회 = 28.7M).
+#
+# 그래서 리뷰어가 **여러 턴에 걸쳐 스스로 알아내던 것**을 여기서 한 번에 준다.
+#   ① 무엇이 바뀌었나(미커밋 기준 diff 통계·파일 목록)
+#   ② 저장소 고유 금지 규칙 검사 결과(dobby_repo_lint — 리뷰어가 CLAUDE.md 를 다시 읽을 필요 없음)
+#   ③ 사라지거나 바뀐 심볼의 소비처(전수 grep) — 루브릭 A-1 이 심볼마다 시키던 일
+#
+# 출력은 markdown 이라 프롬프트에 그대로 붙인다.
+dobby_review_brief() {
+  local wt n
+  [ "$#" -gt 0 ] || { _die "쓰임: dobby_review_brief 워크트리..."; return 1; }
+  for wt in "$@"; do
+    [ -d "$wt" ] || { printf '### %s — 워크트리가 없다\n\n' "$wt"; continue; }
+    printf '### %s\n\n' "$(basename "$wt")"
+
+    printf '**바뀐 것(미커밋 포함)**\n\n```\n'
+    git -C "$wt" diff HEAD --stat 2>/dev/null | tail -40
+    git -C "$wt" status --porcelain 2>/dev/null | grep '^??' | head -20
+    printf '```\n\n'
+
+    local gone; gone="$(git -C "$wt" diff HEAD --name-only --diff-filter=D 2>/dev/null)"
+    if [ -n "$gone" ]; then
+      printf '**지운 파일**\n\n```\n%s\n```\n\n' "$gone"
+    fi
+
+    # 변경 본문. 리뷰어가 sed·cat 으로 조각조각 읽던 것을 한 번에 준다.
+    # 너무 크면 붙이지 않는다 — 프롬프트가 부풀면 매 왕복이 그만큼 무거워진다.
+    local dl; dl="$(git -C "$wt" diff HEAD 2>/dev/null | wc -l | tr -d " ")"
+    if [ "${dl:-0}" -gt 0 ] && [ "${dl:-0}" -le "${DOBBY_REVIEW_DIFF_MAX:-1200}" ]; then
+      printf '**변경 본문**(%s줄 — 이미 붙였으니 다시 읽지 않아도 된다)\n\n```diff\n' "$dl"
+      git -C "$wt" diff HEAD 2>/dev/null
+      printf '```\n\n'
+    else
+      printf '변경 본문 %s줄로 커서 붙이지 않는다 — 워크트리에서 직접 읽어라.\n\n' "${dl:-0}"
+    fi
+
+    local lint rc
+    lint="$(dobby_repo_lint "$wt" HEAD 2>&1)"; rc=$?
+    if [ "$rc" -ne 0 ] && [ -n "$lint" ]; then
+      printf '**저장소 고유 금지 규칙 — 위반 있음**\n\n```\n%s\n```\n\n' "$lint"
+    else
+      printf '**저장소 고유 금지 규칙 — 위반 없음**(헬퍼가 검사함. 같은 것을 다시 보지 않는다)\n\n'
+    fi
+
+    printf '**사라지거나 바뀐 심볼의 소비처**\n\n'
+    local syms; syms="$(_review_symbols "$wt")"
+    if [ -z "$syms" ]; then
+      printf '내보내기·공개 메서드 변경 없음.\n\n'
+    else
+      printf '| 심볼 | 쓰는 곳 | 위치(최대 3) |\n|---|---|---|\n'
+      local sym hits cnt loc
+      while IFS= read -r sym; do
+        [ -n "$sym" ] || continue
+        hits="$(grep -rIn --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=dist \
+                 --exclude-dir=build --exclude-dir=.next --exclude-dir=coverage \
+                 -F -- "$sym" "$wt" 2>/dev/null)"
+        cnt="$(printf '%s' "$hits" | grep -c . )"
+        loc="$(printf '%s\n' "$hits" | cut -d: -f1 | sort -u | head -3 \
+               | sed "s#^$wt/##" | awk '{printf "%s%s", (NR>1 ? " · " : ""), $0} END{print ""}')"
+        [ "$cnt" -gt 0 ] || loc='소비처 없음'
+        printf '| `%s` | %s | %s |\n' "$sym" "$cnt" "$loc"
+      done <<EOF
+$syms
+EOF
+      printf '\n'
+    fi
+  done
+}
+
+# _review_symbols 워크트리 — 이번 변경에서 **지워지거나 바뀐** 것 중 소비처를 찾아야 하는 것.
+#
+# 이름만으로는 모자란다. 실측(FE1-2005 리뷰의 grep 패턴 29개): 식별자 형태는 24% 뿐이고
+# 나머지는 **문자열**이었다 — JSP 번들 이름(`reward-simple-pay-app`), 이벤트 이름
+# (`simple-pay:requested`), 화면 문구. 이 저장소가 JSP·번들·문자열 키로 엮여 있어서다.
+# 그래서 세 가지를 뽑는다: 내보내기·공개 메서드 이름 · 지운 줄의 문자열 리터럴 · 지운 파일 이름.
+_review_symbols() {
+  local wt="$1" d
+  d="$(git -C "$wt" diff HEAD -U0 2>/dev/null | grep '^-' | grep -v '^---')"
+  {
+    # ① 내보내기·공개 메서드 이름
+    printf '%s\n' "$d" | sed -E -n \
+        -e 's/.*export[[:space:]]+(const|let|var|function|class|type|interface|enum)[[:space:]]+([A-Za-z_$][A-Za-z0-9_$]*).*/\2/p' \
+        -e 's/.*export[[:space:]]+default[[:space:]]+function[[:space:]]+([A-Za-z_$][A-Za-z0-9_$]*).*/\1/p' \
+        -e 's/.*(public|protected|private)[[:space:]]+[A-Za-z0-9_<>,\[\][:space:]]+[[:space:]]([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*\(.*/\2/p'
+    # ② 문자열 리터럴. import 경로(`/`·`@`·`.` 시작)는 뺀다 — 소비처 개념이 아니다.
+    printf '%s\n' "$d" | grep -oE "'[^']{4,40}'|\"[^\"]{4,40}\"" \
+      | sed -E "s/^['\"]//; s/['\"]$//" \
+      | grep -vE '^[@./]|/' | grep -E '^[A-Za-z0-9가-힣]'
+    # ③ 지운 파일 이름(확장자 뺀 것) — JSP·설정이 이름으로 부른다
+    git -C "$wt" diff HEAD --name-only --diff-filter=D 2>/dev/null \
+      | sed -E 's#.*/##; s/\.[A-Za-z0-9]+$//'
+  } | awk 'length($0) > 3' | sort -u | head -25
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
 # dobby_repo_lint — 저장소 고유 금지 규칙을 **이번 변경의 추가된 줄**에서 잡는다.
 #
 # 왜 "추가된 줄"만 보나: 규칙 대부분이 기존 코드에 이미 많이 깔려 있다(실측 wadiz-frontend:
@@ -2292,6 +2391,43 @@ dobby_ship_build() {
   dobby_ship_stage "$key" "$env" "배포 대기" "" "$cell"
 }
 
+# dobby_testrun_lint 결과폴더 — 근거 칸에 **파일 이름만** 적힌 행을 잡는다.
+#
+# 왜: 그림은 지금까지 한 번도 화면에 뜬 적이 없다(실측 회차 76개: result.md 가 이미지로
+# 띄운 것 0개 · 이름만 적힌 것 88개, summary.html 의 <img> 0개). 이름만 적힌 근거는
+# 읽는 사람에게 아무것도 알려 주지 않으면서 자리만 차지하고, 파일이 지워지면 빈 칸이 된다.
+#
+# 규칙은 둘 중 하나다.
+#   · 근거 칸에는 **관측한 사실**을 적는다 — 응답 본문·이동 경로·번들 시각·화면 문구.
+#   · 화면을 꼭 보여야 하면(레이아웃 깨짐 등) 본문에 `![설명](파일.png)` 으로 **띄운다.**
+#     띄우면 파일 이름은 그림이 있는 자리에 적히므로 근거 칸에 또 적을 필요가 없다.
+dobby_testrun_lint() {
+  local dir="$1" f bad
+  [ -d "$dir" ] || { _die "폴더가 없다: $dir"; return 1; }
+  f="$dir/result.md"
+  [ -f "$f" ] || { _die "result.md 가 없다: $dir"; return 1; }
+
+  bad="$(awk -F'|' '
+    /^[ \t]*\|/ && $0 ~ /근거/ && ci == 0 {
+      for (i = 1; i <= NF; i++) { h = $i; gsub(/[ \t*]/, "", h); if (h == "근거") ci = i }
+      next
+    }
+    ci > 0 && /^[ \t]*\|/ && $0 !~ /^[ \t]*\|[ \t:-]*\|/ {
+      v = $ci; gsub(/^[ \t`]+|[ \t`]+$/, "", v)
+      if (v ~ /^[A-Za-z0-9._-]+\.(png|jpg|jpeg|gif|webp)$/) {
+        row = $2; gsub(/^[ \t]+|[ \t]+$/, "", row)
+        printf "  %s → %s\n", row, v
+      }
+    }
+  ' "$f")"
+
+  [ -n "$bad" ] || return 0
+  _die "근거 칸에 파일 이름만 적힌 행이 있다. 그림은 화면에 뜨지 않으므로 읽는 사람이 볼 수 없다:
+$bad
+관측한 사실을 적어라(응답 본문·이동 경로·번들 시각·화면 문구). 화면을 꼭 보여야 하면 본문에 \`![설명](파일.png)\` 으로 띄우고, 근거 칸에는 무엇을 보라는 것인지 글로 적어라."
+  return 1
+}
+
 # dobby_testrun_prune 결과폴더 — 그 회차에서 **아무도 안 가리키는 그림**을 지운다.
 #
 # 테스트 중 화면을 확인하려고 찍은 그림이 결과 폴더에 그대로 남는다. 근거로 쓴 것은
@@ -2303,18 +2439,36 @@ dobby_ship_build() {
 #
 # ⛔ 안전: test-runs 폴더 안에서만 돌고, 그림 확장자만 지운다. 그 밖이면 아무것도 하지 않는다.
 dobby_testrun_prune() {
-  local dir="$1" f n del=0 kb=0 sz
+  local dir="$1" f n del=0 kb=0 sz refs
   [ -d "$dir" ] || { _die "폴더가 없다: $dir"; return 1; }
   case "$dir" in
     *"/test-runs/"*) : ;;
     *) _die "test-runs 회차 폴더가 아니다: $dir"; return 1 ;;
   esac
 
+  # 같은 폴더의 글(md·html)을 한 번만 읽어 둔다.
+  #
+  # ⛔ grep 으로 판정하지 않는다. 파일 인자 **뒤에** --include 를 주면 macOS 의 grep(BSD)이
+  #    그것을 옵션이 아니라 **없는 파일 이름**으로 읽어 종료코드 2(오류)를 낸다. 그러면
+  #    "참조 없음"으로 잘못 판정해 **근거 그림까지 전부 지운다.**
+  #    실측 FE1-2005(2026-09-28 11:31): result.md 가 가리키던 7장이 모두 지워졌다.
+  #      grep -rqF -- "이름" "$dir" --include="*.md"   → 2
+  #      grep -rqF --include="*.md" -- "이름" "$dir"   → 0
+  #    글로브(`"$dir"/*.md`)도 쓰지 않는다 — zsh 는 짝이 없으면 명령 전체를 멈춰서,
+  #    html 이 아직 없을 때 md 까지 못 읽고 "근거 없음"이 된다.
+  refs="$(find "$dir" -maxdepth 1 -type f \( -name '*.md' -o -name '*.html' \) -exec cat {} + 2>/dev/null)"
+
+  # 글이 하나도 없으면 무엇이 근거인지 알 수 없다 — 아무것도 지우지 않는다.
+  if [ -z "$refs" ]; then
+    printf 'dobby-lib: 본문(md·html)이 없어 그림을 지우지 않는다: %s\n' "$dir" >&2
+    printf '0'; return 0
+  fi
+
   while IFS= read -r f; do
     [ -f "$f" ] || continue
     n="$(basename "$f")"
-    # 같은 폴더의 글(md·html)이 파일 이름을 가리키면 근거다 — 남긴다.
-    grep -rqF -- "$n" "$dir" --include="*.md" --include="*.html" 2>/dev/null && continue
+    # 본문이 파일 이름을 가리키면 근거다 — 남긴다.
+    case "$refs" in *"$n"*) continue ;; esac
     sz="$(du -k "$f" 2>/dev/null | cut -f1)"; kb=$((kb + ${sz:-0}))
     rm -f "$f" && del=$((del + 1))
     printf '  지움 %s\n' "$n" >&2
