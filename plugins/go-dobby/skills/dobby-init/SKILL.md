@@ -65,9 +65,15 @@ mkdir -p ~/.config/go-dobby
    cp "${CLAUDE_PLUGIN_ROOT}/hooks/pre-bash.sh"   ~/.config/go-dobby/hooks/pre-bash.sh
    cp "${CLAUDE_PLUGIN_ROOT}/hooks/pre-agent.sh"  ~/.config/go-dobby/hooks/pre-agent.sh
    cp "${CLAUDE_PLUGIN_ROOT}/hooks/post-agent.sh" ~/.config/go-dobby/hooks/post-agent.sh
+   cp "${CLAUDE_PLUGIN_ROOT}/hooks/pre-edit.sh"   ~/.config/go-dobby/hooks/pre-edit.sh
    cp "${CLAUDE_PLUGIN_ROOT}/reference/dobby-lib.sh" ~/.config/go-dobby/hooks/dobby-lib.sh
    ```
-   (스폰 훅은 `dobby_agent_add`·`dobby_log`를 불러 쓰므로 `dobby-lib.sh` 사본이 함께 필요하다.)
+   (스폰 훅은 `dobby_agent_add`·`dobby_log`를, 편집 훅은 `dobby_repo_lint` 의 규칙표를 불러 쓰므로
+   `dobby-lib.sh` 사본이 함께 필요하다.)
+
+   ⛔ **`hooks.json` 에 있는 PreToolUse 훅은 하나도 빠짐없이 여기서 복사·등록해야 한다.**
+   빠뜨리면 그 훅은 **한 번도 돌지 않는다**(플러그인 훅이 드랍되므로 대체 경로가 없다).
+   실측: `pre-edit.sh`(G14)가 이 목록에 없어서, 등록된 적이 없는 채로 있었다.
 2. **`~/.claude/settings.json`에 등록** — 비파괴 원칙을 settings.json에도 그대로 적용한다:
    - 기존 내용(다른 훅·권한·설정)은 **한 글자도 건드리지 않고**, `hooks.PreToolUse` 배열에
      go-dobby 항목만 병합한다(jq 병합 권장).
@@ -102,6 +108,14 @@ mkdir -p ~/.config/go-dobby
                      "args": ["/Users/{사용자}/.config/go-dobby/hooks/post-agent.sh"],
                      "timeout": 5, "statusMessage": "go-dobby 스폰 기록" }] }]
    ```
+   - **편집 훅(G14)** — 저장소 고유 금지 규칙을 **파일을 쓰는 순간** 잡는다. 이것도 도구 이름
+     matcher라 `if` 없이 등록한다:
+   ```json
+   "PreToolUse": [{ "matcher": "Edit|Write", "hooks": [{ "type": "command", "command": "bash",
+                    "args": ["/Users/{사용자}/.config/go-dobby/hooks/pre-edit.sh"],
+                    "timeout": 5, "statusMessage": "go-dobby 저장소 규칙 검사" }] }]
+   ```
+   (커밋 직전 `dobby_repo_lint` 가 한 번 더 막지만, 쓰는 순간 걸러야 잘못된 코드를 쌓아 두지 않는다.)
    - 저장 전 `jq . ~/.claude/settings.json`으로 **파싱 확인**(스키마 오류 하나면 그 파일의 훅
      전체가 조용히 꺼진다), 변경 요약을 보여주고 확인받는다.
 3. **적용 시점 안내**: settings.json 훅 변경은 **새 세션부터** 적용된다고 알린다.
