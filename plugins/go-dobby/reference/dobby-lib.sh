@@ -2303,18 +2303,36 @@ dobby_ship_build() {
 #
 # ⛔ 안전: test-runs 폴더 안에서만 돌고, 그림 확장자만 지운다. 그 밖이면 아무것도 하지 않는다.
 dobby_testrun_prune() {
-  local dir="$1" f n del=0 kb=0 sz
+  local dir="$1" f n del=0 kb=0 sz refs
   [ -d "$dir" ] || { _die "폴더가 없다: $dir"; return 1; }
   case "$dir" in
     *"/test-runs/"*) : ;;
     *) _die "test-runs 회차 폴더가 아니다: $dir"; return 1 ;;
   esac
 
+  # 같은 폴더의 글(md·html)을 한 번만 읽어 둔다.
+  #
+  # ⛔ grep 으로 판정하지 않는다. 파일 인자 **뒤에** --include 를 주면 macOS 의 grep(BSD)이
+  #    그것을 옵션이 아니라 **없는 파일 이름**으로 읽어 종료코드 2(오류)를 낸다. 그러면
+  #    "참조 없음"으로 잘못 판정해 **근거 그림까지 전부 지운다.**
+  #    실측 FE1-2005(2026-09-28 11:31): result.md 가 가리키던 7장이 모두 지워졌다.
+  #      grep -rqF -- "이름" "$dir" --include="*.md"   → 2
+  #      grep -rqF --include="*.md" -- "이름" "$dir"   → 0
+  #    글로브(`"$dir"/*.md`)도 쓰지 않는다 — zsh 는 짝이 없으면 명령 전체를 멈춰서,
+  #    html 이 아직 없을 때 md 까지 못 읽고 "근거 없음"이 된다.
+  refs="$(find "$dir" -maxdepth 1 -type f \( -name '*.md' -o -name '*.html' \) -exec cat {} + 2>/dev/null)"
+
+  # 글이 하나도 없으면 무엇이 근거인지 알 수 없다 — 아무것도 지우지 않는다.
+  if [ -z "$refs" ]; then
+    printf 'dobby-lib: 본문(md·html)이 없어 그림을 지우지 않는다: %s\n' "$dir" >&2
+    printf '0'; return 0
+  fi
+
   while IFS= read -r f; do
     [ -f "$f" ] || continue
     n="$(basename "$f")"
-    # 같은 폴더의 글(md·html)이 파일 이름을 가리키면 근거다 — 남긴다.
-    grep -rqF -- "$n" "$dir" --include="*.md" --include="*.html" 2>/dev/null && continue
+    # 본문이 파일 이름을 가리키면 근거다 — 남긴다.
+    case "$refs" in *"$n"*) continue ;; esac
     sz="$(du -k "$f" 2>/dev/null | cut -f1)"; kb=$((kb + ${sz:-0}))
     rm -f "$f" && del=$((del + 1))
     printf '  지움 %s\n' "$n" >&2
