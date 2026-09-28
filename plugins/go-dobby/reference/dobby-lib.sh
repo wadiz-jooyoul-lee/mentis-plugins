@@ -1949,6 +1949,141 @@ dobby_ship_repo() {
   ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
 }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 다리 브랜치 — {브랜치}_into_{환경}
+#
+# ⛔ 이 저장소에서는 **언제나** 다리 브랜치로 올린다. 충돌이 없어도 그렇게 한다.
+#
+# 왜: git 은 깨끗한데 GitHub 이 충돌이라 하는 일이 잦다. 공통 조상이 여러 개일 때
+# 생긴다 — git 은 조상들을 재귀적으로 합친 가상 기준으로 병합하지만 GitHub 은 조상
+# 하나만 쓴다. 병합 커밋을 미리 만들어 올리면 환경 브랜치가 그 커밋의 조상이 되어
+# 모호성이 사라진다. 실측 FE1-1800: #29211·#29272·#29428 이 모두 _into_dev 였고,
+# 다리 없이 올린 #29427 만 닫혔다(FE1-1943 도 _into_rc4).
+#
+# 예전에는 "먼저 그냥 PR 을 만들고 GitHub 이 충돌이라 하면 다시 다리로" 였는데,
+# 그러면 PR 을 만들었다 닫고 다시 만든다. 처음부터 다리로 가면 그 왕복이 없다.
+
+# dobby_bridge_make 워크트리 브랜치 환경 — 다리 브랜치를 만들어 원격에 올린다.
+#
+# 충돌이 없으면 체크아웃 없이 병합 커밋만 만들어 올린다(작업 트리·HEAD 안 건드림).
+#   → stdout: `clean`
+# 충돌이 있으면 **임시 워크트리**에 병합을 멈춘 상태로 만들어 두고 그 경로를 돌려준다.
+#   → stdout: `conflict {임시워크트리경로}` + 충돌 파일 목록(stderr), 반환값 2
+#   오더 워크트리는 건드리지 않는다 — 리뷰를 통과한 상태 그대로 둔다.
+dobby_bridge_make() {
+  local wt="$1" br="$2" env="$3"
+  [ -d "$wt" ] || { _die "워크트리가 없다: $wt"; return 1; }
+  local bridge="${br}_into_${env}"
+  git -C "$wt" fetch -q origin "$env" "$br" 2>/dev/null
+
+  local tree
+  tree="$(git -C "$wt" merge-tree --write-tree "origin/$env" "origin/$br" 2>/dev/null | head -1)"
+  if [ -n "$tree" ] && git -C "$wt" merge-tree --write-tree "origin/$env" "origin/$br" >/dev/null 2>&1; then
+    local commit
+    commit="$(git -C "$wt" commit-tree "$tree" -p "origin/$env" -p "origin/$br" \
+      -m "Merge branch '$br' into $env" 2>/dev/null)" \
+      || { _die "병합 커밋을 만들지 못했다"; return 1; }
+    git -C "$wt" push -q origin "${commit}:refs/heads/${bridge}" --force-with-lease 2>/dev/null \
+      || git -C "$wt" push -q origin "${commit}:refs/heads/${bridge}" 2>/dev/null \
+      || { _die "다리 브랜치 $bridge 를 올리지 못했다"; return 1; }
+    printf 'clean'
+    return 0
+  fi
+
+  # ── 충돌 — 임시 워크트리에서 진짜 병합을 해 둔다 ────────────────────────
+  local tmp; tmp="$(mktemp -d -t dobbybridge)" || { _die "임시 폴더를 만들지 못했다"; return 1; }
+  rm -rf "$tmp"
+  git -C "$wt" worktree add -q --detach "$tmp" "origin/$env" 2>/dev/null \
+    || { _die "임시 워크트리를 만들지 못했다: $tmp"; return 1; }
+  git -C "$tmp" checkout -q -B "$bridge" 2>/dev/null
+  git -C "$tmp" merge --no-commit --no-ff "origin/$br" >/dev/null 2>&1
+
+  local files; files="$(git -C "$tmp" diff --name-only --diff-filter=U 2>/dev/null)"
+  if [ -z "$files" ]; then
+    # merge-tree 는 충돌이라 했는데 실제 병합은 깨끗했다 — 그대로 마무리한다.
+    printf 'dobby-lib: 실제 병합은 깨끗했다. 그대로 올린다.\n' >&2
+    dobby_bridge_finish "$tmp" "$br" "$env" >/dev/null || return 1
+    printf 'clean'
+    return 0
+  fi
+  printf 'dobby-lib: 충돌 %s개 — 임시 워크트리에서 풀어라: %s\n' \
+    "$(printf '%s\n' "$files" | grep -c .)" "$tmp" >&2
+  printf '%s\n' "$files" >&2
+  printf 'conflict %s' "$tmp"
+  return 2
+}
+
+# dobby_conflict_evidence 임시워크트리 브랜치 환경 — 충돌 파일마다 **양쪽이 왜 건드렸나**.
+#
+# ⛔ 근거 없이 한쪽을 고르지 않는다. 그래서 고르기 전에 이걸 한 번 부른다.
+# 파일마다 따로 git 을 치면 왕복이 파일 수만큼 는다 — 한 번에 모아 준다.
+dobby_conflict_evidence() {
+  local tmp="$1" br="$2" env="$3" f base
+  [ -d "$tmp" ] || { _die "폴더가 없다: $tmp"; return 1; }
+  base="$(git -C "$tmp" merge-base "origin/$env" "origin/$br" 2>/dev/null)"
+  [ -n "$base" ] || { _die "공통 조상을 찾지 못했다"; return 1; }
+
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    printf '### %s\n\n' "$f"
+    printf '**이 오더 쪽(%s) 이력**\n\n```\n' "$br"
+    git -C "$tmp" log --oneline "$base..origin/$br" -- "$f" 2>/dev/null | head -10
+    printf '```\n\n**환경 쪽(%s) 이력**\n\n```\n' "$env"
+    git -C "$tmp" log --oneline "$base..origin/$env" -- "$f" 2>/dev/null | head -10
+    printf '```\n\n**이 오더 쪽 변경**\n\n```diff\n'
+    git -C "$tmp" diff "$base" "origin/$br" -- "$f" 2>/dev/null | head -120
+    printf '```\n\n**환경 쪽 변경**\n\n```diff\n'
+    git -C "$tmp" diff "$base" "origin/$env" -- "$f" 2>/dev/null | head -120
+    printf '```\n\n'
+  done <<EOF
+$(git -C "$tmp" diff --name-only --diff-filter=U 2>/dev/null)
+EOF
+}
+
+# dobby_bridge_finish 임시워크트리 브랜치 환경 — 검증하고 커밋·푸시하고 정리한다.
+#
+# 사람이 승인하지 않는 흐름이라 검증을 두껍게 한다. 하나라도 걸리면 **아무것도 올리지 않고**
+# 임시 워크트리를 그대로 남긴다(무엇이 걸렸는지 그 자리에서 볼 수 있게).
+#   ① 충돌 표시자가 남아 있나
+#   ② 해결하지 않은 파일이 남아 있나(UU·AA·DU·UD)
+#   ③ 저장소 고유 금지 규칙(dobby_repo_lint)
+# 의도 보존(양쪽 핵심 식별자가 결과에 남아 있나)은 기계가 못 가리므로 **스킬이 판단**한다.
+dobby_bridge_finish() {
+  local tmp="$1" br="$2" env="$3"
+  [ -d "$tmp" ] || { _die "폴더가 없다: $tmp"; return 1; }
+  local bridge="${br}_into_${env}" bad
+
+  # ① 표시자가 남아 있으면 아직 안 푼 것이다. (작업 트리 내용 기준 — add 여부와 무관)
+  bad="$(git -C "$tmp" grep -n -E '^(<<<<<<<|=======|>>>>>>>)' 2>/dev/null | head -20)"
+  [ -z "$bad" ] || { _die "충돌 표시자가 남아 있다:
+$bad"; return 1; }
+
+  # ② 무엇이 충돌이었는지 기록으로 남긴다. 파일을 고치기만 하고 add 하지 않은 상태가
+  #    정상이므로(스킬은 내용만 고친다) 여기서 거부하지 않고 아래에서 add 한다.
+  local unmerged; unmerged="$(git -C "$tmp" diff --name-only --diff-filter=U 2>/dev/null)"
+  [ -z "$unmerged" ] || printf 'dobby-lib: 충돌이었던 파일 — %s\n' "$(printf '%s' "$unmerged" | tr '\n' ' ')" >&2
+
+  git -C "$tmp" add -A >/dev/null 2>&1
+
+  # ③ 스테이지에 표시자가 섞여 들어가지 않았나(빈칸·탭 오염 포함)
+  git -C "$tmp" diff --cached --check >&2 || { _die "스테이지에 문제가 있다(위 출력)"; return 1; }
+
+  if ! dobby_repo_lint "$tmp" HEAD >&2; then
+    _die "저장소 고유 금지 규칙에 걸렸다. 위 지적을 고치고 다시 불러라."
+    return 1
+  fi
+
+  git -C "$tmp" commit -q --no-verify -m "Merge branch '$br' into $env" >/dev/null 2>&1 \
+    || { _die "병합 커밋을 만들지 못했다"; return 1; }
+  git -C "$tmp" push -q origin "HEAD:refs/heads/${bridge}" --force-with-lease 2>/dev/null \
+    || git -C "$tmp" push -q origin "HEAD:refs/heads/${bridge}" 2>/dev/null \
+    || { _die "다리 브랜치 $bridge 를 올리지 못했다"; return 1; }
+
+  git -C "$tmp" worktree remove --force "$tmp" >/dev/null 2>&1 \
+    || rm -rf "$tmp" 2>/dev/null
+  printf '%s' "$bridge"
+}
+
 # dobby_ship_pr KEY 워크트리 브랜치 환경 "제목" "본문" — PR 생성(또는 기존 것 재사용). 번호 stdout.
 #
 # 막는 것:
@@ -1956,8 +2091,11 @@ dobby_ship_repo() {
 #   · 워크트리에 미커밋 변경이 남아 있으면 거부 — 리뷰 통과분만 나간다(C1)
 #   · 같은 (브랜치→환경) PR 이 이미 열려 있으면 새로 만들지 않고 그 번호를 돌려준다
 #     (다리 브랜치 {브랜치}_into_{환경} 로 올라간 것까지 함께 본다)
-#   · 진짜 충돌이면 거부한다 — 충돌 해결은 /merge-branch 스킬이 한다
-#   · GitHub 이 충돌로 판정하면(git 은 깨끗한데 공통 조상이 여러 개) **다리 브랜치로 다시 올린다**
+#   · ⛔ **언제나 다리 브랜치({브랜치}_into_{환경})로 올린다** — 충돌이 없어도 그렇게 한다.
+#     GitHub 이 멀쩡한 병합을 충돌로 판정하는 일이 잦아(공통 조상 여러 개), 예전처럼
+#     "그냥 올렸다가 충돌이라 하면 다시 다리로" 하면 PR 을 만들었다 닫고 다시 만든다.
+#   · 충돌이 있으면 다리를 만들지 못하므로 거부한다 — 푸는 것은 dobby_bridge_make 가 만든
+#     임시 워크트리에서 스킬이 한다(dobby_conflict_evidence → 해결 → dobby_bridge_finish).
 # 해 주는 것:
 #   · dev 를 뺀 환경에 --reviewer wadiz-fe/fe1-team 을 **자동으로** 붙인다.
 #     리뷰 요청이 있어야 자동 코드리뷰가 돌아 승인이 붙는다. 스킬이 깜빡할 수 없게 여기서 붙인다.
@@ -2000,60 +2138,25 @@ $dirty"
     printf '%s' "$n"; return 0
   fi
 
-  git -C "$wt" fetch -q origin "$env" "$br" 2>/dev/null
-
-  # ⛔ 진짜 충돌인지 먼저 본다. 체크아웃·브랜치 생성 없이 병합 결과만 미리 계산한다
-  # (merge-branch 스킬 4장). 작업 트리·HEAD·인덱스를 건드리지 않는다.
-  local tree
-  tree="$(git -C "$wt" merge-tree --write-tree "origin/$env" "origin/$br" 2>/dev/null | head -1)"
-  if [ -z "$tree" ] || ! git -C "$wt" merge-tree --write-tree "origin/$env" "origin/$br" >/dev/null 2>&1; then
-    _die "$br → $env 에 실제 충돌이 있다. 이 스킬은 충돌을 풀지 않는다 — /merge-branch $br $env 로 해결해 PR 을 만든 뒤 다시 하라."
+  # ── 다리 브랜치를 만든다(충돌이 없어도 언제나) ─────────────────────────
+  local made rc
+  made="$(dobby_bridge_make "$wt" "$br" "$env")"; rc=$?
+  if [ "$rc" -eq 2 ]; then
+    _die "$br → $env 에 충돌이 있다. 임시 워크트리에서 풀어라: ${made#conflict }
+  ① dobby_conflict_evidence {임시워크트리} $br $env   — 양쪽이 왜 건드렸는지 본다
+  ② 근거로 판단해 직접 고친다. 근거로도 어느 쪽이 맞는지 확정되지 않으면 사용자에게 묻는다
+  ③ dobby_bridge_finish {임시워크트리} $br $env       — 검증하고 올린다
+  그 뒤 이 함수를 다시 부르면 다리 브랜치로 PR 을 만든다."
     return 1
   fi
+  [ "$rc" -eq 0 ] || return 1
 
   local extra=()
   [ "$env" = "dev" ] || extra=(--reviewer wadiz-fe/fe1-team)
-  ( cd "$wt" && gh pr create --base "$env" --head "$br" --title "$title" --body "$body" "${extra[@]}" ) >&2 || return 1
-  n="$(gh pr list --repo "$rp" --head "$br" --base "$env" --state open --json number -q '.[0].number')"
-  [ -n "$n" ] || { _die "PR 을 만들었는데 번호를 못 찾았다"; return 1; }
-
-  # GitHub 판정을 반드시 확인한다. UNKNOWN 이면 계산 중이므로 세 번까지 다시 본다.
-  local m i
-  for i in 1 2 3; do
-    m="$(gh pr view "$n" --repo "$rp" --json mergeable -q .mergeable 2>/dev/null)"
-    [ "$m" = "UNKNOWN" ] || break
-    sleep 3
-  done
-  [ "$m" = "CONFLICTING" ] || {
-    dobby_ship_stage "$key" "$env" "PR 생성" "#$n"; dobby_ship_repo "$key" "$rp"
-    printf '%s' "$n"; return 0
-  }
-
-  # ── 다리 브랜치로 다시 올린다 (merge-branch 스킬의 A → B 경로) ──────────
-  #
-  # git 은 깨끗한데 GitHub 이 충돌이라 한다. 공통 조상이 여러 개일 때 생긴다 — git 은
-  # 조상들을 재귀적으로 합친 가상 기준으로 병합하지만 GitHub 은 조상 하나만 쓴다.
-  # 병합 커밋을 미리 만들어 올리면 $env 가 그 커밋의 조상이 되어 모호성이 사라진다.
-  #
-  # 이 저장소에서는 예외가 아니라 **정상 경로**다(실측 FE1-1800: #29211·#29272·#29428 이
-  # 모두 _into_dev 였고, 다리 없이 올린 #29427 만 닫혔다. FE1-1943 도 _into_rc4).
-  printf 'dobby-lib: GitHub 이 PR #%s 를 충돌로 판정했다(git 은 깨끗함 — 공통 조상 여러 개). 다리 브랜치 %s 로 다시 올린다.\n' "$n" "$bridge" >&2
-
-  local commit
-  commit="$(git -C "$wt" commit-tree "$tree" -p "origin/$env" -p "origin/$br" \
-    -m "Merge branch '$br' into $env" 2>/dev/null)" || { _die "병합 커밋을 만들지 못했다"; return 1; }
-  git -C "$wt" push -q origin "${commit}:refs/heads/${bridge}" --force-with-lease 2>/dev/null \
-    || git -C "$wt" push -q origin "${commit}:refs/heads/${bridge}" 2>/dev/null \
-    || { _die "다리 브랜치 $bridge 를 올리지 못했다"; return 1; }
-
-  gh pr close "$n" --repo "$rp" \
-    --comment "GitHub 이 충돌로 판정해 닫습니다(git 병합은 깨끗합니다 — 공통 조상이 여러 개). 병합 커밋을 담은 $bridge 로 다시 올립니다." >&2 2>/dev/null
-
-  ( cd "$wt" && gh pr create --base "$env" --head "$bridge" \
-      --title "merge: $br → $env (충돌 해결)" --body "$body" "${extra[@]}" ) >&2 || return 1
+  ( cd "$wt" && gh pr create --base "$env" --head "$bridge" --title "$title" --body "$body" "${extra[@]}" ) >&2 || return 1
   n="$(gh pr list --repo "$rp" --head "$bridge" --base "$env" --state open --json number -q '.[0].number')"
-  [ -n "$n" ] || { _die "다리 PR 번호를 못 찾았다"; return 1; }
-  dobby_event "$key" "PR 재생성 — #$n ($bridge → $env, GitHub 충돌 판정으로 다리 브랜치 사용)"
+  [ -n "$n" ] || { _die "PR 을 만들었는데 번호를 못 찾았다"; return 1; }
+  dobby_event "$key" "PR 생성 — #$n ($bridge → $env)"
   dobby_ship_stage "$key" "$env" "PR 생성" "#$n"
   dobby_ship_repo "$key" "$rp"
   printf '%s' "$n"

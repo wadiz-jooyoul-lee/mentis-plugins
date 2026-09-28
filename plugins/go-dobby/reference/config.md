@@ -61,6 +61,9 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 | `dobby_ship_merge KEY PR번호` | dobby-ship 5단계 | 머지. **베이스가 dev·rc1·rc4 가 아니면·충돌이면·미반영 변경요청이 있으면 거부**(stage·정식 배포 베이스는 사용자가 직접) |
 | `dobby_ship_round KEY 환경` | dobby-ship 리뷰 반영 직전 | 회차 stdout + 배포 표에 `리뷰 반영 N회차`. **4회째면 거부**하고 비고에 `리뷰 왕복 3회 — 사람 확인 필요` |
 | `dobby_ship_verify KEY "필요번들" "확인된번들"` | dobby-ship 9단계(테스트 **실패했을 때**) | 배포 대조. 빠진 번들이 있으면 1 반환. **게이트가 아니라 진단 도구다** — 배포 완료가 확인되면 바로 테스트하고, 실패하면 코드를 의심하기 전에 이것으로 반쪽 배포부터 가른다(사례 FE1-1808) |
+| `dobby_bridge_make 워크트리 브랜치 환경` | dobby_ship_pr 안에서 | 다리 브랜치를 만들어 올린다. 충돌 없으면 `clean`, 있으면 임시 워크트리 경로를 주고 2를 반환 |
+| `dobby_conflict_evidence 임시워크트리 브랜치 환경` | 충돌을 풀기 전 | 충돌 파일마다 양쪽 이력·diff 를 한 번에. **근거 없이 한쪽을 고르지 않는다** |
+| `dobby_bridge_finish 임시워크트리 브랜치 환경` | 충돌을 푼 뒤 | 표시자·스테이지·저장소 규칙을 검사하고 커밋·푸시·임시 워크트리 정리 |
 | `dobby_ship_stage KEY 환경 단계 [PR] [빌드] [비고]` | dobby-ship 단계 전이마다 | status.md `## 배포` 표를 환경별 한 행으로 upsert. **어휘 아홉 개·환경 네 개 밖이면 거부.** 다음 실행이 여기서 이어받는다 |
 | `dobby_commit_push 워크트리 브랜치 "메시지"` | P6 통과 후 | commit --no-verify + push. **⛔ 메시지에 내부 용어(`round-N`·리뷰 반영·슬러그)·금지 서명(Co-Authored-By 등) 감지 시 거부**(코드 강제) |
 | `dobby_bootstrap_inline KEY "제목" 종류 슬러그 "이름" "설명" [상태] [CWD]` | P4-L·P4-C·P4-W 인라인 분기 | status 골격+제목+종류+세션+상태표 1행+agent-logs(메인 세션 전사)를 한 번에 |
