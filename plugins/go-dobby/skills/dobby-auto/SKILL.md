@@ -57,7 +57,7 @@ dobby-order (light · design=auto)  →  dobby-ship  →  dobby-test  →  알�
 
 ## 3. 충돌 — 멈추지 않고 직접 푼다
 
-**⛔ PR 은 언제나 다리 브랜치(`{브랜치}_into_{환경}`)로 만든다.** 충돌이 없어도 그렇게 한다. `dobby_ship_pr` 이 그렇게 돼 있다.
+**⛔ PR 은 언제나 충돌 해결 브랜치(`{브랜치}_into_{환경}`)로 만든다.** 충돌이 없어도 그렇게 한다. `dobby_ship_pr` 이 그렇게 돼 있다.
 
 `dobby_ship_pr` 이 충돌로 거부하면 임시 워크트리 경로를 함께 준다. 거기서 푼다 — **오더 워크트리는 건드리지 않는다.**
 
@@ -205,7 +205,7 @@ cloud_live            절대 (훅 G1)
 |---|---|
 | cloud_live 로 가는 모든 것 | 훅 G1 |
 | 머지 베이스가 dev·rc1·rc4 인지 | 훅 G1 + `dobby_ship_merge` |
-| PR 은 언제나 다리 브랜치로 | `dobby_ship_pr` |
+| PR 은 언제나 충돌 해결 브랜치로 | `dobby_ship_pr` |
 | 충돌 표시자·스테이지 오염·저장소 규칙 | `dobby_bridge_finish` |
 | 리뷰 왕복 4회 이상 | `dobby_ship_round` |
 | 배포 단계 어휘·환경 | `dobby_ship_stage` |

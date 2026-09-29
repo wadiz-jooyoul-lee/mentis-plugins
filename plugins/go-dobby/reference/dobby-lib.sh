@@ -1859,11 +1859,11 @@ _words() { printf '%s\n' "$1" | tr ' \t' '\n\n' | grep -v '^$'; }
 #
 # 단계는 아홉 개뿐이고 스킬 10단계와 하나씩 맞물린다. 여기 없는 값은 거부한다 —
 # 실측: 검사가 없던 때 남은 두 건 중 한 건이 서식과 달랐다(`배포 완료` 대신 `배포 완료`).
-DOBBY_SHIP_STAGE_LIST="PR 생성 / 리뷰 대기 / 리뷰 반영 N회차 / 머지 대기 / 빌드 대기 / 배포 대기 / 배포 확인 / 검증 중 / 검증 완료"
+DOBBY_SHIP_STAGE_LIST="PR 생성 / 리뷰 대기 / 리뷰 취소 / 리뷰 반영 N회차 / 머지 대기 / 빌드 대기 / 배포 대기 / 배포 확인 / 검증 중 / 검증 완료"
 
 _ship_stage_ok() {
   case "$1" in
-    "PR 생성"|"리뷰 대기"|"머지 대기"|"빌드 대기"|"배포 대기"|"배포 확인"|"검증 중"|"검증 완료") return 0 ;;
+    "PR 생성"|"리뷰 대기"|"리뷰 취소"|"머지 대기"|"빌드 대기"|"배포 대기"|"배포 확인"|"검증 중"|"검증 완료") return 0 ;;
     "리뷰 반영 "[0-9]*회차) return 0 ;;
   esac
   return 1
@@ -1950,20 +1950,20 @@ dobby_ship_repo() {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 다리 브랜치 — {브랜치}_into_{환경}
+# 충돌 해결 브랜치 — {브랜치}_into_{환경}
 #
-# ⛔ 이 저장소에서는 **언제나** 다리 브랜치로 올린다. 충돌이 없어도 그렇게 한다.
+# ⛔ 이 저장소에서는 **언제나** 충돌 해결 브랜치로 올린다. 충돌이 없어도 그렇게 한다.
 #
 # 왜: git 은 깨끗한데 GitHub 이 충돌이라 하는 일이 잦다. 공통 조상이 여러 개일 때
 # 생긴다 — git 은 조상들을 재귀적으로 합친 가상 기준으로 병합하지만 GitHub 은 조상
 # 하나만 쓴다. 병합 커밋을 미리 만들어 올리면 환경 브랜치가 그 커밋의 조상이 되어
 # 모호성이 사라진다. 실측 FE1-1800: #29211·#29272·#29428 이 모두 _into_dev 였고,
-# 다리 없이 올린 #29427 만 닫혔다(FE1-1943 도 _into_rc4).
+# 충돌 해결 브랜치 없이 올린 #29427 만 닫혔다(FE1-1943 도 _into_rc4).
 #
-# 예전에는 "먼저 그냥 PR 을 만들고 GitHub 이 충돌이라 하면 다시 다리로" 였는데,
-# 그러면 PR 을 만들었다 닫고 다시 만든다. 처음부터 다리로 가면 그 왕복이 없다.
+# 예전에는 "먼저 그냥 PR 을 만들고 GitHub 이 충돌이라 하면 다시 충돌 해결 브랜치로" 였는데,
+# 그러면 PR 을 만들었다 닫고 다시 만든다. 처음부터 충돌 해결 브랜치로 가면 그 왕복이 없다.
 
-# dobby_bridge_make 워크트리 브랜치 환경 — 다리 브랜치를 만들어 원격에 올린다.
+# dobby_bridge_make 워크트리 브랜치 환경 — 충돌 해결 브랜치를 만들어 원격에 올린다.
 #
 # 충돌이 없으면 체크아웃 없이 병합 커밋만 만들어 올린다(작업 트리·HEAD 안 건드림).
 #   → stdout: `clean`
@@ -1985,7 +1985,7 @@ dobby_bridge_make() {
       || { _die "병합 커밋을 만들지 못했다"; return 1; }
     git -C "$wt" push -q origin "${commit}:refs/heads/${bridge}" --force-with-lease 2>/dev/null \
       || git -C "$wt" push -q origin "${commit}:refs/heads/${bridge}" 2>/dev/null \
-      || { _die "다리 브랜치 $bridge 를 올리지 못했다"; return 1; }
+      || { _die "충돌 해결 브랜치 $bridge 를 올리지 못했다"; return 1; }
     printf 'clean'
     return 0
   fi
@@ -2077,7 +2077,7 @@ $bad"; return 1; }
     || { _die "병합 커밋을 만들지 못했다"; return 1; }
   git -C "$tmp" push -q origin "HEAD:refs/heads/${bridge}" --force-with-lease 2>/dev/null \
     || git -C "$tmp" push -q origin "HEAD:refs/heads/${bridge}" 2>/dev/null \
-    || { _die "다리 브랜치 $bridge 를 올리지 못했다"; return 1; }
+    || { _die "충돌 해결 브랜치 $bridge 를 올리지 못했다"; return 1; }
 
   git -C "$tmp" worktree remove --force "$tmp" >/dev/null 2>&1 \
     || rm -rf "$tmp" 2>/dev/null
@@ -2090,11 +2090,11 @@ $bad"; return 1; }
 #   · 환경이 dev·rc1·rc4·stage 가 아니면 거부(clive 포함)
 #   · 워크트리에 미커밋 변경이 남아 있으면 거부 — 리뷰 통과분만 나간다(C1)
 #   · 같은 (브랜치→환경) PR 이 이미 열려 있으면 새로 만들지 않고 그 번호를 돌려준다
-#     (다리 브랜치 {브랜치}_into_{환경} 로 올라간 것까지 함께 본다)
-#   · ⛔ **언제나 다리 브랜치({브랜치}_into_{환경})로 올린다** — 충돌이 없어도 그렇게 한다.
+#     (충돌 해결 브랜치 {브랜치}_into_{환경} 로 올라간 것까지 함께 본다)
+#   · ⛔ **언제나 충돌 해결 브랜치({브랜치}_into_{환경})로 올린다** — 충돌이 없어도 그렇게 한다.
 #     GitHub 이 멀쩡한 병합을 충돌로 판정하는 일이 잦아(공통 조상 여러 개), 예전처럼
-#     "그냥 올렸다가 충돌이라 하면 다시 다리로" 하면 PR 을 만들었다 닫고 다시 만든다.
-#   · 충돌이 있으면 다리를 만들지 못하므로 거부한다 — 푸는 것은 dobby_bridge_make 가 만든
+#     "그냥 올렸다가 충돌이라 하면 다시 충돌 해결 브랜치로" 하면 PR 을 만들었다 닫고 다시 만든다.
+#   · 충돌이 있으면 충돌 해결 브랜치를 만들지 못하므로 거부한다 — 푸는 것은 dobby_bridge_make 가 만든
 #     임시 워크트리에서 스킬이 한다(dobby_conflict_evidence → 해결 → dobby_bridge_finish).
 # 해 주는 것:
 #   · dev 를 뺀 환경에 --reviewer wadiz-fe/fe1-team 을 **자동으로** 붙인다.
@@ -2127,7 +2127,7 @@ $dirty"
     return 1
   fi
 
-  # 이미 열린 PR — 다리 브랜치로 올라간 것까지 함께 본다.
+  # 이미 열린 PR — 충돌 해결 브랜치로 올라간 것까지 함께 본다.
   local bridge="${br}_into_${env}" rp
   rp="$(_ship_repo "$wt")"
   n="$(gh pr list --repo "$rp" --head "$br" --base "$env" --state open --json number -q '.[0].number' 2>/dev/null)"
@@ -2138,7 +2138,7 @@ $dirty"
     printf '%s' "$n"; return 0
   fi
 
-  # ── 다리 브랜치를 만든다(충돌이 없어도 언제나) ─────────────────────────
+  # ── 충돌 해결 브랜치를 만든다(충돌이 없어도 언제나) ─────────────────────────
   local made rc
   made="$(dobby_bridge_make "$wt" "$br" "$env")"; rc=$?
   if [ "$rc" -eq 2 ]; then
@@ -2146,7 +2146,7 @@ $dirty"
   ① dobby_conflict_evidence {임시워크트리} $br $env   — 양쪽이 왜 건드렸는지 본다
   ② 근거로 판단해 직접 고친다. 근거로도 어느 쪽이 맞는지 확정되지 않으면 사용자에게 묻는다
   ③ dobby_bridge_finish {임시워크트리} $br $env       — 검증하고 올린다
-  그 뒤 이 함수를 다시 부르면 다리 브랜치로 PR 을 만든다."
+  그 뒤 이 함수를 다시 부르면 충돌 해결 브랜치로 PR 을 만든다."
     return 1
   fi
   [ "$rc" -eq 0 ] || return 1
