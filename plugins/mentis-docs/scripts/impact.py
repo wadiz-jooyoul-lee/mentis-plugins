@@ -33,8 +33,23 @@ def sh(args, cwd=None):
     return r.stdout
 
 
+# 이름변경으로 볼 최소 유사도. 이 아래는 "지워지고 비슷한 게 새로 생겼다"로 본다.
+# 실측 근거: 사내 저장소 9곳에서 이름변경 2,231건을 세어 보니
+#   100% 1,531건(68%) · 90~99% 254건 · 80~89% 239건 · 80% 미만 207건(9%)
+# 즉 80% 를 경계로 하면 진짜 이름변경 91% 는 그대로 통과한다.
+# 이 경계가 없으면 실제로 오판이 난다. com.wadiz.api.funding 에서
+#   PendingNotificationJobConfig.java -> RrnDestructionJobConfig.java (44%)
+# 가 "이름바뀜" 으로 보고됐는데, 둘은 하는 일이 전혀 다른 별개 파일이었다.
+# Spring Batch 설정 클래스는 뼈대가 같아 무관한 파일끼리도 40% 를 넘는다.
+RENAME_SURE = 80
+
+
 def changed_files(repo, before, after):
-    """이번 범위에서 바뀐 파일을 상태별로 모은다. -M 으로 이름변경을 추적한다."""
+    """이번 범위에서 바뀐 파일을 상태별로 모은다.
+
+    `-M` 은 `R044` 처럼 **유사도 점수를 함께 준다.** 그 숫자를 버리면
+    44% 짜리 억지 짝과 100% 짜리 단순 이동을 구분할 수 없다.
+    """
     out = sh(['git', 'diff', '--name-status', '-M', '--find-renames=40%',
               f'{before}..{after}'], cwd=os.path.join(REPOS, repo))
     rows = []
@@ -42,9 +57,12 @@ def changed_files(repo, before, after):
         parts = line.split('\t')
         st = parts[0]
         if st.startswith('R') and len(parts) >= 3:
-            rows.append(('R', parts[1], parts[2]))
+            digits = st[1:]
+            score = int(digits) if digits.isdigit() else 100
+            rows.append(('R' if score >= RENAME_SURE else 'r',
+                         parts[1], parts[2], score))
         elif len(parts) >= 2:
-            rows.append((st[0], parts[1], None))
+            rows.append((st[0], parts[1], None, None))
     return rows
 
 
@@ -102,11 +120,15 @@ def build_doc_index():
 ACTION = {
     'D': ('삭제됨',     '그 서술을 지우거나 대체 대상을 찾는다'),
     'R': ('이름바뀜',   '경로만 새 것으로 고친다'),
+    'r': ('삭제됨(짝 불확실)',
+          '지워진 것으로 보고 서술을 다시 쓴다. 아래 후보는 참고만 한다 — 같은 파일이 아닐 수 있다'),
     'M': ('내용바뀜',   '인용한 줄이 바뀐 구간과 겹친다. 서술을 다시 확인한다'),
     'A': ('추가됨',     '같은 폴더를 열거한 목록이면 빠졌는지 본다'),
     'm': ('수정확인',   '인용한 파일이 바뀌었다. 서술이 아직 맞는지 읽는다'),
 }
-CONFIRMED = ('D', 'R', 'M', 'A')     # 확정 — 반드시 처리
+# 'r' 도 확정이다. 인용한 경로가 사라진 것은 어느 쪽이든 사실이기 때문이다.
+# 다만 "경로만 고쳐라" 대신 "다시 써라" 로 지시가 달라진다.
+CONFIRMED = ('D', 'R', 'r', 'M', 'A')
 REVIEW    = ('m',)                   # 확인 — 읽고 판단
 
 
@@ -127,9 +149,9 @@ def main():
     items = []
 
     # 추가된 파일의 폴더별 개수 — 목록형 문서 판정에 쓴다
-    added_dirs = collections.Counter(os.path.dirname(p) for st, p, _ in rows if st == 'A')
+    added_dirs = collections.Counter(os.path.dirname(p) for st, p, *_ in rows if st == 'A')
 
-    for st, path, newpath in rows:
+    for st, path, newpath, score in rows:
         base = os.path.basename(path)
         hits = idx.get(base, [])
         if st == 'A':
@@ -166,8 +188,8 @@ def main():
                 # 내려도 버리지는 않는다. 줄번호 없는 인용이 훨씬 많기 때문이다.
                 kind = 'M' if hit else 'm'
             items.append(dict(doc=doc, line=ln, status=kind, file=path,
-                              new_file=newpath, cited=cpath, why=None,
-                              weight=round(ratio, 3), changed=nchg))
+                              new_file=newpath, similarity=score, cited=cpath,
+                              why=None, weight=round(ratio, 3), changed=nchg))
 
     # 파일 이름이 같은 파일이 여러 곳에서 지워지면 같은 줄이 여러 번 걸린다. 한 번만 남긴다.
     seen, uniq = set(), []
@@ -219,7 +241,10 @@ def main():
                 extra = f"  (바뀐 줄 {it.get('changed')}, 파일의 {round((it.get('weight') or 0)*100)}%)"
             print(f"   {loc:<7} [{label}] {it['file']}{extra}")
             if it['status'] == 'R':
-                print(f"   {'':<7}          새 경로: {it['new_file']}")
+                print(f"   {'':<7}          새 경로: {it['new_file']}  (유사도 {it.get('similarity')}%)")
+            elif it['status'] == 'r':
+                print(f"   {'':<7}          git 이 짝지은 새 파일: {it['new_file']}")
+                print(f"   {'':<7}          유사도 {it.get('similarity')}% — {RENAME_SURE}% 미만이라 같은 파일로 보기 어렵다")
             print(f"   {'':<7}          → {it['why'] or todo}")
 
     docs = {x['doc'] for x in items}
