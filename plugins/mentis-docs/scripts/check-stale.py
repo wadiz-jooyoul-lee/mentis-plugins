@@ -24,6 +24,28 @@ if '--top' in sys.argv:
 EXT  = r'(?:java|kt|kts|ts|tsx|jsp|xml|ya?ml|swift|vue|js|mjs|cjs|properties|gradle|sql|py|sh|m|h|mm)'
 CITE = re.compile(r'`([A-Za-z0-9_][A-Za-z0-9_./@-]*\.' + EXT + r')(?::[0-9][0-9,~\-]*)?`')
 
+# 취소선. 여러 줄에 걸칠 수 있어 DOTALL 로 잡는다.
+STRIKE = re.compile(r'~~.+?~~', re.S)
+
+
+def body_of(text):
+    """문서에서 "지금 이렇다"고 주장하는 부분만 남긴다.
+
+    두 곳을 걷어낸다.
+
+      1) 인용 블록(`>` 로 시작하는 줄)
+         변경 로그와 보강 기록이 여기 쌓인다. "예전에는 이랬다"는 과거 서술이다.
+      2) 취소선(`~~...~~`) 안
+         글쓴이가 "이건 이제 없다"고 직접 표시한 것이다.
+
+    이걸 안 하면 **문서를 바로잡을수록 점수가 올라간다.**
+    실제로 그랬다. `kr.wadiz.account/api-details/external-services.md` 의
+    삭제된 클래스 21건을 "삭제됐습니다"로 기록했더니 32점에서 41점이 됐다.
+    고친 문서가 목록 위로 올라오면 이 도구는 쓸 수 없다.
+    """
+    lines = [l for l in text.split('\n') if not l.lstrip().startswith('>')]
+    return STRIKE.sub(' ', '\n'.join(lines))
+
 
 WARNED = []
 
@@ -133,7 +155,8 @@ def main():
             rel  = os.path.relpath(os.path.join(root, fn), DOCS)
             text = open(os.path.join(root, fn), encoding='utf-8', errors='replace').read()
 
-            cited = sorted(set(CITE.findall(text)))
+            body  = body_of(text)
+            cited = sorted(set(CITE.findall(body)))
             miss = []
             for c in cited:
                 head = c.split('/', 1)[0]
@@ -147,15 +170,22 @@ def main():
             bdate = bodies.get(rel, TODAY.isoformat())
             age   = (TODAY - datetime.date(*map(int, bdate.split('-')))).days
             ncom  = commits_since(repo, bdate) if repo else 0
-            obs   = [t for t in terms if t in text]
+            obs   = [t for t in terms if t in body]
 
-            score = len(miss) * 3 + min(ncom, 300) * 0.1 + len(obs) * 4
+            # 확정 증거(소실 인용·낡은 표현)와 정황(그새 쌓인 커밋)을 섞는다.
+            # 정황이 확정 증거를 이기면 안 된다. 예전 식은 그게 뒤집혀 있었다 —
+            # `min(ncom, 300) * 0.1` 이라 300커밋만 넘으면 무조건 30점이 깔렸고,
+            # 소실 인용 8건(24점)짜리 문서가 소실 0건인 문서 18개보다 아래로 갔다.
+            # 제곱근으로 눌러 최대 9.5점까지만 오르게 한다.
+            # 이러면 소실 인용 4건이면 아무리 바쁜 저장소라도 앞선다.
+            drift = min(ncom, 1000) ** 0.5 * 0.3
+            score = len(miss) * 3 + len(obs) * 4 + drift
             if score < 1:
                 continue
             rows.append(dict(doc=rel, repo=repo or '-', score=round(score, 1),
                              missing=len(miss), cited=len(cited), missing_files=miss[:10],
                              body_date=bdate, body_age_days=age, commits_since=ncom,
-                             obsolete=obs))
+                             drift=round(drift, 1), obsolete=obs))
 
     rows.sort(key=lambda r: -r['score'])
     rows = rows[:TOP]
