@@ -96,7 +96,7 @@ description: 서브 에이전트가 코드 구현이 아닌 산출물(문서·�
 - 메인의 리뷰 에이전트가 남긴 피드백(`$ORCHESTRATION_META/{루트키}/reviews/round-{n}/{슬러그}.md`)을 받으면:
   - 단계를 `산출`로 되돌리고, **허용 범위 안에서** (repo면) 워크트리 / (meta면) `deliverables/` 파일에서 **그대로 반영**한다(아직 커밋 안 함). 반영을 `produce.md`에 기록 → 재리뷰 요청. **라운드 중 커밋·푸시하지 않는다.**
 - blocking=0이 될 때까지 메인 주도로 `산출`↔`리뷰` 반복(최대 라운드는 dobby-order가 관리).
-- **⛔ 리뷰 통과 후 — (repo 산출만) 처음이자 한 번, 커밋·푸시**(사용자 동의 없이 자동 진행 — go-dobby 규약, 전역 "커밋·푸시 동의" 예외; master만 수동): 워크트리에 `node_modules`가 없을 수 있어 **`git commit --no-verify`**. 메시지는 `docs:`/`chore:` 등 산출 성격 타입 + `{키}` + 실제 변경 요약. ⛔ 오케스트레이션 내부 용어(`round-N`·"리뷰 반영"·라운드/슬러그/메타 경로 등) 금지, 저장소 금지 서명(`Co-Authored-By`·"Generated with …") 금지. → **자기 브랜치에만 푸시**(베이스 자동 머지·PR 금지). `produce.md`에 커밋 해시 기록. **meta 산출은 커밋 없음**(deliverables 저장으로 끝).
+- **⛔ 리뷰 통과 후 — (repo 산출만) 처음이자 한 번, 커밋·푸시**(사용자 동의 없이 자동 진행 — go-dobby 규약, 전역 "커밋·푸시 동의" 예외; 정식 배포 베이스만 수동): 워크트리에 `node_modules`가 없을 수 있어 **`git commit --no-verify`**. 메시지는 `docs:`/`chore:` 등 산출 성격 타입 + `{키}` + 실제 변경 요약. ⛔ 오케스트레이션 내부 용어(`round-N`·"리뷰 반영"·라운드/슬러그/메타 경로 등) 금지, 저장소 금지 서명(`Co-Authored-By`·"Generated with …") 금지. → **자기 브랜치에만 푸시**(베이스 자동 머지·PR 금지). `produce.md`에 커밋 해시 기록. **meta 산출은 커밋 없음**(deliverables 저장으로 끝).
 
 ## 내용 리뷰 기준 (dobby-order P5 리뷰 에이전트가 사용 — 참고)
 
