@@ -1203,14 +1203,17 @@ dobby_quips_last() {
   [ -f "$f" ] || return 0
   command -v jq >/dev/null 2>&1 || { dobby_check_deps; return 0; }
   jq -r '. as $r | (($r.board // {}) | keys[]) as $s
-         | ((((($r.history // {})[$s] // []) | last | .text?) // $r.board[$s].text // "") ) as $t
+         | (($r.board[$s]) | if type == "array" then (.[-1] // {}) else . end) as $b
+         | ((((($r.history // {})[$s] // []) | last | .text?) // $b.text // "") ) as $t
          | $s + "\t" + $t' "$f" 2>/dev/null
 }
 
 # dobby_quips_merge KEY 새소감JSON파일 — 새 소감(대상 슬러그만 담김)을 기존 {키}.json에 병합하고
 # board 소감을 history에 append한 뒤 원자적으로(tmp→rename) 저장한다. 다른 슬러그의 기존 값은 보존.
 # 새 파일 스키마: { "agents":{슬러그:{sig}}, "board":{...}, "changes":{...}, "reviews":{...} } (있는 것만).
-# history 항목의 state는 agents[슬러그].sig의 `#` 앞부분에서 얻는다. 시각은 DOBBY_ISO로 덮어쓰기 가능.
+# board/changes/reviews 의 값은 소감 하나(객체)여도 되고 여러 개(배열)여도 된다 — 대시보드가 둘 다 읽는다.
+# history 에는 배열이면 맨 앞 소감을 한 줄 남긴다. state는 agents[슬러그].sig의 `#` 앞부분에서 얻는다.
+# 시각은 DOBBY_ISO로 덮어쓰기 가능.
 dobby_quips_merge() {
   local key="$1" newf="$2" dir f now
   command -v jq >/dev/null 2>&1 || { dobby_check_deps; _die "jq 없음 — quips 병합 불가"; return 1; }
@@ -1226,11 +1229,12 @@ dobby_quips_merge() {
     | .changes = ((.changes // {}) + ($n.changes // {}))
     | .reviews = ((.reviews // {}) + ($n.reviews // {}))
     | .history = (reduce (($n.board // {}) | keys[]) as $s ((.history // {});
-        .[$s] = ((.[$s] // []) + [{
+        (($n.board[$s]) | if type == "array" then .[0] else . end) as $q
+        | .[$s] = ((.[$s] // []) + [{
           at: $at,
           state: (((($n.agents // {})[$s].sig) // "") | split("#")[0]),
-          mood: $n.board[$s].mood,
-          text: $n.board[$s].text }])))
+          mood: $q.mood,
+          text: $q.text }])))
   ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
 }
 
