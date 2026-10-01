@@ -1153,6 +1153,31 @@ dobby_terms_lint() {
   return 1
 }
 
+# dobby_tooling_lint FILE — 공개 아티팩트에 들어가면 안 되는 **도구 이야기** 검출.
+# 검출 줄을 "줄번호:내용"으로 출력하고 1을 반환(없으면 0). dobby-artifact가 게시 전에 부른다.
+#
+# 왜: 아티팩트를 읽는 사람은 이 도구를 쓰지 않는다. 도구 사정(스킬 이름·메타 파일·진행 구조)은
+# 이슈가 요구한 것을 만든 이야기가 아니라 이 도구를 쓰다 생긴 뒤처리이며, 읽는 사람에게는 소음이다
+# (dobby_lint #21과 같은 철학).
+#
+# ⛔ '대시보드'를 단독으로 넣지 마라 — 업무로 다루는 일반 대시보드를 가리키는 정상 문장이
+#    걸린다(기존 explainer.md·outcome.md 145개로 실측: '대시보드' 1건이 전부 오탐이었고,
+#    실제로 잡아야 할 것은 dobby 24곳·워크트리 6곳이었다). 이 도구는 'mentis'로만 건다.
+#
+# dobby_lint #21은 orchestration.md·status.md 를 패턴에서 뺐지만(그 검사 대상인 explainer.md가
+# 머리에 "근거: …"로 그 이름을 정상 인용해 28개가 통째로 오탐), 여기서는 **일부러 넣는다** —
+# 검사 대상이 다르다. 공개 아티팩트에서 그 파일 이름을 인용하는 것은 정상 인용이 아니라
+# 도구가 새어 나간 것이다. 같은 145개에 돌리면 그 28건이 더 걸리는데, 아티팩트 기준으로는
+# 전부 빼야 할 줄이다.
+dobby_tooling_lint() {
+  local f="$1" hits
+  [ -f "$f" ] || return 0
+  hits="$(grep -niE 'dobby|도비|mentis|오케스트레이션 메타|워크트리|에이전트 상태표|칸반|슬러그|artifact-share|design-ack|orchestration\.md|status\.md|explainer\.md' "$f" 2>/dev/null)"
+  [ -z "$hits" ] && return 0
+  printf '%s\n' "$hits"
+  return 1
+}
+
 # ── 아바타 소감(avatar-quips) 결정론 조각 ────────────────────────────
 # 소감 "내용"은 LLM 몫. 여기서는 서명(sig) 계산·직전 소감 추출·JSON 병합만 한다.
 
