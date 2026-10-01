@@ -26,7 +26,7 @@ description: dobby-order가 각 에이전트(단일 이슈든 하위이슈든)�
 
 - `args`: `{키} [base={브랜치}]`
   - `{키}`: 이슈 키(`FE1-1187`)·URL, 또는 문서 전용 작업 키(`TASK-{slug}`). 없으면 dobby-order에 요청한다.
-  - `base={브랜치}`: 워크트리를 만들 베이스. 예: `base=feature/{루트키}`(에픽) 또는 `base=master`. 미지정 시 `$ORCHESTRATION_DEFAULT_BASE`.
+  - `base={브랜치}`: 워크트리를 만들 베이스. 예: `base=feature/{루트키}`(에픽) 또는 `base=cloud_live`. 미지정 시 `$ORCHESTRATION_DEFAULT_BASE`(현재 `cloud_live`).
 
 ## 절차
 
@@ -37,7 +37,7 @@ description: dobby-order가 각 에이전트(단일 이슈든 하위이슈든)�
 
 ### 2. 베이스 결정 (로컬/원격 모두 처리)
 - `base=` 인자를 `{base}`로 쓴다(미지정 시 `$ORCHESTRATION_DEFAULT_BASE`). 어느 베이스로 잡았는지 밝힌다.
-- `{base}`는 **로컬 브랜치**(예: 방금 만든 `feature/{루트키}`) 또는 **원격 기준**(예: `master`→`origin/master`)일 수 있다. 4단계에서 존재로 갈라 처리한다.
+- `{base}`는 **로컬 브랜치**(예: 방금 만든 `feature/{루트키}`) 또는 **원격 기준**(예: `cloud_live`→`origin/cloud_live`)일 수 있다. 4단계에서 존재로 갈라 처리한다.
 
 ### 3. 브랜치 prefix 결정
 - 버그 → `bugfix/{키}`, 그 외(작업 등) → `feature/{키}`. 이 값이 **전체 브랜치명**이다(예: `bugfix/QA-22370`).
