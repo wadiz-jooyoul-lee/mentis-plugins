@@ -1524,6 +1524,18 @@ EOF
   done
   [ -n "$meta21" ] && _w "산출물 문서에 메타 보정 흔적:${meta21} — 메타를 바로잡은 일은 개발 내용이 아닙니다(C10). 해당 줄을 지우고 orchestration.md 이벤트 로그에만 남기세요"
 
+  # 22) 닫히는 조건을 쪼개지 않음 — 치명 (dobby-order P1)
+  # 한 줄짜리 닫히는 조건은 사람만 읽는다. 쪼개 두어야 dobby-test 가 result.md 조건 칸에
+  # 번호를 적고 대시보드가 "조건 3가지 중 3가지 확인"을 스스로 센다.
+  # 실측: 오더 125개 중 조건을 쪼갠 것이 12개(10%)뿐이라 나머지 113개는 검증 탭이
+  # 끝까지 "사람이 판단하세요"에서 멈춰 있었다.
+  if [ -f "$sf" ]; then
+    local nc22
+    nc22="$(dobby_conditions "$key" 2>/dev/null | grep -c .)" || nc22=0
+    [ "${nc22:-0}" -eq 0 ] \
+      && _e "status.md 에 '## 닫히는 조건 항목' 표가 없음 — 닫히는 조건 한 줄을 확인 가능한 단위로 쪼개 \`dobby_add_condition $key \"{한 줄}\"\` 로 넣으세요(보통 2~5개). 없으면 무엇을 끝내야 하는지 기계가 셀 수 없어 검증이 '사람이 판단하세요'에서 멈춥니다"
+  fi
+
   printf '(치명 %d, 경고 %d)\n' "$e" "$w"
   [ -n "$strict" ] && return "$e"
   return 0
@@ -2574,11 +2586,104 @@ dobby_testrun_lint() {
     }
   ' "$f")"
 
-  [ -n "$bad" ] || return 0
-  _die "근거 칸에 파일 이름만 적힌 행이 있다. 그림은 화면에 뜨지 않으므로 읽는 사람이 볼 수 없다:
+  if [ -n "$bad" ]; then
+    _die "근거 칸에 파일 이름만 적힌 행이 있다. 그림은 화면에 뜨지 않으므로 읽는 사람이 볼 수 없다:
 $bad
 관측한 사실을 적어라(응답 본문·이동 경로·번들 시각·화면 문구). 화면을 꼭 보여야 하면 본문에 \`![설명](파일.png)\` 으로 띄우고, 근거 칸에는 무엇을 보라는 것인지 글로 적어라."
-  return 1
+    return 1
+  fi
+
+  # ── 여기부터: "이 회차만 보고 배포를 판단할 수 있나" 세 가지 ──────────────
+  # 부품은 전부터 있었는데 아무도 채우라고 하지 않아 비어 있었다(실측 75회차 중
+  # 조건 칸을 채운 회차 18건 = 24%, 판정 칸이 기계적으로 안 읽히는 시나리오 79건 = 13%).
+  # 대시보드(testSummary.ts)는 이미 조건마다 판정을 엄격히 합치고 있어, 입력만
+  # 채워지면 "조건 5가지 중 5가지 확인"을 스스로 말한다.
+  local key rows
+  key="$(basename "$(dirname "$(dirname "$dir")")")"
+
+  rows="$(awk -F'|' '
+    function t(x){gsub(/^[ \t*`]+|[ \t*`]+$/,"",x); return x}
+    # 머리글에서 칸 위치를 찾는다(스키마 하드코딩 금지 — dobby_agent_state 와 같은 방식)
+    /^[ \t]*\|/ && cc==0 && $0 ~ /조건/ && $0 ~ /판정/ {
+      for(i=1;i<=NF;i++){h=t($i); if(h=="조건")cc=i; else if(h=="판정")cv=i}
+      next
+    }
+    # 조건·판정 칸이 아예 없는 표 — 옛 형식이다. 새 회차가 이 형식으로 나오면
+    # 위 검사가 통째로 건너뛰어 구멍이 된다(실측: 옛 회차 107건 중 81건이 이래서 그냥 통과했다).
+    cc==0 && /^[ \t]*\|/ { if (t($2) ~ /^S[0-9]+$/) nocol=1; next }
+    cc>0 && /^[ \t]*\|/ {
+      num=t($2)
+      if (num !~ /^S[0-9]+$/) next
+      cond=t($(cc)); verd=t($(cv))
+      if (cond == "") printf "COND\t%s\n", num
+      else if (cond !~ /^(R|C[0-9]+([ \t]*[,·][ \t]*C[0-9]+)*)$/) printf "CONDBAD\t%s\t%s\n", num, cond
+      else if (cond != "R") { n=split(cond, a, /[,·]/); for(i=1;i<=n;i++) printf "HAS\t%s\n", t(a[i]) }
+      if (verd !~ /^(PASS|FAIL|SKIP\((환경|위험|미비)\))$/) printf "VERD\t%s\t%s\n", num, verd
+    }
+    END { if (nocol) print "NOCOL" }
+  ' "$f")"
+
+  if printf '%s\n' "$rows" | grep -qx NOCOL; then
+    _die "시나리오 표에 '조건'·'판정' 칸이 없다. 머리글을 규격대로 두어라:
+  | # | 조건 | 페이지 / URL | 확인 항목 | 기대 | 실제 | 판정 | 근거 |
+칸이 없으면 대시보드가 조건별 판정을 셀 수 없어 '사람이 판단하세요'에서 멈춘다."
+    return 1
+  fi
+
+  local miss_cond bad_cond bad_verd have want uncovered rc=0
+  miss_cond="$(printf '%s\n' "$rows" | awk -F'\t' '$1=="COND"{printf " %s", $2}')"
+  bad_cond="$(printf '%s\n' "$rows" | awk -F'\t' '$1=="CONDBAD"{printf "  %s → \"%s\"\n", $2, $3}')"
+  bad_verd="$(printf '%s\n' "$rows" | awk -F'\t' '$1=="VERD"{printf "  %s → \"%s\"\n", $2, $3}')"
+
+  if [ -n "$miss_cond" ]; then
+    _die "조건 칸이 빈 행:$miss_cond
+이 시나리오가 어느 해결 조건을 확인하는지 적어라(\`C1\`, 여럿이면 \`C1·C2\`).
+어느 조건도 짚지 않는 회귀 확인이면 비우지 말고 **\`R\`** 로 적어라 — 빈 칸은
+\"안 적었다\"와 구분되지 않아 대시보드가 그 행을 집계에서 떨어뜨린다."
+    rc=1
+  fi
+  [ -n "$bad_cond" ] && { _die "조건 칸 형식이 틀린 행:
+$bad_cond
+C 번호(\`C1\`·\`C1·C2\`) 또는 회귀 표시 \`R\` 만 적는다. 조건 문장을 옮겨 적지 않는다."; rc=1; }
+  [ -n "$bad_verd" ] && { _die "판정 칸 어휘가 틀린 행:
+$bad_verd
+PASS · FAIL · SKIP(환경) · SKIP(위험) · SKIP(미비) 다섯 중 하나만 쓴다.
+보류는 왜 못 했는지로 가른다 — 환경(브라우저·외부 시스템 한계) · 위험(실행하면
+되돌릴 수 없음) · 미비(준비가 모자람). 미비가 하나라도 있으면 배포 판단에 쓸 수 없다."; rc=1; }
+
+  # 선언한 조건이 전부 이 회차에 나왔나(한 회차로 다 못 덮으면 여러 회차의 합을 본다)
+  want="$(dobby_conditions "$key" 2>/dev/null)"
+  if [ -n "$want" ]; then
+    have="$(printf '%s\n' "$rows" | awk -F'\t' '$1=="HAS"{print $2}' | sort -u)"
+    local other
+    other="$(grep -ho '\bC[0-9]\+\b' "$(dirname "$dir")"/*/result.md 2>/dev/null | sort -u)"
+    have="$(printf '%s\n%s\n' "$have" "$other" | sed '/^$/d' | sort -u)"
+    uncovered="$(printf '%s\n' "$want" | while read -r c; do
+      [ -n "$c" ] || continue
+      printf '%s\n' "$have" | grep -qx "$c" || printf ' %s' "$c"
+    done)"
+    [ -n "$uncovered" ] && { _die "확인한 시나리오가 없는 조건:$uncovered
+이 조건을 확인하는 시나리오를 이 회차(또는 앞선 회차)에 넣어라. 조건을 다 덮지 못하면
+\"이 오더가 끝났다\"를 셀 수 없어 대시보드가 \"사람이 판단하세요\"에서 멈춘다.
+정말 이번 범위에서 확인할 수 없으면 그 조건을 닫히는 조건에서 빼거나 다음 오더로 넘겨라."; rc=1; }
+  fi
+
+  return "$rc"
+}
+
+# dobby_conditions KEY — status.md '## 닫히는 조건 항목' 표의 C 번호를 한 줄씩 낸다.
+# ⛔ 그 절 안만 본다 — 문서 다른 표(회귀 목록 등)의 `| C1 |` 행까지 조건으로 세지 않게.
+#    (대시보드 testSummary.ts readClosing 과 같은 기준.)
+dobby_conditions() {
+  local f
+  f="$(_order_dir "$1")/status.md"
+  [ -f "$f" ] || return 0
+  awk '
+    /^## / { ins=(index($0,"닫히는 조건 항목")>0)?1:0; next }
+    ins==1 && /^\|/ {
+      n=split($0,a,"|"); c=a[2]; gsub(/[ \t*]/,"",c)
+      if (c ~ /^C[0-9]+$/) print c
+    }' "$f"
 }
 
 # dobby_testrun_prune 결과폴더 — 그 회차에서 **아무도 안 가리키는 그림**을 지운다.
