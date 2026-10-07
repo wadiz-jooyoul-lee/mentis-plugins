@@ -1,6 +1,6 @@
 ---
 name: dobby-auto
-description: 오더 하나를 착수부터 검증까지 **사람을 부르지 않고** 끝까지 끌고 가는 통합 스킬. dobby-order(착수·분석·구현·리뷰·통합) → dobby-ship(PR·머지·빌드·배포 확인) → dobby-test(검증) 를 한 세션에서 이어서 돌리고, 끝나면 Gmail 과 슬랙 DM 으로 알린다. 세 스킬을 새로 쓰지 않고 그대로 부른다 — 이 스킬이 맡는 것은 이어 붙이기와 멈춤 처리뿐이다. 설계 승인(P3.5)은 design=auto 로 건너뛰고 결정과 이유를 문서에 남긴다. 구현은 light(인라인)로 해서 서브 에이전트를 리뷰어 1명만 띄운다. dev·rc1·rc4 의 머지·빌드는 묻지 않고 진행하며 stage 머지와 cloud_live 는 훅 G1 이 거부한다. 충돌은 멈추지 않고 양쪽 변경 이력을 근거로 직접 풀되, 근거로도 어느 쪽이 맞는지 확정되지 않으면 그때만 사용자에게 묻는다. 리뷰가 달리면 승인이어도 본문을 읽어 고칠 지적은 고치고 푸시한 뒤 그 리뷰에 코멘트를 남기고 머지한다. 리뷰가 10분 안 오면 알리고 백그라운드로 30분까지 기다린 뒤 그만둔다. 사용법 /dobby-auto {키|URL} {dev|rc1|rc4|stage}.
+description: 오더 하나를 착수부터 검증까지 **사람을 부르지 않고** 끝까지 끌고 가는 통합 스킬. dobby-order(착수·분석·구현·리뷰·통합) → dobby-ship(PR·머지·빌드·배포 확인) → dobby-test(검증) 를 한 세션에서 이어서 돌리고, 끝나면 Gmail 과 슬랙 DM 으로 알린다. 세 스킬을 새로 쓰지 않고 그대로 부른다 — 이 스킬이 맡는 것은 이어 붙이기와 멈춤 처리뿐이다. 설계 승인(P3.5)은 design=auto 로 건너뛰고 결정과 이유를 문서에 남긴다. 구현은 light(인라인)로 해서 서브 에이전트를 리뷰어 1명만 띄운다. dev·rc1·rc4 의 머지·빌드·argocd sync 는 묻지 않고 진행하며 stage 머지와 cloud_live·라이브 argocd 앱은 훅 G1 이 거부한다. 오더가 wadiz-frontend 와 com.wadiz.web 을 함께 건드리면 두 저장소를 순서대로 내보내되(머지는 FE 뒤, 배포는 FE 배포 뒤 — 헬퍼가 거부로 강제), com.wadiz.web 은 리뷰를 기다리지 않는다. argocd 재로그인은 브라우저 SSO 라 자동으로 할 수 없으므로 배포를 시작하기 전에 세션을 미리 확인하고, 없으면 로그인 명령을 알리고 멈춘다. 충돌은 멈추지 않고 양쪽 변경 이력을 근거로 직접 풀되, 근거로도 어느 쪽이 맞는지 확정되지 않으면 그때만 사용자에게 묻는다. 리뷰가 달리면 승인이어도 본문을 읽어 고칠 지적은 고치고 푸시한 뒤 그 리뷰에 코멘트를 남기고 머지한다. 리뷰가 10분 안 오면 알리고 백그라운드로 30분까지 기다린 뒤 그만둔다. 사용법 /dobby-auto {키|URL} {dev|rc1|rc4|stage}.
 ---
 
 # dobby-auto
@@ -46,14 +46,47 @@ dobby-order (light · design=auto)  →  dobby-ship  →  dobby-test  →  알�
 /dobby-ship {키} {환경}
 ```
 
-**⛔ `dev`·`rc1`·`rc4` 의 머지와 빌드를 묻지 않는다.** `dobby-ship` 은 이 둘을 반드시 묻지만, 이 스킬이 부를 때는 묻지 않고 진행한다. 되돌리기 쉬운 환경이고, 막는 것은 헬퍼와 훅이 이미 하고 있다.
+**⛔ `dev`·`rc1`·`rc4` 의 머지·빌드·`argocd sync` 를 묻지 않는다.** `dobby-ship` 은 이 셋을 반드시 묻지만, 이 스킬이 부를 때는 묻지 않고 진행한다. 되돌리기 쉬운 환경이고, 막는 것은 헬퍼와 훅이 이미 하고 있다.
 
 | 그래도 막히는 것 | 무엇이 막나 |
 |---|---|
-| `stage` 머지 | 훅 G1 — 시점은 사람이 고른다. PR 까지만 만들고 알린다 |
-| `cloud_live` | 훅 G1 — 절대 |
+| `stage` 머지·배포 | 훅 G1 + `dobby_ship_argo` — 시점은 사람이 고른다. PR 까지만 만들고 알린다 |
+| `cloud_live` · 라이브 argocd 앱 | 훅 G1 — 절대 |
 | 반영 안 한 변경요청 | `dobby_ship_merge` |
 | 리뷰 4라운드째 | `dobby_ship_round` |
+| **FE 머지 전에 `com.wadiz.web` 머지** | `dobby_ship_merge` (G-A) |
+| **FE 배포 전에 `com.wadiz.web` sync** | `dobby_ship_argo` (G-B) |
+| **argocd 세션 만료** | `dobby_ship_argo` — **여기서는 못 넘어간다**(아래) |
+
+### 저장소가 둘이면 — 순서는 헬퍼가 지킨다
+
+`dobby-ship` 의 5·6·8단계를 그대로 따른다(여기서 다시 쓰지 않는다). 이 스킬이 다른 점은 **묻지 않는다**는 것뿐이다.
+
+```
+머지   wadiz-frontend  →  com.wadiz.web              (G-A)
+빌드   FE 번들을 건다  ·  WEB 은 자동 — run id 만 잡는다
+배포   FE 배포 확인    →  com.wadiz.web argocd sync  (G-B)
+```
+
+⛔ **`com.wadiz.web` PR 에는 리뷰 대기(4번)를 적용하지 않는다.** 리뷰봇이 없어 오지 않을 리뷰를 30분 기다리게 된다.
+
+### ⛔ argocd 세션은 **시작할 때** 확인한다
+
+재로그인은 브라우저 SSO 라 자동 실행이 절대 통과할 수 없다. 마지막 칸에서 막히면 그때까지 쓴 시간이 아깝다. 오더가 `com.wadiz.web` 을 건드리면 **2번에 들어가기 전에 미리 본다.**
+
+```bash
+argocd account get-user-info --server {그 환경의 서버} --grpc-web
+```
+
+`Logged In: false` 면 **지금 알리고 멈춘다.** 사용자가 로그인한 뒤 같은 명령을 다시 부르면 이어 간다.
+
+```
+FE1-1787 rc4 — argocd 세션이 없어 com.wadiz.web 배포까지 갈 수 없습니다.
+아래를 실행해 주시면 이어서 하겠습니다:
+  argocd login argocd.rc4.wadiz.io --sso --grpc-web
+```
+
+`com.wadiz.web` 을 건드리지 않는 오더면 이 확인을 건너뛴다.
 
 ## 3. 충돌 — 멈추지 않고 직접 푼다
 
@@ -192,16 +225,23 @@ FE1-1787  →  rc4  검증 완료                      3시간 12분
 설계    승인 없이 진행 — 결정 4건을 design.md 에 남김
 구현    메인 인라인 · 리뷰 2라운드 · blocking 0        서브 에이전트 1명
 충돌    3건 자동 해결 (같은 줄 1건 포함 — 확인 부탁)
-PR      #29471 머지됨 (자동 코드리뷰 1회 반영)
-빌드    static #36387729548 · global #36387738312
+
+wadiz-frontend  PR #29471 머지 (자동 코드리뷰 1회 반영)
+                static #36387729548 · global #36387738312
+com.wadiz.web   PR #11131 머지 (리뷰 없음)
+                web #37423509807 · sync 10:42 Healthy
+
 검증    12건 통과 · 0 실패 · 0 보류
 ```
 
 ## 멈추는 자리 — 전부
 
 ```
-stage 머지            시점은 사람 (훅 G1)
-cloud_live            절대 (훅 G1)
+stage 머지·배포        시점은 사람 (훅 G1 · dobby_ship_argo)
+cloud_live · 라이브 앱  절대 (훅 G1)
+argocd 세션 만료       브라우저 SSO 는 사람만 — 알리고 멈춤 (2번에서 미리 본다)
+argocd 앱 못 찾음      이름을 짐작해 엉뚱한 환경을 건드리지 않는다 — 알리고 멈춤
+com.wadiz.web CI 실패   FE 는 이미 나가 있다 — 되돌리지 않고 알리고 멈춤
 충돌 판단 불가         해결안을 만들어 알리고 멈춤
 충돌 해결이 검증 실패   임시 워크트리를 남기고 멈춤
 반영 안 한 변경요청     dobby_ship_merge 가 거부 (반영 뒤 새 리뷰가 변경요청이면 여기서 걸린다)
@@ -211,6 +251,8 @@ cloud_live            절대 (훅 G1)
 제품·디자인 결정       코드로 확정 불가 — 알리고 멈춤
 ```
 
+**FE 는 머지됐는데 `com.wadiz.web` 이 막히면 되돌리지 않는다.** 되돌릴지는 사람이 정할 일이라, 무엇이 어디까지 갔고 무엇이 왜 막혔는지만 알리고 멈춘다.
+
 밑에서 다섯은 **글이 아니라 헬퍼·훅이 거부**로 막는다. 이 스킬이 실수로 넘어갈 수 없다.
 
 ## 무엇이 코드로 강제되나
@@ -218,11 +260,16 @@ cloud_live            절대 (훅 G1)
 | 강제되는 것 | 어디서 |
 |---|---|
 | cloud_live 로 가는 모든 것 | 훅 G1 |
-| 머지 베이스가 dev·rc1·rc4 인지 | 훅 G1 + `dobby_ship_merge` |
+| 라이브 argocd 앱 sync · `--server` 없는 sync | 훅 G1 |
+| 머지 베이스가 dev·rc1·rc4·cloud_dev 인지 | 훅 G1 + `dobby_ship_merge` |
+| **G-A** FE 머지 전에 com.wadiz.web 머지 | `dobby_ship_merge` |
+| **G-B** FE 배포 전에 argocd sync | `dobby_ship_argo` |
+| CI 실패·미완·세션 없음·모르는 앱으로 sync | `dobby_ship_argo` |
+| 저장소마다 맞는 베이스 브랜치·리뷰어 | `dobby_ship_pr` |
 | PR 은 언제나 충돌 해결 브랜치로 | `dobby_ship_pr` |
 | 충돌 표시자·스테이지 오염·저장소 규칙 | `dobby_bridge_finish` |
 | 리뷰 왕복 4회 이상 | `dobby_ship_round` |
-| 배포 단계 어휘·환경 | `dobby_ship_stage` |
+| 배포 단계 어휘·환경·저장소 | `dobby_ship_stage` |
 | 파일 쓰는 순간 저장소 금지 규칙 | 훅 G14 |
 
 **여기 없는 것은 판단이라 강제할 수 없다** — 충돌에서 어느 쪽 의도가 맞는가, 문맥이 찼는가. 그건 이 문서가 맡는다.
