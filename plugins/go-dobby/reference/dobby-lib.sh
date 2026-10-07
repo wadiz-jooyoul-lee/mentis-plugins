@@ -1871,18 +1871,143 @@ DOBBY_SHIP_PHASES="통합 검증 해결 종료 완료"
 
 # 배포을 맡는 저장소. **여기 없는 저장소는 이 스킬이 다루지 않는다.**
 #
-# 환경 브랜치 이름·리뷰봇 유무·빌드 방식이 저장소마다 달라, 한 틀로 돌리면 조용히 틀린 일을 한다.
-# 실측 wadiz-web/com.wadiz.web: 개발 환경이 `dev` 가 아니라 `cloud_dev` 고, 자동 코드리뷰
-# 워크플로가 없어 오지 않을 리뷰를 10분 기다리며, 빌드가 push 트리거라 걸면 두 번 돈다.
-# 그 저장소들은 사용자가 직접 배포한 뒤 검증만 이어서 한다.
-DOBBY_SHIP_REPOS="wadiz-frontend"
+# 환경 브랜치 이름·리뷰봇 유무·빌드 방식·배포 방식이 저장소마다 다르다. 한 틀로 돌리면
+# 조용히 틀린 일을 하므로, 다른 자리는 전부 아래 네 함수(_ship_branch·_ship_reviewbot·
+# _ship_argo_server·_ship_argo_app)로 갈라 둔다.
+DOBBY_SHIP_REPOS="wadiz-frontend com.wadiz.web"
 
-# 배포이 갈 수 있는 환경. clive(=cloud_live)는 없다 — dobby-order C1.
+# 배포이 갈 수 있는 **논리 환경**. clive(=cloud_live)는 없다 — dobby-order C1.
+#
+# ⛔ 논리 환경과 **브랜치 이름은 다르다.** 표·헬퍼 인자는 언제나 논리 환경(dev·rc1·rc4·stage)을
+#    쓰고, 실제 브랜치는 _ship_branch 가 저장소마다 옮긴다. 이렇게 해야 저장소가 둘인 오더에서
+#    `## 배포` 표의 두 행이 같은 환경으로 맞물려 순서(G-A·G-B)를 셀 수 있다.
 DOBBY_SHIP_ENVS="dev rc1 rc4 stage"
 # 그중 스킬이 직접 머지해도 되는 환경. stage 는 빠져 있다 — 스테이지 반영은 사람이 시점을 고른다.
 DOBBY_SHIP_MERGE_ENVS="dev rc1 rc4"
 
 _ship_has() { case " $2 " in *" $1 "*) return 0 ;; esac; return 1; }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 저장소마다 다른 네 가지 — 여기서만 갈린다
+#
+#   저장소           환경→브랜치            리뷰봇  빌드            배포
+#   wadiz-frontend   그대로                 있음    수동(번들별)    빌드가 곧 배포
+#   com.wadiz.web    dev→cloud_dev, 나머지  없음    자동(머지 push) argocd sync 가 따로 필요
+#                    그대로
+# ─────────────────────────────────────────────────────────────────────────────
+
+# _ship_branch 저장소 환경 — 그 저장소에서 이 논리 환경이 가리키는 브랜치. 없으면 빈 값.
+#
+# 실측(2026-10-07 git ls-remote): 두 저장소 모두 dev·rc1·rc4·stage·cloud_live 를 갖지만
+# com.wadiz.web 의 개발 환경만 `cloud_dev` 다(그냥 `dev` 는 쓰지 않는 옛 브랜치다).
+_ship_branch() {
+  case "$1" in
+    wadiz-frontend) _ship_has "$2" "$DOBBY_SHIP_ENVS" && printf '%s' "$2" ;;
+    com.wadiz.web)
+      case "$2" in
+        dev) printf 'cloud_dev' ;;
+        rc1|rc4|stage) printf '%s' "$2" ;;
+      esac ;;
+  esac
+}
+
+# _ship_reviewbot 저장소 — 자동 코드리뷰가 도는 저장소면 0.
+#
+# wadiz-frontend 만 `[event] Claude Code Review` 가 돈다(대상 브랜치 rc[0-9]·stage·cloud_live).
+# com.wadiz.web 은 실측(2026-10-07) 최근 머지 PR 5건 모두 reviews·reviewRequests 가 0건이고
+# 등록된 `Copilot code review` 워크플로도 마지막 실행이 2026-03-24 로 멈춰 있다. 여기에
+# 리뷰어를 붙이면 **오지 않을 리뷰를 10분 기다린다**(게다가 wadiz-fe/fe1-team 은 조직이 달라
+# 붙지도 않는다 — com.wadiz.web 은 wadiz-web 조직이다).
+_ship_reviewbot() { [ "$1" = wadiz-frontend ]; }
+
+# _ship_argo_server 환경 / _ship_argo_app 환경 — com.wadiz.web 의 argocd 대상.
+#
+# 실측 2026-10-07 `argocd app list -o name`:
+#   argocd.dev.wadiz.io  argo/web-dev-web-server   (project web-dev,  SYNCPOLICY Manual)
+#   argocd.rc4.wadiz.io  argo/web-rc1-web-server   (project web-rc1,  SYNCPOLICY Manual)
+#   argocd.rc4.wadiz.io  argo/web-rc4-web-server   (project web-rc4,  SYNCPOLICY Manual)
+#   argocd.wadiz.io      argo/web-stage-web-server (argo-deploy 스킬 실측 — stage 는 사람 몫)
+#
+# ⛔ **네 환경 모두 자동 동기화가 꺼져 있다(Manual).** CI 가 gitops 의 이미지 태그를 고쳐도
+#    sync 하지 않으면 영원히 배포되지 않는다. 실측: 조회 시점에 web-rc1-web-server 가
+#    OutOfSync 였다(머지·CI 는 됐는데 아무도 sync 하지 않은 상태).
+# ⛔ **서버 두 곳에 동시에 로그인해 둘 수 없다.** CLI 가 OIDC 클라이언트를 하나만 쓰는지,
+#    다른 서버에 로그인하면 앞서 받은 토큰이 끊긴다(실측 2026-10-07: rc4 로그인 → dev 로그인
+#    뒤 rc4 가 "Refresh token is invalid or has already been claimed by another client").
+#    한 오더는 환경 하나로 나가므로 문제가 되지 않지만, 끊겼을 때 **조용히 실패하지 않도록**
+#    dobby_ship_argo 가 sync 전에 세션을 먼저 확인한다
+#    (`argocd account get-user-info --server {서버}` 가 서버마다 바르게 갈라 준다 — 실측 확인).
+# 앱 이름은 `web-{gitops 환경}-web-server` 이고, gitops 환경은 브랜치에서 `cloud_` 를 뗀 값이다
+# (app-web-ci.yml 의 preparation 잡). 그래서 dev 만 cloud_dev → dev 로 되돌아온다.
+_ship_argo_server() {
+  case "$1" in
+    dev)   printf 'argocd.dev.wadiz.io' ;;
+    rc1)   printf 'argocd.rc4.wadiz.io' ;;
+    rc4)   printf 'argocd.rc4.wadiz.io' ;;
+    stage) printf 'argocd.wadiz.io' ;;
+  esac
+}
+_ship_argo_app() {
+  _ship_has "$1" "$DOBBY_SHIP_ENVS" || return 1
+  printf 'argo/web-%s-web-server' "$1"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 단계 서열 — 저장소 사이의 순서(G-A·G-B)를 세는 기준
+#
+# 사용자 요구: com.wadiz.web 은 **wadiz-frontend 가 머지된 뒤에** 머지하고,
+#              **wadiz-frontend 배포가 끝난 뒤에** argocd 로 배포한다.
+# 글로 적으면 지켜지지 않으므로 FE 행의 단계를 숫자로 바꿔 **거부로** 강제한다.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# _ship_rank 단계 → 0~7. 모르는 값과 `리뷰 취소`(머지 없이 닫힘)는 -1.
+_ship_rank() {
+  case "$1" in
+    "PR 생성")   printf 0 ;;
+    "리뷰 대기") printf 1 ;;
+    "리뷰 반영 "[0-9]*회차) printf 1 ;;
+    "머지 대기") printf 2 ;;
+    "빌드 대기") printf 3 ;;   # ← 머지가 끝난 자리. G-A 는 이 이상을 요구한다
+    "배포 대기") printf 4 ;;
+    "배포 확인") printf 5 ;;   # ← 배포가 끝난 자리. G-B 는 이 이상을 요구한다
+    "검증 중")   printf 6 ;;
+    "검증 완료") printf 7 ;;
+    *) printf -- -1 ;;
+  esac
+}
+DOBBY_SHIP_RANK_MERGED=3
+DOBBY_SHIP_RANK_DEPLOYED=5
+
+# _ship_row_rank KEY 저장소 환경 — `## 배포` 표에서 그 행의 서열. **행이 없으면 빈 값**(게이트 끔).
+_ship_row_rank() {
+  local f st
+  f="$(_order_dir "$1")/status.md"
+  [ -f "$f" ] || return 0
+  st="$(_ship_row_stage "$1" "$2" "$3")"
+  [ -n "$st" ] || return 0
+  _ship_rank "$st"
+}
+
+# _ship_row_stage KEY 저장소 환경 — 그 행의 단계 원문(⚠ 는 떼고). 행이 없으면 빈 값.
+_ship_row_stage() {
+  local f
+  f="$(_order_dir "$1")/status.md"
+  [ -f "$f" ] || return 0
+  awk -v rp="$2" -v env="$3" '
+    function trim(x) { gsub(/^[ \t]+|[ \t]+$/, "", x); return x }
+    /^## / { insec = ($0 ~ /^##[ \t]*배포[ \t]*$/); next }
+    insec && /^[ \t]*\|/ {
+      # 저장소 칸이 있는 새 표(7칸→9)와 없는 옛 표(6칸→8)를 함께 받는다.
+      nc = split($0, c, "|")
+      if (nc == 8)      { r = "wadiz-frontend"; e = trim(c[2]); s = trim(c[3]) }
+      else if (nc >= 9) { r = trim(c[2]);       e = trim(c[3]); s = trim(c[4]) }
+      else next
+      if (r != rp || e != env) next
+      gsub(/[ \t]*⚠[ \t]*$/, "", s)
+      if (s != "") { print s; exit }
+    }
+  ' "$f"
+}
 
 # _words "a b c" — 공백으로 나눠 **한 줄에 하나씩** 출력한다.
 #
@@ -1910,17 +2035,26 @@ _ship_stage_ok() {
   return 1
 }
 
-# dobby_ship_stage KEY 환경 단계 [PR] [빌드] [비고]
+# dobby_ship_stage KEY 저장소 환경 단계 [PR] [빌드] [비고]
 #
-# 같은 환경 행이 있으면 갱신하고, 없으면 추가한다. 갱신 시각은 자동으로 적는다.
+# 같은 **(저장소, 환경)** 행이 있으면 갱신하고, 없으면 추가한다. 갱신 시각은 자동으로 적는다.
 #   · PR·빌드 를 비워 두면 **그 칸은 그대로 둔다** — 머지 단계에서 PR 번호가 지워지지 않게.
 #     지우려면 '-' 를 넘긴다.
 #   · 비고는 비워 두면 **지운다.** 비고는 "지금 막혀 있다"는 뜻이라 단계가 나아가면 사라져야 한다.
 #     비고가 있으면 단계 칸에 ⚠ 가 붙는다 — 막힘은 단계가 아니라 사고다.
-#   · 옛 한 줄(`- **배포 단계**:` / `- **배포 단계**:`)이 남아 있으면 이때 지운다.
+#   · 옛 한 줄(`- **배포 단계**:` / `- **배송 단계**:`)이 남아 있으면 이때 지운다.
+#
+# ⛔ 행 열쇠가 **환경 하나에서 (저장소, 환경) 둘로** 늘었다. 한 오더가 저장소 둘을 건드리면
+#    (실측: FE1-1787·FE1-2005 등 12건) 환경만으로는 두 저장소가 같은 행을 덮어쓴다.
+# 옛 6칸 표(저장소 칸 없음)는 **여기서 한 번에 7칸으로 올린다** — `- **저장소**:` 줄의 값으로
+# 기존 행을 채우고(없으면 wadiz-frontend) 그 줄은 지운다. 메타가 80개가 넘어 일괄 변환 대신
+# "쓸 때 올린다"로 간다. 손대지 않은 오더는 옛 모양 그대로 남고 대시보드가 둘 다 읽는다.
 dobby_ship_stage() {
-  local key="$1" env="$2" st="$3" pr="${4:-}" bd="${5:-}" note="${6:-}" f ts
-  [ -n "$env" ] && [ -n "$st" ] || { _die "쓰임: dobby_ship_stage KEY 환경 단계 [PR] [빌드] [비고]"; return 1; }
+  local key="$1" rp="$2" env="$3" st="$4" pr="${5:-}" bd="${6:-}" note="${7:-}" f ts old
+  [ -n "$rp" ] && [ -n "$env" ] && [ -n "$st" ] \
+    || { _die "쓰임: dobby_ship_stage KEY 저장소 환경 단계 [PR] [빌드] [비고]"; return 1; }
+  _ship_has "$rp" "$DOBBY_SHIP_REPOS" \
+    || { _die "배포을 맡는 저장소가 아니다: '$rp' (허용: $DOBBY_SHIP_REPOS)"; return 1; }
   _ship_has "$env" "$DOBBY_SHIP_ENVS" \
     || { _die "배포 환경이 아니다: '$env' (허용: $DOBBY_SHIP_ENVS)"; return 1; }
   _ship_stage_ok "$st" \
@@ -1929,64 +2063,65 @@ dobby_ship_stage() {
   [ -f "$f" ] || { _die "status.md 가 없다: $key"; return 1; }
   ts="$(date '+%Y-%m-%d %H:%M')"
 
+  # 옛 표를 올릴 때 기존 행에 채울 저장소. `- **저장소**: owner/repo` 의 뒷마디만 쓴다.
+  old="$(sed -nE 's#^[[:space:]]*-[[:space:]]*\*\*저장소\*\*[[:space:]]*:[[:space:]]*`?([^[:space:]`]+).*#\1#p' "$f" | head -1)"
+  old="${old##*/}"
+  _ship_has "$old" "$DOBBY_SHIP_REPOS" || old="wadiz-frontend"
+
   # 표가 없으면 '## 현재 단계' 다음에 빈 표를 만든다.
   if ! grep -q '^##[[:space:]]*배포[[:space:]]*$' "$f"; then
     awk '
-      function head() { print "## 배포"; print "| 환경 | 단계 | PR | 빌드 | 갱신 | 비고 |"; print "|---|---|---|---|---|---|" }
+      function head() { print "## 배포"; print "| 저장소 | 환경 | 단계 | PR | 빌드 | 갱신 | 비고 |"; print "|---|---|---|---|---|---|---|" }
       /^## / { if (p) { head(); print ""; p=0; ins=1 } p = ($0 ~ /현재 단계/) }
       { print }
       END { if (!ins) { print ""; head() } }
     ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
   fi
 
-  awk -v env="$env" -v st="$st" -v pr="$pr" -v bd="$bd" -v note="$note" -v ts="$ts" '
+  awk -v rp="$rp" -v env="$env" -v st="$st" -v pr="$pr" -v bd="$bd" -v note="$note" \
+      -v ts="$ts" -v old="$old" '
     function trim(x) { gsub(/^[ \t]+|[ \t]+$/, "", x); return x }
     function emit(  s, p2, b2) {
       s = st; if (note != "") s = s " ⚠"
       p2 = (keep_pr != "" ? keep_pr : "-"); if (pr != "") p2 = pr
       b2 = (keep_bd != "" ? keep_bd : "-"); if (bd != "") b2 = bd
-      if (p2 == "-" && pr == "-") p2 = "-"
-      printf "| %s | %s | %s | %s | %s | %s |\n", env, s, p2, b2, ts, note
+      printf "| %s | %s | %s | %s | %s | %s | %s |\n", rp, env, s, p2, b2, ts, note
       keep_pr = ""; keep_bd = ""; found = 1
     }
-    /^[ \t]*-[ \t]*\*\*배[포송] 단계\*\*/ { next }            # 옛 한 줄(배포·배송)은 버린다
+    /^[ \t]*-[ \t]*\*\*배[포송] 단계\*\*/ { next }   # 옛 한 줄(배포·배송)은 버린다
+    /^[ \t]*-[ \t]*\*\*저장소\*\*/ { if (insec) next }  # 표가 저장소를 담으므로 이 줄은 버린다
     /^## / { if (insec && !found && seen) emit(); insec = ($0 ~ /^##[ \t]*배포[ \t]*$/) }
     {
       if (insec && $0 ~ /^[ \t]*\|/) {
         seen = 1
-        split($0, c, "|")
-        if (trim(c[2]) == env) {
-          keep_pr = trim(c[4]); if (keep_pr == "-") keep_pr = ""
-          keep_bd = trim(c[5]); if (keep_bd == "-") keep_bd = ""
+        # 칸 수로 옛 표(6칸)와 새 표(7칸)를 가른다. `| a | b |` 는 split 이 앞뒤 빈 조각을
+        # 함께 세므로 6칸→8, 7칸→9 다. 내용(빈 비고 등)으로 가르면 틀린다.
+        nc = split($0, c, "|")
+        n = trim(c[2])
+        # ── 머리글·구분선: 언제나 7칸으로 다시 쓴다(옛 6칸 표 승급) ──────────
+        if (n == "환경" || n == "저장소") {
+          print "| 저장소 | 환경 | 단계 | PR | 빌드 | 갱신 | 비고 |"; next
+        }
+        if (n ~ /^:?-+:?$/) { print "|---|---|---|---|---|---|---|"; next }
+        # ── 자료 행 ────────────────────────────────────────────────────────
+        if (nc < 8) { print; next }                 # 모양을 모르는 줄은 그대로 둔다
+        if (nc == 8) {
+          # 옛 6칸 행 — 저장소 칸을 앞에 끼워 넣는다.
+          r = old; e = n; sg = trim(c[3]); p = trim(c[4]); b = trim(c[5]); u = trim(c[6]); nt = trim(c[7])
+        } else {
+          r = n; e = trim(c[3]); sg = trim(c[4]); p = trim(c[5]); b = trim(c[6]); u = trim(c[7]); nt = trim(c[8])
+        }
+        if (r == rp && e == env) {
+          keep_pr = (p == "-" ? "" : p)
+          keep_bd = (b == "-" ? "" : b)
           emit(); next
         }
-        print; next
+        printf "| %s | %s | %s | %s | %s | %s | %s |\n", r, e, sg, p, b, u, nt; next
       }
       if (insec && seen && !found) emit()
       print
     }
     END { if (insec && !found && seen) emit() }
-  ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
-}
-
-# dobby_ship_repo KEY owner/repo — '## 배포' 섹션에 저장소 한 줄을 적는다.
-#
-# 대시보드가 PR·빌드 링크를 만들 때 쓴다. **워크트리만 봐서는 어느 저장소의 PR 인지 알 수 없다**
-# — 멀티레포 오더는 후보가 여러 개다(실측 FE1-1301: com.wadiz.web 이 먼저 잡혀 링크가 404).
-# 표를 만든 뒤에만 적는다(섹션이 있어야 한다).
-dobby_ship_repo() {
-  local key="$1" rp="$2" f
-  [ -n "$rp" ] || return 0
-  f="$(_order_dir "$key")/status.md"
-  [ -f "$f" ] || return 0
-  grep -q '^##[[:space:]]*배포[[:space:]]*$' "$f" || return 0
-  awk -v rp="$rp" '
-    /^## / {
-      insec = ($0 ~ /^##[ \t]*배포[ \t]*$/)
-      if (insec) { print; print "- **저장소**: " rp; next }
-    }
-    /^[ \t]*-[ \t]*\*\*저장소\*\*/ { if (insec) next }
-    { print }
   ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
 }
 
@@ -2138,8 +2273,12 @@ $bad"; return 1; }
 #   · 충돌이 있으면 충돌 해결 브랜치를 만들지 못하므로 거부한다 — 푸는 것은 dobby_bridge_make 가 만든
 #     임시 워크트리에서 스킬이 한다(dobby_conflict_evidence → 해결 → dobby_bridge_finish).
 # 해 주는 것:
-#   · dev 를 뺀 환경에 --reviewer wadiz-fe/fe1-team 을 **자동으로** 붙인다.
-#     리뷰 요청이 있어야 자동 코드리뷰가 돌아 승인이 붙는다. 스킬이 깜빡할 수 없게 여기서 붙인다.
+#   · **저장소마다 다른 베이스 브랜치로 옮긴다**(_ship_branch). com.wadiz.web 의 dev 는
+#     `cloud_dev` 라, 논리 환경을 그대로 베이스로 쓰면 없는 브랜치라 실패한다.
+#   · 리뷰봇이 도는 저장소(wadiz-frontend)에서 dev 를 뺀 환경에만 --reviewer wadiz-fe/fe1-team 을
+#     **자동으로** 붙인다. 리뷰 요청이 있어야 자동 코드리뷰가 돌아 승인이 붙는다.
+#     ⛔ com.wadiz.web 에는 붙이지 않는다 — 리뷰봇이 없어 **오지 않을 리뷰를 기다리게 되고**,
+#        조직이 달라(wadiz-web) wadiz-fe/fe1-team 은 붙지도 않는다.
 dobby_ship_pr() {
   local key="$1" wt="$2" br="$3" env="$4" title="$5" body="$6" n dirty
   _ship_has "$env" "$DOBBY_SHIP_ENVS" || { _die "배포 환경이 아니다: '$env' (허용: $DOBBY_SHIP_ENVS)"; return 1; }
@@ -2161,6 +2300,13 @@ dobby_ship_pr() {
     return 1
   }
 
+  # ⛔ 논리 환경 → 이 저장소의 실제 브랜치. 여기서 갈라야 com.wadiz.web 의 dev 가 cloud_dev 로 간다.
+  local base; base="$(_ship_branch "$name" "$env")"
+  [ -n "$base" ] || {
+    _die "'$name' 에는 '$env' 환경이 없다. 어느 환경으로 내보낼지 사용자에게 확인하고 다시 하라."
+    return 1
+  }
+
   dirty="$(git -C "$wt" status --porcelain 2>/dev/null | head -5)"
   if [ -n "$dirty" ]; then
     _die "워크트리에 미커밋 변경이 남아 있다 — 리뷰를 통과한 것만 내보낸다(C1). 먼저 dobby_commit_push 로 정리하라:
@@ -2169,85 +2315,115 @@ $dirty"
   fi
 
   # 이미 열린 PR — 충돌 해결 브랜치로 올라간 것까지 함께 본다.
-  local bridge="${br}_into_${env}" rp
+  local bridge="${br}_into_${base}" rp
   rp="$(_ship_repo "$wt")"
-  n="$(gh pr list --repo "$rp" --head "$br" --base "$env" --state open --json number -q '.[0].number' 2>/dev/null)"
-  [ -n "$n" ] || n="$(gh pr list --repo "$rp" --head "$bridge" --base "$env" --state open --json number -q '.[0].number' 2>/dev/null)"
+  n="$(gh pr list --repo "$rp" --head "$br" --base "$base" --state open --json number -q '.[0].number' 2>/dev/null)"
+  [ -n "$n" ] || n="$(gh pr list --repo "$rp" --head "$bridge" --base "$base" --state open --json number -q '.[0].number' 2>/dev/null)"
   if [ -n "$n" ]; then
-    dobby_ship_stage "$key" "$env" "PR 생성" "#$n"
-    dobby_ship_repo "$key" "$rp"
+    dobby_ship_stage "$key" "$name" "$env" "PR 생성" "#$n"
     printf '%s' "$n"; return 0
   fi
 
   # ── 충돌 해결 브랜치를 만든다(충돌이 없어도 언제나) ─────────────────────────
   local made rc
-  made="$(dobby_bridge_make "$wt" "$br" "$env")"; rc=$?
+  made="$(dobby_bridge_make "$wt" "$br" "$base")"; rc=$?
   if [ "$rc" -eq 2 ]; then
-    _die "$br → $env 에 충돌이 있다. 임시 워크트리에서 풀어라: ${made#conflict }
-  ① dobby_conflict_evidence {임시워크트리} $br $env   — 양쪽이 왜 건드렸는지 본다
+    _die "$br → $base 에 충돌이 있다. 임시 워크트리에서 풀어라: ${made#conflict }
+  ① dobby_conflict_evidence {임시워크트리} $br $base   — 양쪽이 왜 건드렸는지 본다
   ② 근거로 판단해 직접 고친다. 근거로도 어느 쪽이 맞는지 확정되지 않으면 사용자에게 묻는다
-  ③ dobby_bridge_finish {임시워크트리} $br $env       — 검증하고 올린다
+  ③ dobby_bridge_finish {임시워크트리} $br $base       — 검증하고 올린다
   그 뒤 이 함수를 다시 부르면 충돌 해결 브랜치로 PR 을 만든다."
     return 1
   fi
   [ "$rc" -eq 0 ] || return 1
 
   local extra=()
-  [ "$env" = "dev" ] || extra=(--reviewer wadiz-fe/fe1-team)
-  ( cd "$wt" && gh pr create --base "$env" --head "$bridge" --title "$title" --body "$body" "${extra[@]}" ) >&2 || return 1
-  n="$(gh pr list --repo "$rp" --head "$bridge" --base "$env" --state open --json number -q '.[0].number')"
+  if _ship_reviewbot "$name" && [ "$env" != "dev" ]; then extra=(--reviewer wadiz-fe/fe1-team); fi
+  ( cd "$wt" && gh pr create --base "$base" --head "$bridge" --title "$title" --body "$body" "${extra[@]}" ) >&2 || return 1
+  n="$(gh pr list --repo "$rp" --head "$bridge" --base "$base" --state open --json number -q '.[0].number')"
   [ -n "$n" ] || { _die "PR 을 만들었는데 번호를 못 찾았다"; return 1; }
-  dobby_event "$key" "PR 생성 — #$n ($bridge → $env)"
-  dobby_ship_stage "$key" "$env" "PR 생성" "#$n"
-  dobby_ship_repo "$key" "$rp"
+  dobby_event "$key" "PR 생성 — $name #$n ($bridge → $base)"
+  dobby_ship_stage "$key" "$name" "$env" "PR 생성" "#$n"
   printf '%s' "$n"
 }
 
 # 워크트리의 저장소(owner/repo).
 _ship_repo() { git -C "$1" remote get-url origin 2>/dev/null | sed -E 's#.*github\.com[:/]##; s#\.git$##'; }
 
-# dobby_ship_merge KEY PR번호 — 머지 전에 막을 것을 다 보고 머지한다.
+# dobby_ship_merge KEY 저장소 PR번호 — 머지 전에 막을 것을 다 보고 머지한다.
+#
+# ⛔ 저장소를 **인자로 받는다.** 예전에는 gh 가 현재 디렉터리로 짐작했는데, 멀티레포 오더는
+#    후보가 여러 개라 엉뚱한 저장소의 같은 번호를 볼 수 있다(실측 FE1-1301: 저장소를 잘못
+#    잡아 PR 링크가 404 였다).
 #
 # 막는 것:
-#   · 베이스가 dev·rc1·rc4 가 아니면 거부(stage·cloud_live·release/* …)
+#   · 베이스가 그 저장소의 dev·rc1·rc4 브랜치가 아니면 거부(stage·cloud_live·release/* …)
 #   · 충돌(CONFLICTING)이면 거부
 #   · 반영하지 않은 변경요청(CHANGES_REQUESTED)이 남아 있으면 거부
 #     — "기다리지 않는" 환경(stage·dev)에서도 달려 있는 지적을 모르고 덮는 것을 막는다
+#   · **G-A** com.wadiz.web 은 같은 환경의 wadiz-frontend 가 머지되기 전이면 거부
 dobby_ship_merge() {
-  local key="$1" pr="$2" j base mergeable decision
-  [ -n "$pr" ] || { _die "PR 번호가 필요하다"; return 1; }
-  j="$(gh pr view "$pr" --json baseRefName,mergeable,reviewDecision 2>/dev/null)" \
-    || { _die "PR #$pr 을 조회하지 못했다"; return 1; }
+  local key="$1" rp="$2" pr="$3" j base mergeable decision env e fe
+  [ -n "$rp" ] && [ -n "$pr" ] || { _die "쓰임: dobby_ship_merge KEY 저장소 PR번호"; return 1; }
+  _ship_has "$rp" "$DOBBY_SHIP_REPOS" \
+    || { _die "배포을 맡는 저장소가 아니다: '$rp' (허용: $DOBBY_SHIP_REPOS)"; return 1; }
+  j="$(gh pr view "$pr" --repo "$(_ship_owner "$rp")" --json baseRefName,mergeable,reviewDecision 2>/dev/null)" \
+    || { _die "$rp 의 PR #$pr 을 조회하지 못했다"; return 1; }
   base="$(printf '%s' "$j" | sed -nE 's/.*"baseRefName":"([^"]*)".*/\1/p')"
   mergeable="$(printf '%s' "$j" | sed -nE 's/.*"mergeable":"([^"]*)".*/\1/p')"
   decision="$(printf '%s' "$j" | sed -nE 's/.*"reviewDecision":"([^"]*)".*/\1/p')"
 
-  _ship_has "$base" "$DOBBY_SHIP_MERGE_ENVS" \
-    || { _die "베이스가 '$base' 인 PR 은 이 스킬이 머지하지 않는다(허용: $DOBBY_SHIP_MERGE_ENVS). stage·정식 배포 베이스 반영은 사용자가 직접 한다."; return 1; }
+  # 베이스 브랜치 → 논리 환경. 머지해도 되는 환경(dev·rc1·rc4) 안에서만 찾는다.
+  env=""
+  for e in $(_words "$DOBBY_SHIP_MERGE_ENVS"); do
+    [ "$(_ship_branch "$rp" "$e")" = "$base" ] && { env="$e"; break; }
+  done
+  [ -n "$env" ] \
+    || { _die "베이스가 '$base' 인 $rp PR 은 이 스킬이 머지하지 않는다(허용 환경: $DOBBY_SHIP_MERGE_ENVS). stage·정식 배포 베이스 반영은 사용자가 직접 한다."; return 1; }
   [ "$mergeable" != "CONFLICTING" ] \
     || { _die "PR #$pr 에 충돌이 있다. 워크트리에서 $base 를 머지해 풀고 푸시한 뒤 다시 하라."; return 1; }
   [ "$decision" != "CHANGES_REQUESTED" ] \
     || { _die "PR #$pr 에 반영하지 않은 변경요청이 있다. 리뷰 내용을 읽고 처리한 뒤 다시 하라."; return 1; }
 
-  gh pr merge "$pr" --merge >&2 || return 1
-  dobby_event "$key" "PR #$pr 머지 → $base"
-  dobby_ship_stage "$key" "$base" "빌드 대기" "#$pr"
+  # ── G-A. com.wadiz.web 은 wadiz-frontend 가 머지된 뒤에 ──────────────────
+  # 둘은 같이 나가야 동작한다(FE 가 부르는 컨트롤러·JSP 가 저쪽에 있다). 먼저 머지하면
+  # 그 사이에 배포가 돌아 **한쪽만 반영된 상태**가 된다. FE 행이 없으면(단독 오더) 끄고 간다.
+  if [ "$rp" = com.wadiz.web ]; then
+    fe="$(_ship_row_rank "$key" wadiz-frontend "$env")"
+    if [ -n "$fe" ] && [ "$fe" -lt "$DOBBY_SHIP_RANK_MERGED" ]; then
+      _die "wadiz-frontend 가 아직 머지되지 않았다(현재 '$(_ship_row_stage "$key" wadiz-frontend "$env")'). com.wadiz.web 은 그 뒤에 머지한다 — 먼저 머지하면 한쪽만 반영된 상태로 배포가 돈다. FE 머지 뒤에 다시 하라."
+      return 1
+    fi
+  fi
+
+  gh pr merge "$pr" --repo "$(_ship_owner "$rp")" --merge >&2 || return 1
+  dobby_event "$key" "$rp PR #$pr 머지 → $base"
+  dobby_ship_stage "$key" "$rp" "$env" "빌드 대기" "#$pr"
 }
 
-# dobby_ship_round KEY — 리뷰 반영 라운드를 하나 올린다. 4회째면 거부한다. 현재 회차 stdout.
+# _ship_owner 저장소이름 → owner/repo. gh 에 --repo 로 넘길 값이다.
+_ship_owner() {
+  case "$1" in
+    wadiz-frontend) printf 'wadiz-fe/wadiz-frontend' ;;
+    com.wadiz.web)  printf 'wadiz-web/com.wadiz.web' ;;
+  esac
+}
+
+# dobby_ship_round KEY 저장소 환경 — 리뷰 반영 라운드를 하나 올린다. 4회째면 거부한다. 회차 stdout.
 # 리뷰↔수정이 무한히 오가는 것을 막는다(글로 적은 "3라운드 상한"을 코드로).
+# 리뷰봇이 없는 저장소(com.wadiz.web)에서는 쓸 일이 없다 — 불러도 막지는 않는다.
 dobby_ship_round() {
-  local key="$1" env="${2:-}" f n
+  local key="$1" rp="${2:-}" env="${3:-}" f n
   f="$(_order_dir "$key")/status.md"
   [ -f "$f" ] || { _die "status.md 가 없다: $key"; return 1; }
   n="$(grep -cE '^- .* PR 리뷰 [0-9]+회차' "$(_order_dir "$key")/orchestration.md" 2>/dev/null)" || n=0
   n=$((n + 1))
   if [ "$n" -gt 3 ]; then
-    [ -n "$env" ] && dobby_ship_stage "$key" "$env" "리뷰 대기" "" "" "리뷰 왕복 3회 — 사람 확인 필요"
+    [ -n "$rp" ] && [ -n "$env" ] && dobby_ship_stage "$key" "$rp" "$env" "리뷰 대기" "" "" "리뷰 왕복 3회 — 사람 확인 필요"
     _die "리뷰 반영이 3회를 넘었다($n회째). 무엇이 반복해서 걸리는지 정리해 사용자에게 알리고 멈춰라."
     return 1
   fi
-  [ -n "$env" ] && dobby_ship_stage "$key" "$env" "리뷰 반영 ${n}회차"
+  [ -n "$rp" ] && [ -n "$env" ] && dobby_ship_stage "$key" "$rp" "$env" "리뷰 반영 ${n}회차"
   printf '%s' "$n"
 }
 
@@ -2271,7 +2447,7 @@ dobby_ship_verify() {
 $need_n
 EOF
   if [ -n "$miss" ]; then
-    [ -n "$env" ] && dobby_ship_stage "$key" "$env" "배포 대기" "" "" "배포 미확인 —${miss}"
+    [ -n "$env" ] && dobby_ship_stage "$key" wadiz-frontend "$env" "배포 대기" "" "" "배포 미확인 —${miss}"
     _die "배포가 확인되지 않은 번들이 있다:${miss} (필요: $need / 확인: $got). 테스트 실패가 코드 결함이 아니라 **반쪽 배포** 때문일 수 있다 — 빠진 번들을 다시 빌드하고 배포를 기다린 뒤 회차를 다시 열어라."
     return 1
   fi
@@ -2504,6 +2680,10 @@ dobby_review_lint() {
 
 # dobby_ship_build KEY 환경 번들... — 번들마다 CI/CD 워크플로를 건다. run id 들을 stdout.
 #
+# ⛔ **wadiz-frontend 전용이다.** com.wadiz.web 은 머지 push 가 CI 를 자동으로 돌리므로
+#    (app-web-ci.yml 의 push 트리거) 여기서 또 걸면 **같은 빌드가 두 번 돈다.** 그쪽은
+#    dobby_ship_web_ci 로 **잡기만** 한다.
+#
 # 번들→워크플로 대응과 **빠지면 안 되는 옵션**을 여기서 붙인다. 스킬이 생 명령을 치면
 # 옵션을 빠뜨린다(실측: static 빌드에 build_entry_all 이 빠져 반쪽만 빌드됐다).
 #
@@ -2542,10 +2722,13 @@ EOF
       studio)  wf="app-studio-ci-cd.yml" ;;
       *) _die "빌드 워크플로를 모르는 번들이다: '$b' (아는 것: static global account studio)"; return 1 ;;
     esac
-    gh workflow run "$wf" -f environment="$env" -f runner=self-hosted "${args[@]}" >&2 || {
+    # ⛔ --repo 를 명시한다. 멀티레포 오더는 세션 디렉터리가 com.wadiz.web 워크트리일 수 있어,
+    #    gh 가 현재 폴더로 저장소를 짐작하면 **없는 워크플로**라며 실패하거나 엉뚱한 곳에 건다.
+    gh workflow run "$wf" --repo "$(_ship_owner wadiz-frontend)" \
+      -f environment="$env" -f runner=self-hosted "${args[@]}" >&2 || {
       _die "$wf 를 걸지 못했다"; return 1; }
     sleep 3
-    rid="$(gh run list --workflow="$wf" --limit 1 --json databaseId -q '.[0].databaseId' 2>/dev/null)"
+    rid="$(gh run list --repo "$(_ship_owner wadiz-frontend)" --workflow="$wf" --limit 1 --json databaseId -q '.[0].databaseId' 2>/dev/null)"
     printf '%s %s\n' "$b" "$rid"
     out="$out $b#$rid"
     cell="${cell:+$cell · }$b#$rid"
@@ -2553,7 +2736,149 @@ EOF
 $(_words "$list")
 EOF
   dobby_event "$key" "빌드 시작 —${out} @ $env"
-  dobby_ship_stage "$key" "$env" "배포 대기" "" "$cell"
+  dobby_ship_stage "$key" wadiz-frontend "$env" "배포 대기" "" "$cell"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# com.wadiz.web — 빌드는 자동, 배포는 수동(argocd)
+#
+# wadiz-frontend 는 빌드가 곧 배포지만 여기는 둘이 갈린다.
+#   머지 push → [app] web - CI 자동 실행 → ECR 이미지 + gitops 의 이미지 태그 갱신
+#                                        → **여기서 멈춘다.** argocd 가 Manual 이라
+#                                          sync 하지 않으면 파드는 옛 이미지 그대로다.
+# 실측 2026-10-07: web-rc1-web-server 가 OutOfSync 였다(머지·CI 는 됐는데 sync 안 함).
+# ─────────────────────────────────────────────────────────────────────────────
+
+# dobby_ship_web_ci KEY 환경 [머지시각] — 머지로 **자동 시작된** CI run 을 찾아 표에 적는다.
+#
+# ⛔ 빌드를 걸지 않는다. push 트리거와 겹쳐 두 번 돌기 때문이다.
+# 머지 시각(epoch)을 주면 그보다 **나중에 시작된** run 만 받는다 — 남이 같은 브랜치에 push 해
+# 돌던 옛 run 을 내 것으로 세지 않기 위해서다. 최대 3분 기다리고, 안 나타나면 거부한다.
+#   → stdout: run id
+dobby_ship_web_ci() {
+  local key="$1" env="$2" since="${3:-}" br rid created waited=0
+  _ship_has "$env" "$DOBBY_SHIP_ENVS" || { _die "배포 환경이 아니다: '$env'"; return 1; }
+  br="$(_ship_branch com.wadiz.web "$env")"
+  [ -n "$br" ] || { _die "com.wadiz.web 에는 '$env' 환경이 없다"; return 1; }
+
+  while :; do
+    rid="$(gh run list --repo "$(_ship_owner com.wadiz.web)" --workflow=app-web-ci.yml \
+      --branch "$br" --event push --limit 1 --json databaseId,createdAt \
+      -q '.[0] | "\(.databaseId) \(.createdAt)"' 2>/dev/null)"
+    created="${rid#* }"; rid="${rid%% *}"
+    if [ -n "$rid" ] && [ "$rid" != "null" ]; then
+      if [ -z "$since" ]; then break; fi
+      # createdAt(ISO8601 UTC) 를 epoch 로. BSD date(맥)와 GNU date 를 모두 받는다.
+      local c
+      c="$(date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$created" '+%s' 2>/dev/null \
+        || date -u -d "$created" '+%s' 2>/dev/null)"
+      [ -n "$c" ] && [ "$c" -ge "$since" ] && break
+    fi
+    waited=$((waited + 15))
+    [ "$waited" -le 180 ] || {
+      _die "머지 뒤 3분이 지나도 com.wadiz.web 의 CI(app-web-ci.yml @ $br)가 시작되지 않았다. push 트리거가 걸리지 않은 것이다 — 머지가 실제로 됐는지, 워크플로가 비활성인지 확인하라."
+      return 1
+    }
+    sleep 15
+  done
+
+  dobby_event "$key" "com.wadiz.web CI 시작 — web#$rid @ $br"
+  dobby_ship_stage "$key" com.wadiz.web "$env" "빌드 대기" "" "web#$rid"
+  printf '%s' "$rid"
+}
+
+# dobby_ship_argo KEY 환경 [check] — com.wadiz.web 을 argocd 로 동기화하고 health 까지 기다린다.
+#
+# `check` 를 붙이면 **보기만 한다**(sync 하지 않음). 테스트가 실패했을 때 "반쪽 배포인가"를
+# 가르는 진단용이다 — wadiz-frontend 의 dobby_ship_verify 와 같은 자리.
+#
+# 막는 것:
+#   · 환경이 stage 면 거부 — 스테이지 반영 시점은 사람이 고른다(머지도 사람이 한다)
+#   · **G-B** 같은 환경의 wadiz-frontend 가 `배포 확인` 전이면 거부
+#       (사용자 요구: 배포는 wadiz-frontend 의 빌드·배포가 끝나면 같이 진행한다)
+#   · com.wadiz.web CI run 이 success 가 아니면 거부 — 이미지가 없으면 sync 해도 옛 이미지가 뜬다
+#   · argocd 세션이 없으면 거부 — 재로그인은 브라우저 SSO 라 **사람만** 할 수 있다
+#   · app list 에 그 앱이 없으면 거부 — 이름을 짐작해 엉뚱한 환경을 건드리지 않는다
+#   · 앱 이름에 `-live-` 가 있으면 거부 — 훅 G1 과 이중으로
+dobby_ship_argo() {
+  local key="$1" env="$2" mode="${3:-}" srv app fe rid st
+  _ship_has "$env" "$DOBBY_SHIP_ENVS" || { _die "배포 환경이 아니다: '$env'"; return 1; }
+  [ "$env" != stage ] || {
+    _die "stage 의 com.wadiz.web 배포는 사용자가 직접 한다(머지도 사용자 몫이다). PR 주소를 알리고 멈춰라."
+    return 1
+  }
+  srv="$(_ship_argo_server "$env")"; app="$(_ship_argo_app "$env")"
+  [ -n "$srv" ] && [ -n "$app" ] || { _die "'$env' 의 argocd 대상을 모른다"; return 1; }
+  case "$app" in *-live-*) _die "라이브 앱($app)은 이 스킬이 건드리지 않는다 — 별도 릴리스 절차다."; return 1 ;; esac
+
+  # ⛔ 세션. 브라우저 SSO 라 자동 실행이 절대 통과할 수 없다 — 깨끗이 멈추고 사람을 부른다.
+  argocd account get-user-info --server "$srv" --grpc-web 2>/dev/null | grep -q 'Logged In: *true' || {
+    _die "argocd 세션이 없다($srv). 사용자에게 아래를 실행해 달라고 알리고 멈춰라(브라우저 인증이라 대신 할 수 없다):
+  argocd login $srv --sso --grpc-web"
+    return 1
+  }
+  argocd app list --server "$srv" --grpc-web -o name 2>/dev/null | grep -qx "$app" || {
+    _die "argocd 에 '$app' 앱이 없다($srv). 이름을 짐작해 다른 환경을 sync 하지 않는다 — app list 로 확인하고 _ship_argo_app 을 고쳐라."
+    return 1
+  }
+
+  if [ "$mode" = check ]; then
+    argocd app list --server "$srv" --grpc-web 2>/dev/null | grep -E "NAME|$app"
+    return 0
+  fi
+
+  # ── G-B. wadiz-frontend 배포가 끝난 뒤에 ────────────────────────────────
+  fe="$(_ship_row_rank "$key" wadiz-frontend "$env")"
+  if [ -n "$fe" ] && [ "$fe" -lt "$DOBBY_SHIP_RANK_DEPLOYED" ]; then
+    _die "wadiz-frontend 배포가 아직 확인되지 않았다(현재 '$(_ship_row_stage "$key" wadiz-frontend "$env")'). 두 저장소는 같이 반영돼야 하므로 FE 배포 확인 뒤에 sync 한다."
+    return 1
+  fi
+
+  # ── CI 가 끝났나. 이미지가 없으면 sync 해도 옛 이미지가 뜬다 ──────────────
+  rid="$(_ship_cell_run "$key" com.wadiz.web "$env" web)"
+  if [ -n "$rid" ]; then
+    st="$(gh run view "$rid" --repo "$(_ship_owner com.wadiz.web)" --json status,conclusion \
+      -q '"\(.status) \(.conclusion)"' 2>/dev/null)"
+    case "$st" in
+      "completed success") : ;;
+      "completed "*) _die "com.wadiz.web CI(web#$rid)가 ${st#completed } 로 끝났다. 이미지가 없으므로 sync 하지 않는다 — 빌드 로그를 보고 원인을 알려라."; return 1 ;;
+      *) _die "com.wadiz.web CI(web#$rid)가 아직 돌고 있다($st). 끝난 뒤에 sync 한다 — gh run watch $rid --repo $(_ship_owner com.wadiz.web) --exit-status"; return 1 ;;
+    esac
+  fi
+
+  argocd app sync "$app" --server "$srv" --grpc-web >&2 || { _die "sync 에 실패했다($app @ $srv)"; return 1; }
+  argocd app wait "$app" --health --timeout 300 --server "$srv" --grpc-web >&2 \
+    || { _die "sync 는 됐는데 health 가 300초 안에 Healthy 가 되지 않았다($app). argocd app list --server $srv --grpc-web | grep $app 로 상태를 보고 알려라."; return 1; }
+
+  dobby_event "$key" "com.wadiz.web 배포 — $app @ $srv (sync·Healthy)"
+  dobby_ship_stage "$key" com.wadiz.web "$env" "배포 확인"
+  printf 'sync 완료: %s @ %s\n' "$app" "$srv"
+  printf '⚠ 파드 교체 전에는 옛 응답이 나온다(JSP·urlrewrite.xml 이 이미지 안에 있다).\n' >&2
+  printf '  바뀐 지면을 GET 으로 폴링해 반영을 확인한 뒤 검증을 연다(POST·결제·콜백 금지).\n' >&2
+}
+
+# _ship_cell_run KEY 저장소 환경 번들 — 빌드 칸에서 `{번들}#{run id}` 의 run id 를 뽑는다.
+_ship_cell_run() {
+  local f
+  f="$(_order_dir "$1")/status.md"
+  [ -f "$f" ] || return 0
+  awk -v rp="$2" -v env="$3" -v b="$4" '
+    function trim(x) { gsub(/^[ \t]+|[ \t]+$/, "", x); return x }
+    /^## / { insec = ($0 ~ /^##[ \t]*배포[ \t]*$/); next }
+    insec && /^[ \t]*\|/ {
+      nc = split($0, c, "|")
+      if (nc == 8)      { r = "wadiz-frontend"; e = trim(c[2]); cell = trim(c[5]) }
+      else if (nc >= 9) { r = trim(c[2]);       e = trim(c[3]); cell = trim(c[6]) }
+      else next
+      if (r != rp || e != env) next
+      n = split(cell, parts, "·")
+      for (i = 1; i <= n; i++) {
+        p = trim(parts[i])
+        if (index(p, b "#") == 1) { print substr(p, length(b) + 2); exit }
+      }
+      exit
+    }
+  ' "$f"
 }
 
 # dobby_testrun_lint 결과폴더 — 근거 칸에 **파일 이름만** 적힌 행을 잡는다.

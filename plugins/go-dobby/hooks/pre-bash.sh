@@ -5,8 +5,10 @@
 # 여기서 마지막으로 막는 방어선이다(dobby-lib.sh 헬퍼를 안 거치고 생 명령을 칠 때 대비).
 #   G1: 정식 배포 베이스($ORCHESTRATION_DEFAULT_BASE, 기본 master)로의 push·merge·PR 금지
 #       (dobby-order C1 — master 반영은 사용자가 직접)
-#       PR 머지는 베이스가 dev·rc1·rc4 일 때만 통과(dobby-ship), 그 밖은 차단.
+#       PR 머지는 베이스가 dev·rc1·rc4·cloud_dev 일 때만 통과(dobby-ship), 그 밖은 차단.
+#       (cloud_dev 는 com.wadiz.web 의 dev 브랜치다 — 저장소마다 이름이 다르다)
 #       gh workflow run 의 environment=clive(=cloud_live 배포)도 차단.
+#       argocd app sync 는 라이브 앱(web-live-*·client-live-*)·서버 미지정이면 차단.
 #   G5: dobby 워크스페이스 안에서 subtree/ 밖 폴더 제거 금지 (dobby-end 안전 경계)
 #   G6: 메타 폴더($ORCHESTRATION_META) 삭제 금지 (비파괴 원칙 — 생명주기 기록 보존)
 #
@@ -177,11 +179,13 @@ if in_dobby_scope; then
     deny G1 "정식 배포 베이스($BASE)로의 PR 생성은 금지다(dobby-order C1). $BASE 반영은 사용자가 직접 한다."
   fi
 
-  # (3) gh pr merge — 허용 베이스(dev·rc1·rc4)로만 연다.
+  # (3) gh pr merge — 허용 베이스(dev·rc1·rc4·cloud_dev)로만 연다.
   #
-  # 예전에는 전면 금지였다. dobby-ship 이 이 셋으로 머지하므로 조건부로 푼다.
+  # 예전에는 전면 금지였다. dobby-ship 이 이 넷으로 머지하므로 조건부로 푼다.
   # ⛔ 그 밖(cloud_live·master·stage·release/* 등)은 그대로 막는다 — 사용자가 직접 한다.
   #    stage 를 뺀 것은 의도적이다: 스테이지 반영은 사람이 시점을 고르는 일이다.
+  # `cloud_dev` 는 com.wadiz.web 의 개발 브랜치다 — 같은 "dev" 환경인데 저장소마다 이름이
+  # 다르다(wadiz-frontend 는 `dev`). 빼 두면 그 저장소는 아예 머지가 막힌다.
   #
   # 명령에는 베이스가 안 적혀 있다(`gh pr merge 29399 --merge`). 그래서 PR 을 조회해 확인한다.
   # 조회에 실패하면 **막는다** — 모르면 통과가 아니라 차단이다(예전이 전면 금지였으니 안전 쪽).
@@ -189,15 +193,17 @@ if in_dobby_scope; then
   if printf '%s' "$CMD" | grep -qE "gh[[:space:]]+pr[[:space:]]+merge"; then
     PRREF="$(printf '%s' "$CMD" \
       | sed -nE 's/.*gh[[:space:]]+pr[[:space:]]+merge[[:space:]]+([^[:space:]-][^[:space:]]*).*/\1/p')"
+    # 명령이 --repo 를 줬으면 그대로 따라간다(멀티레포 오더는 cwd 로 짐작하면 틀린다).
+    MREPO="$(printf '%s' "$CMD" | sed -nE 's/.*--repo[[:space:]=]+([^[:space:]]+).*/\1/p')"
     # shellcheck disable=SC2086
-    MBASE="$( (cd "${CWD:-.}" 2>/dev/null && gh pr view $PRREF --json baseRefName -q .baseRefName) 2>/dev/null )"
+    MBASE="$( (cd "${CWD:-.}" 2>/dev/null && gh pr view $PRREF ${MREPO:+--repo "$MREPO"} --json baseRefName -q .baseRefName) 2>/dev/null )"
     case "$MBASE" in
-      dev|rc1|rc4) : ;;  # 허용 — dobby-ship 배포 경로
+      dev|rc1|rc4|cloud_dev) : ;;  # 허용 — dobby-ship 배포 경로
       "")
         deny G1 "머지 대상 PR 의 베이스를 확인하지 못했다(gh 조회 실패). 베이스를 모르면 머지하지 않는다 — PR 번호를 명시하거나 워크트리 안에서 실행하라."
         ;;
       *)
-        deny G1 "베이스가 '$MBASE' 인 PR 머지는 금지다(dobby-order C1). 허용 베이스는 dev·rc1·rc4 뿐이다. 정식 배포 베이스($BASE)·stage·release 반영은 사용자가 직접 한다."
+        deny G1 "베이스가 '$MBASE' 인 PR 머지는 금지다(dobby-order C1). 허용 베이스는 dev·rc1·rc4·cloud_dev 뿐이다. 정식 배포 베이스($BASE)·stage·release 반영은 사용자가 직접 한다."
         ;;
     esac
   fi
@@ -207,6 +213,23 @@ if in_dobby_scope; then
   if printf '%s' "$CMD" | grep -qE "gh[[:space:]]+workflow[[:space:]]+run" \
      && printf '%s' "$CMD" | grep -qE "environment[[:space:]]*=[[:space:]]*(clive|cloud_live)([[:space:]\"']|$)"; then
     deny G1 "environment=clive 빌드는 금지다(cloud_live 배포 — dobby-order C1). 라이브 반영은 사용자가 별도 릴리스 절차로 한다."
+  fi
+
+  # (3-2) argocd app sync — com.wadiz.web 의 실제 배포다. 라이브로 가는 길을 막는다.
+  #
+  # wadiz-frontend 는 빌드가 곧 배포라 workflow run 만 막으면 됐지만, com.wadiz.web 은
+  # 배포가 argocd sync 다(네 환경 모두 SYNCPOLICY=Manual). 여기를 안 막으면 (3-1) 을
+  # 우회해 라이브에 반영할 수 있다.
+  #   · 앱 이름에 `-live-` 가 들어가면 거부 — web-live-web-server·client-live-app-api 등
+  #   · `--server` 가 없으면 거부 — 현재 컨텍스트가 라이브(argocd.wadiz.io)일 수 있다.
+  #     실측: 컨텍스트는 마지막 로그인한 서버로 바뀐다. 어디로 가는지 모르면 통과가 아니라 차단이다.
+  if printf '%s' "$CMD" | grep -qE "argocd[[:space:]]+app[[:space:]]+sync"; then
+    if printf '%s' "$CMD" | grep -qE -- "-live-"; then
+      deny G1 "라이브 argocd 앱 sync 는 금지다(dobby-order C1). 라이브 반영은 사용자가 별도 릴리스 절차로 한다."
+    fi
+    if ! printf '%s' "$CMD" | grep -qE -- "--server[[:space:]=]+[^[:space:]]+"; then
+      deny G1 "argocd app sync 에 --server 가 없다. 현재 컨텍스트가 라이브 서버(argocd.wadiz.io)일 수 있어 어디로 배포되는지 알 수 없다 — --server 를 명시하라(dobby_ship_argo 를 쓰면 자동으로 붙는다)."
+    fi
   fi
 
   # (4) git merge — 현재 체크아웃이 베이스 브랜치면 베이스로의 머지이므로 차단
