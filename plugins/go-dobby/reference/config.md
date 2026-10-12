@@ -53,7 +53,8 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 | `dobby_review_path KEY 라운드 슬러그` | P5 | reviews/round-N/{슬러그}.md 경로(폴더 생성) |
 | `dobby_blocking KEY 라운드` | P6 전이 판정 | reviews/round-N의 `## [blocker\|major]` 카드 헤더 집계(숫자 stdout). 카드 형식 없는 파일은 경고 — 그 파일만 직접 읽어 판정 |
 | `dobby_testrun_new KEY [전체시나리오수] [환경]` | dobby-test 시작 | 회차 자동 계산 + test-runs/{시각}/ + result.md 골격(`- **환경**:` 줄·`조건` 칸 포함) + status.md 이력 표 행 추가(경로 stdout) |
-| `dobby_testrun_lint 결과폴더` | dobby-test 마감(정리 직전) | 근거 칸에 **파일 이름만** 적힌 행이 있으면 거부. 관측한 사실을 적게 한다 |
+| `dobby_track_scan KEY [환경]` | dobby-ship 1단계 · dobby-test 2-1단계 | 변경 diff 로 **광고·데이터 수집 접촉**을 기계 판정해 `track-scan.md` 에 남긴다(보고 — 막지 않는다). ① 수집·광고 코드 자체(`packages/core/src/metrics/`·`packages/event-tracker/`·`react-ad-boundary`·`banner`·`winclude/tracking*.jsp`) ② 바뀐 줄의 심볼(`trackingEvent`·`trackingCustomTag`·`@wadiz/metrics`·`dataLayer`·`AdBoundary`·`_refer_section_st` 등) — **지워진 줄도 본다**(추적을 지운 것이 가장 조용한 사고다). 머지된 뒤에는 3점 diff 가 비므로 **그 환경 베이스의 PR diff** 로 떨어진다. 못 읽으면 `접촉 없음` 이 아니라 **`⚠ 확인 불가`** 로 적는다 |
+| `dobby_testrun_lint 결과폴더` | dobby-test 마감(정리 직전) | 근거 칸에 **파일 이름만** 적힌 행이 있으면 거부(관측한 사실을 적게 한다). **`track-scan` 이 보고한 `[수집]`·[광고]` 갈래가 result.md 에 없어도 거부** — 광고·수집은 화면에 안 보이게 깨져 다른 시나리오가 통과해도 따로 봐야 한다. 확인 불가면 시나리오를 넣고 `SKIP(…)` 으로 사유를 적는다(빼지 말 것) |
 | `dobby_testrun_prune 결과폴더` | dobby-test 8단계(요약을 쓴 **뒤**) | 그 회차에서 `result.md`·`summary.html` 이 이름으로 가리키지 않는 그림만 지운다. 테스트 중 화면 확인하려고 찍은 것이 남는 문제. test-runs 폴더 안·그림 확장자만 |
 | `dobby_testrun_update KEY 폴더시각 상태 [성공/실패/skip]` | 시나리오마다·마감 | 이력 표의 그 회차 행만 상태·집계 수정(통독 없음) |
 | `dobby_ship_pr KEY 워크트리 브랜치 환경 "제목" "본문"` | dobby-ship 2단계 | PR 생성(번호 stdout). **환경이 dev·rc1·rc4·stage 가 아니면·그 저장소에 그 환경이 없으면·미커밋이 남아 있으면 거부**, 이미 열린 PR 은 재사용. 저장소는 워크트리에서 읽고 **베이스 브랜치를 저장소에 맞게 옮긴다**(com.wadiz.web 의 dev → `cloud_dev`). 리뷰봇이 있는 저장소(wadiz-frontend)의 dev 외 환경에만 `--reviewer wadiz-fe/fe1-team` 자동 부착 |

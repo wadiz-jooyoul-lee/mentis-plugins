@@ -1,6 +1,6 @@
 ---
 name: dobby-test
-description: 구현한 내용이 실제 환경에서 정상 동작하는지 chrome-devtools로 검증하는 스킬. dobby-start가 만든 test-plan.md가 있으면 재사용하고 없으면 변경(diff)을 분석해 테스트 목록을 도출한 뒤, 국내/글로벌 국가 전환·로그인을 포함해 실제 브라우저로 테스트하고 결과를 $ORCHESTRATION_META/{키}/test-runs/{시각}/ 에 회차별로(덮어쓰지 않게) 저장하고 화면에도 통과/실패/보류를 한눈에 보이는 틀로 출력한다(보류는 사유를 함께 적는다). 진행 상태는 이슈 폴더 루트의 단일 status.md(테스트 실행 이력 표·현재 단계)를 갱신한다. 검증은 여기까지이며 상태를 자동으로 "해결"로 올리지 않는다(해결 표시는 dobby-resolve 담당). 테스트가 끝나면 완료 요약을 회차 폴더에 summary.html 로 남기고(대시보드 검증 탭에서 회차마다 다시 볼 수 있다), 그동안 연 브라우저 페이지를 닫아 정리한 뒤 남은 한 장에 그 파일을 띄운다. 사용법 /dobby-test {키|브랜치} 또는 /dobby-test (현재 브랜치).
+description: 구현한 내용이 실제 환경에서 정상 동작하는지 chrome-devtools로 검증하는 스킬. dobby-start가 만든 test-plan.md가 있으면 재사용하고 없으면 변경(diff)을 분석해 테스트 목록을 도출한 뒤, 국내/글로벌 국가 전환·로그인을 포함해 실제 브라우저로 테스트한다. 광고(배너 노출·클릭)와 데이터 수집(GA·GTM dataLayer·Braze)은 화면에 안 보이게 깨지므로 dobby_track_scan 이 변경 diff 로 접촉을 기계 판정하고(직접 수집·광고 코드 + 그것을 부르는 연관 코드, 지워진 추적 호출까지), 접촉이 있으면 [수집]·[광고] 전용 시나리오를 반드시 넣어 dataLayer 를 직접 읽어 근거로 남기며(광고 배너는 threshold 0.75 라 75% 보일 때까지 스크롤해야 노출 이벤트가 뜬다), 넣지 않으면 dobby_testrun_lint 가 회차 마감을 거부한다. 탐지와 무관하게 모든 회차에서 dataLayer 가 비었는지·추적 콘솔 에러·배너 요청 4xx/5xx 를 상시로 훑는다. 결과는 $ORCHESTRATION_META/{키}/test-runs/{시각}/ 에 회차별로(덮어쓰지 않게) 저장하고 화면에도 통과/실패/보류를 한눈에 보이는 틀로 출력한다(보류는 사유를 함께 적는다). 진행 상태는 이슈 폴더 루트의 단일 status.md(테스트 실행 이력 표·현재 단계)를 갱신한다. 검증은 여기까지이며 상태를 자동으로 "해결"로 올리지 않는다(해결 표시는 dobby-resolve 담당). 테스트가 끝나면 완료 요약을 회차 폴더에 summary.html 로 남기고(대시보드 검증 탭에서 회차마다 다시 볼 수 있다), 그동안 연 브라우저 페이지를 닫아 정리한 뒤 남은 한 장에 그 파일을 띄운다. 사용법 /dobby-test {키|브랜치} 또는 /dobby-test (현재 브랜치).
 ---
 
 # dobby-test
@@ -36,6 +36,37 @@ description: 구현한 내용이 실제 환경에서 정상 동작하는지 chro
 - `$ORCHESTRATION_META/{키}/test-plan.md`가 **있으면**(대개 dobby-start 작성) 기본으로 **재사용**한다. 실제 diff와 대조해 빠진 부분만 보강하고, `미정`으로 남은 환경은 3단계에서 채운다.
 - **없으면**: 베이스 대비 변경 파일 확인(`git diff --name-only origin/{base}...{branch}`) → 사용자에게 보이는 페이지/기능으로 매핑 → 시나리오(S1, S2…)를 도출해 `test-plan.md`에 저장(self-contained: 대상 URL·사전조건·조작·기대·검증 방법·테스트 데이터+재현 SQL). 재실행 시 최신 분석으로 덮어쓴다.
 
+### ⛔ 2-1. 광고·데이터 수집 — 기계가 가린 뒤 시나리오를 **반드시** 넣는다
+
+```bash
+dobby_track_scan {키} {환경}
+```
+
+**왜 따로 보나**: 광고와 수집은 **화면에 안 보이게 깨진다.** 배너가 사라지면 눈에 띄지만, `ad.section.view` 가 안 나가거나 `trackingCustomTag` 의 `label` 이 바뀌는 것은 화면이 멀쩡하다. 위 2단계는 "사용자에게 보이는 페이지/기능으로 매핑"해 시나리오를 뽑으므로 **안 보이는 것은 구조적으로 안 잡힌다.**
+
+실측(메타 전수): 분석·구현 문서에 추적·광고 코드가 등장한 오더 **29건 중 검증에서 실제로 확인한 것은 4건**(14%)이다. 나머지 25건은 확인 없이 나갔다. **사람 판단에 맡기면 빠지므로 탐지를 기계로 내렸다.**
+
+헬퍼가 세 갈래로 가른다.
+
+| | 무엇을 보나 |
+|---|---|
+| **A. 직접** | 그 파일이 수집·광고 코드다 — `packages/core/src/metrics/`·`packages/event-tracker/`·`static/libraries/react-ad-boundary/`·`static/packages/banner/`·`web/WEB-INF/jsp/winclude/tracking*.jsp` 등 |
+| **B. 연관** | 바뀐 줄에 `trackingEvent`·`trackingCustomTag`·`trackingBraze`·`@wadiz/metrics`·`@wadiz/event-tracker`·`dataLayer`·`AdBoundary`·`_refer_section_st`·`gaEvt`·`appboy` 가 있다 |
+| **C. 화면 경유** | 탐지하지 않는다 — 레이아웃 변경으로 배너가 사라지는 것은 diff 에 안 드러난다. **6-1 의 상시 그물**이 받는다 |
+
+⛔ **`지워짐` 으로 표시된 줄을 그냥 넘기지 않는다.** 추적 호출을 **지운 것**이 가장 조용한 사고다 — 화면은 완벽히 멀쩡하고 데이터만 사라진다. 의도한 것인지 `analysis.md`·`design.md` 로 확인하고, 의도가 아니면 **테스트가 아니라 코드 문제**로 보고한다.
+
+⛔ **`⚠ 확인 불가` 가 뜨면 "없음" 이 아니다.** 워크트리가 지워졌거나 PR 을 못 찾아 **변경을 읽지 못한** 것이다. `gh pr diff {번호} | grep -nE 'tracking|dataLayer|AdBoundary'` 로 직접 본다.
+
+**접촉이 있으면 시나리오를 넣는다.** `확인 항목` 칸에 `[수집]`·`[광고]` 를 적어 표시한다. 7단계에서 `dobby_testrun_lint` 가 **없으면 회차 마감을 거부한다.**
+
+```markdown
+| S7 | C1 | /web/social/setting | [수집] 토글 저장 시 GA 이벤트 | ga.custom.tag · category=친구관리 · label=알림토글 | … | | … |
+| S8 | —  | /                    | [광고] 메인 팝업 배너 노출·클릭 | ad.section.view 1건 + 링크에 _refer_section_st | … | | … |
+```
+
+확인할 수 없는 사정이면 **시나리오를 넣고 판정을 `SKIP(…)`** 으로, 사유를 함께 적는다. ⛔ 빼지 않는다.
+
 ### 3. 테스트 환경 결정
 - 브랜치가 **머지된 환경**에서 테스트한다. `gh pr list --head {branch} --state all --json number,baseRefName,mergedAt,state`로 머지 대상(base)을 확인해 env를 판단.
 - env를 **`ORCHESTRATION_ENV_MAP`**으로 접속 호스트에 대응(기본: dev=dev.wadiz.io, rc=rc.wadiz.kr, rc2=rc2.wadiz.kr, rc4=rc4.wadiz.io). **매핑에 없으면 추측하지 말고** 사용자에게 직접 테스트를 부탁한다.
@@ -67,6 +98,61 @@ description: 구현한 내용이 실제 환경에서 정상 동작하는지 chro
 |---|---|---|---|---|---|---|---|
 | S1 | C1 |  |  |  |  |  |  |
 ```
+
+### 6-1. 광고·수집은 이렇게 본다 — dataLayer 를 직접 읽는다
+
+**모든 수집이 한 곳으로 모인다.** `trackingCustomTag`·`trackingEvent`·`adTracking` 전부
+`window.dataLayer.push({event, …})` 로 끝난다(`packages/core/src/metrics/trackingEvent.ts`).
+그러니 **dataLayer 를 읽으면 관측이 끝난다.**
+
+검증 환경에서 실제로 쌓인다 — `tracking-gtm-head.jsp` 가 `environment` 가 `dev`·`rc*` 면 GTM 을
+로드한다(제외는 `local` 뿐). rc4 에서 그대로 관측된다.
+
+**조작 전에 표시하고, 조작 뒤 그 사이에 쌓인 것만 본다.**
+
+```js
+// ① 조작 직전
+window.__dobbyMark = (window.dataLayer || []).length;
+
+// ② 조작 뒤 — 이 조작이 낳은 이벤트만
+(window.dataLayer || []).slice(window.__dobbyMark)
+  .map(e => ({ event: e.event, cat: e.GACategory, act: e.GAAction, label: e.GALabel }))
+```
+
+```
+✓ 근거: dataLayer +1 → {event:"ga.custom.tag", cat:"친구관리", act:"클릭", label:"알림토글"}
+✗ 근거: GA 이벤트 정상 확인          ← 무엇을 봤는지가 없다
+```
+
+### ⛔ 광고 배너는 **스크롤해야** 노출 이벤트가 뜬다
+
+`AdBoundary` 의 `IntersectionObserver` 가 `threshold: 0.75` 다. 배너가 **75% 보일 때까지
+스크롤**해야 `ad.section.view` 가 발생한다. 안 스크롤하고 "이벤트 없음" 이라 적으면 오판이다.
+
+링크에 `_refer_section_st=` 가 있는지도 함께 본다 — **없으면 추적 자체가 안 걸리고** 그냥 이동만
+한다(`adTracking` 의 조기 반환). 배너는 멀쩡히 눌리는데 집계만 0이 되는 경로다.
+
+```
+✓ 근거: 배너까지 스크롤 후 dataLayer +1 → {event:"ad.section.view", "ad.sectionSt":"MAIN_1"}
+       링크 href 에 _refer_section_st=MAIN_1 있음
+```
+
+**Braze** 는 초기화 여부와 콘솔 에러만 본다(`window.appboy` 존재 · `window.__brazeDiag`).
+호출을 가로채기 어렵고, 대부분 `trackingCustomTag` 와 같이 불려 dataLayer 로 잡힌다.
+
+### 6-2. 상시 그물 — 모든 회차에서 본다 (탐지와 무관)
+
+브라우저는 어차피 떠 있으므로 거의 공짜다. 방문한 페이지마다 **깨짐 신호만** 훑는다.
+2-1 의 C(레이아웃 변경으로 배너가 사라지는 것처럼 diff 에 안 드러나는 것)를 여기서 받는다.
+
+| 보는 것 | 깨졌다는 뜻 |
+|---|---|
+| `(window.dataLayer \|\| []).length` 가 0 | 수집이 통째로 죽었다 |
+| 콘솔에 `appboy`·`gtm`·`dataLayer` 가 든 에러 | SDK 초기화 실패 |
+| 배너·광고 요청이 4xx·5xx | 배너가 안 뜬다 |
+
+하나라도 걸리면 **다른 시나리오의 판정과 무관하게** result.md 본문에 적는다. 시나리오를 통과시키고
+조용히 넘어가지 않는다.
 
 ### ⛔ 근거 칸에 파일 이름을 적지 않는다
 
@@ -203,11 +289,14 @@ description: 구현한 내용이 실제 환경에서 정상 동작하는지 chro
 테스트로 연 페이지를 그대로 두면 회차를 거듭할수록 탭이 쌓인다. **결과를 저장한 뒤** 정리하고, 마지막 한 장에 완료 요약을 띄운다.
 
 1. **요약 화면을 파일로 쓴다**: `{결과폴더}/summary.html` (Write 도구). `{결과폴더}`는 6-0에서 `dobby_testrun_new` 가 돌려준 그 폴더다.
-2. **회차를 검사한다**: **→ 헬퍼 `dobby_testrun_lint {결과폴더}`** — 네 가지를 본다.
-   ① 근거 칸에 파일 이름만 적힌 행 ② 조건 칸이 비었거나 형식이 틀린 행
-   ③ 판정 칸 어휘(`PASS`·`FAIL`·`SKIP(환경·위험·미비)`) ④ **선언한 조건 중 확인한 시나리오가 없는 것**
-   ④는 앞선 회차까지 합쳐 본다 — 한 회차로 다 못 덮어도 된다. 거부되면 고쳐서 다시 부른다.
+2. **회차를 검사한다**: **→ 헬퍼 `dobby_testrun_lint {결과폴더}`** — 다섯 가지를 본다.
+   ① 근거 칸에 파일 이름만 적힌 행 ② **`track-scan` 이 보고한 `[수집]`·`[광고]` 시나리오 누락**
+   ③ 조건 칸이 비었거나 형식이 틀린 행
+   ④ 판정 칸 어휘(`PASS`·`FAIL`·`SKIP(환경·위험·미비)`) ⑤ **선언한 조건 중 확인한 시나리오가 없는 것**
+   ⑤는 앞선 회차까지 합쳐 본다 — 한 회차로 다 못 덮어도 된다. 거부되면 고쳐서 다시 부른다.
    근거 칸에 파일 이름만 적힌 행이 있으면 **거부한다.** 관측한 사실로 고쳐 쓰고 다시 부른다.
+   ②는 **이 회차만** 본다(앞 회차로 때우지 않는다) — 이번에 나간 코드의 수집을 이번에 봐야 한다.
+   확인할 수 없는 사정이면 시나리오를 넣고 `SKIP(…)` 으로, 사유를 함께 적는다. ⛔ 빼지 않는다.
 3. **안 쓰는 그림을 지운다**: **→ 헬퍼 `dobby_testrun_prune {결과폴더}`**
    테스트 중 화면을 확인하려고 찍은 그림이 결과 폴더에 그대로 남는다. **`result.md`·`summary.html` 이 이름으로 가리키지 않는 것만** 지우므로 근거는 하나도 잃지 않는다. 그래서 **요약을 먼저 쓰고 나서** 부른다 — 순서를 바꾸면 요약이 쓸 그림까지 지운다.
 4. `list_pages`로 현재 목록을 받는다.

@@ -2881,6 +2881,222 @@ _ship_cell_run() {
   ' "$f"
 }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 광고·데이터 수집 접촉 탐지 — dobby_track_scan
+#
+# 왜 기계가 판정하나: 광고와 수집은 **화면에 안 보이게 깨진다.** 배너가 사라지면 눈에
+# 띄지만, ad.section.view 가 안 나가거나 trackingCustomTag 의 label 이 바뀌는 것은 화면이
+# 멀쩡하다. dobby-test 2단계는 "사용자에게 보이는 페이지/기능으로 매핑"해 시나리오를 뽑으므로
+# 안 보이는 것은 구조적으로 안 잡힌다.
+#
+# 실측(오케스트레이션 메타 전수): 분석·구현 문서에 추적·광고 코드가 등장한 오더 29건 중
+# 검증 회차에서 실제로 확인한 것은 **4건**이다(FE1-1312·1912·1953·2075). 25건(86%)이
+# 확인 없이 나갔다. 사람 판단에 맡기면 빠지므로 탐지를 기계로 내린다.
+#
+# 이 함수는 **보고이지 게이트가 아니다** — 언제나 0을 반환한다. 막는 일은
+# dobby_testrun_lint 가 한다(탐지됐는데 전용 시나리오가 없으면 회차 마감 거부).
+# ─────────────────────────────────────────────────────────────────────────────
+
+# 변경된 줄에 하나라도 있으면 "닿았다" 로 보는 심볼.
+# ⛔ 지워진 줄(-)에도 적용한다 — 추적 호출을 **지운 것**이 가장 조용한 사고다.
+#    화면은 완벽히 멀쩡하고 데이터만 사라진다.
+DOBBY_TRACK_SYMBOLS='trackingEvent|trackingCustomTag|trackingBraze|@wadiz/metrics|@wadiz/event-tracker|useTrackingEventRef|EventTracker|dataLayer|gaEvt|appboy'
+DOBBY_AD_SYMBOLS='AdBoundary|_refer_section_st|adTracking|parseAdSection'
+
+# 그 파일 자체가 광고·수집 코드인 경로(정규식). 저장소 두 곳을 함께 본다.
+DOBBY_TRACK_PATHS='^packages/core/src/metrics/|^packages/event-tracker/|^static/packages/shared/utils/tracking\.js|^static/packages/react-common/src/utils/gaData\.js|^web/WEB-INF/jsp/winclude/tracking'
+DOBBY_AD_PATHS='^static/libraries/react-ad-boundary/|^static/packages/banner/|^static/packages/react-banner-components/|^web/WEB-INF/jsp/linkprice/'
+
+# dobby_track_scan KEY [베이스] — 오더의 변경이 광고·수집에 닿는지 판정해 보고한다.
+#
+# 오더의 '## 워크트리 / 브랜치' 표에 적힌 워크트리를 모두 훑는다. 베이스를 주지 않으면
+# 워크트리마다 origin/{그 저장소의 기본 비교 대상}… 을 모르므로, 베이스는 호출부가 준다
+# (dobby-ship 은 그 환경의 브랜치, dobby-test 는 배포된 환경의 브랜치).
+#
+# 결과를 $ORCHESTRATION_META/{키}/track-scan.md 에 남기고 요약을 stdout 으로 낸다.
+# dobby_testrun_lint 가 이 파일을 읽어 전용 시나리오 유무를 따진다.
+dobby_track_scan() {
+  # ⛔ local 을 반복문 안에서 다시 선언하지 않는다 — zsh 는 이미 있는 이름을 다시 local 하면
+  #    `d=''` 처럼 **값을 출력한다**(실측: 그 줄이 보고 출력에 섞여 나왔다).
+  local key="$1" base="${2:-}" f out wt br rp rel cmp d pr owner envbr body n unseen=""
+  [ -n "$key" ] || { _die "쓰임: dobby_track_scan KEY [베이스브랜치]"; return 1; }
+  f="$(_order_dir "$key")/track-scan.md"
+  [ -d "$(_order_dir "$key")" ] || { _die "오더 폴더가 없다: $key"; return 1; }
+
+  out="$(mktemp -t dobbytrack)" || return 1
+  : > "$out"
+
+  # '## 워크트리 / 브랜치' 표: | repo | 브랜치 | 경로 |
+  while IFS='|' read -r rp br wt; do
+    rp="$(printf '%s' "$rp" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+    br="$(printf '%s' "$br" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+    wt="$(printf '%s' "$wt" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g; s/`//g')"
+    wt="${wt/#\~/$HOME}"
+    [ -n "$wt" ] && [ -d "$wt" ] || { unseen="$unseen $rp(워크트리 없음)"; continue; }
+
+    # ── 변경을 어디서 얻나 — 세 단계로 내려간다 ────────────────────────────
+    # ⛔ **머지된 뒤에는 3점 diff 가 비어 버린다.** `origin/rc4...HEAD` 는 공통 조상부터
+    #    HEAD 까지인데, 브랜치가 rc4 에 머지됐으면 공통 조상이 HEAD 자신이라 공집합이다.
+    #    dobby-test 는 **머지·배포 뒤에** 도는 것이 정상이므로 이게 기본 상황이다.
+    #    실측 FE1-2075: 워크트리는 살아 있는데 diff 가 0줄이라 "접촉 없음" 으로 나왔다 —
+    #    그 오더는 실제로 수집을 확인했던 4건 중 하나다. 조용한 거짓 음성이다.
+    d=""
+    cmp=""
+    if [ -n "$base" ]; then
+      cmp="origin/$(_ship_branch "$rp" "$base")"
+      git -C "$wt" rev-parse --verify -q "$cmp" >/dev/null 2>&1 || cmp=""
+    fi
+    [ -n "$cmp" ] || { git -C "$wt" rev-parse --verify -q "origin/$ORCHESTRATION_DEFAULT_BASE" >/dev/null 2>&1 \
+      && cmp="origin/$ORCHESTRATION_DEFAULT_BASE"; }
+
+    # ① 아직 머지 전이면 3점 diff 가 이 브랜치의 변경을 그대로 준다. 미커밋도 함께 본다.
+    [ -n "$cmp" ] && d="$( { git -C "$wt" diff -U0 "$cmp"...HEAD; git -C "$wt" diff -U0; git -C "$wt" diff -U0 --cached; } 2>/dev/null )"
+
+    # ② 비었으면 PR 의 diff 를 받는다 — 머지된 뒤에도 남아 있는 유일한 정본이다.
+    #
+    # ⛔ **베이스로 걸러야 한다.** 한 브랜치가 여러 PR 의 head 일 수 있고, 그중에는 릴리스
+    #    브랜치로 간 것도 있다. 베이스가 먼 브랜치면 diff 에 남의 변경이 몇 달치 섞여 들어와
+    #    온 저장소가 "광고·수집 접촉" 으로 보고된다(실측 FE1-2075: `--head` 만으로 찾으면
+    #    hotfix/v20261002 로 간 #29642 가 잡혀 event-tracker 전체가 걸렸다. 이 오더의
+    #    rc4 PR 은 충돌 해결 브랜치로 올라간 #29639 이다).
+    # 그래서 **충돌 해결 브랜치 + 그 환경 베이스**를 먼저 찾는다(dobby-ship 의 정상 경로다).
+    if [ -z "$d" ] && [ -n "$br" ]; then
+      owner="$(_ship_owner "$rp")"
+      envbr="$(_ship_branch "$rp" "$base")"
+      pr=""
+      if [ -n "$envbr" ]; then
+        pr="$(gh pr list --repo "$owner" --head "${br}_into_${envbr}" --base "$envbr" --state all \
+          --json number -q '.[0].number' 2>/dev/null)"
+        [ -n "$pr" ] || pr="$(gh pr list --repo "$owner" --head "$br" --base "$envbr" --state all \
+          --json number -q '.[0].number' 2>/dev/null)"
+      fi
+      # 베이스를 모를 때만 아무 PR 이나 받는다 — 그때는 섞여 들어올 수 있음을 감수한다.
+      [ -n "$pr" ] || pr="$(gh pr list --repo "$owner" --head "$br" --state all \
+        --json number -q '.[0].number' 2>/dev/null)"
+      [ -n "$pr" ] && d="$(gh pr diff "$pr" --repo "$owner" 2>/dev/null)"
+    fi
+
+    # ③ 그래도 비었으면 dobby-end 가 남긴 코드 변경 스냅샷을 본다.
+    if [ -z "$d" ]; then
+      d="$(cat "$(_order_dir "$key")"/code-changes/*"$(basename "$wt")"*.diff 2>/dev/null)"
+      [ -n "$d" ] || d="$(cat "$(_order_dir "$key")"/code-changes/*.diff 2>/dev/null)"
+    fi
+
+    # ⛔ 못 봤으면 "접촉 없음" 이 아니라 **확인 불가**다. 못 본 것을 없는 것으로 적지 않는다.
+    [ -n "$d" ] || { unseen="$unseen $rp"; continue; }
+
+    # ── A. 경로로 바로 걸리는 것 ────────────────────────────────────────
+    while IFS= read -r rel; do
+      [ -n "$rel" ] || continue
+      printf '%s' "$rel" | grep -qE "$DOBBY_TRACK_PATHS" && printf '| [수집] | %s | %s | 수집 코드 자체 |\n' "$rp" "$rel" >> "$out"
+      printf '%s' "$rel" | grep -qE "$DOBBY_AD_PATHS"    && printf '| [광고] | %s | %s | 광고 코드 자체 |\n' "$rp" "$rel" >> "$out"
+    done <<EOF
+$(printf '%s' "$d" | sed -nE 's#^\+\+\+ b/(.+)$#\1#p' | sort -u)
+EOF
+
+    # ── B. 바뀐 줄의 심볼로 걸리는 것(연관) ─────────────────────────────
+    #    awk 로 파일을 따라가며 +/- 줄만 본다. 같은 파일·같은 갈래는 한 번만 적는다.
+    # LC_ALL=C — diff 안에 깨진 바이트가 있으면 awk 가 towc 변환 실패 경고를 쏟는다.
+    # 바이트로만 다루면 그 일이 없고, shorten() 이 잘린 조각을 떼므로 출력은 멀쩡하다.
+    printf '%s' "$d" | LC_ALL=C awk -v rp="$rp" -v ts="$DOBBY_TRACK_SYMBOLS" -v as="$DOBBY_AD_SYMBOLS" \
+      -v strong='trackingEvent|trackingCustomTag|trackingBraze|@wadiz/event-tracker|useTrackingEventRef|EventTracker|dataLayer|gaEvt|appboy' '
+      /^\+\+\+ b\// { file = substr($0, 7); delete donet[file]; delete donea[file]; next }
+      /^[+-][^+-]/ {
+        line = substr($0, 2); sign = substr($0, 1, 1)
+        if (file == "") next
+        # ⛔ 거짓 양성을 걸러낸다. 게이트는 믿을 수 있어야 쓰인다 —
+        #    못 믿을 신호가 섞이면 사람이 통째로 무시하게 된다.
+        #  · `import type { CustomTag } from '@wadiz/metrics'` — 타입은 런타임이 없다
+        #  · captureError·getLastEventId·errorReportDialog — Sentry 오류 보고지 광고·수집이 아니다
+        if (line ~ /import[ \t]+type[ \t]/) next
+        if (line ~ /captureError|getLastEventId|errorReportDialog/ && line !~ strong) next
+        if (line ~ ts && !(file in donet)) { donet[file] = 1
+          printf "| [수집] | %s | %s | %s %s |\n", rp, file, (sign == "-" ? "⛔ 지워짐 —" : "호출"), shorten(line) }
+        if (line ~ as && !(file in donea)) { donea[file] = 1
+          printf "| [광고] | %s | %s | %s %s |\n", rp, file, (sign == "-" ? "⛔ 지워짐 —" : "호출"), shorten(line) }
+      }
+      # ⛔ 맥 awk 는 substr 이 **바이트** 단위라 한글을 반 토막 낸다. 깨진 바이트가 섞이면
+      #    아래 표시용 awk 가 towc 변환 실패로 죽는다(실측 FE1-2075). 잘린 조각을 떼어 낸다.
+      function shorten(s,  t) { gsub(/^[ \t]+|[ \t]+$/, "", s); gsub(/\|/, "/", s)
+        if (length(s) <= 80) return s
+        t = substr(s, 1, 77); sub(/[\300-\377][\200-\277]*$/, "", t); return t "…" }
+    ' >> "$out"
+  done <<EOF
+$(awk '/^## /{ins=(index($0,"워크트리")>0)?1:0; next}
+       ins==1 && /^[ \t]*\|/{ n=split($0,a,"|")
+         if (n>=5) { r=a[2]; b=a[3]; p=a[4]
+           if (r !~ /repo|^[ \t:-]*$/ && p !~ /^[ \t:-]*$/) printf "%s|%s|%s\n", r, b, p } }' \
+     "$(_order_dir "$key")/status.md" 2>/dev/null)
+EOF
+
+  # 같은 (갈래, 저장소, 파일) 은 한 줄만 남긴다 — A(경로)와 B(심볼)가 같은 파일을 둘 다 잡는다.
+  # 남길 때는 **더 알려 주는 쪽**을 고른다: `지워짐` > 심볼 호출 > "코드 자체".
+  # ⛔ 파이프 전체를 LC_ALL=C 로 묶는다. 로케일이 UTF-8 이면 sort·cut 이 한글이 섞인 줄에서
+  #    `Illegal byte sequence` 로 죽고, 그러면 body 가 통째로 비어 **"탐지 없음" 으로 뒤집힌다**
+  #    (실측 FE1-2075: sort 가 죽어 접촉 있는 오더가 없음으로 보고됐다). 거짓 음성이 가장 나쁘다.
+  body="$( export LC_ALL=C
+    awk -F'|' '{ r = ($0 ~ /지워짐/) ? 0 : (($0 ~ /코드 자체/) ? 2 : 1); print r "\t" $0 }' "$out" 2>/dev/null \
+    | sort -t'	' -k1,1n | cut -f2- \
+    | awk -F'|' '{ k = $2 "|" $3 "|" $4 } !seen[k]++' \
+    | sort -t'|' -k2,2 -k3,3 -k4,4 )"
+  rm -f "$out"
+
+  {
+    printf '# %s — 광고·데이터 수집 접촉\n\n' "$key"
+    printf -- '- **갱신**: %s\n' "$(date '+%Y-%m-%d %H:%M')"
+    printf -- '- **비교 대상**: %s\n' "${base:-기본 베이스}"
+    [ -n "$unseen" ] && printf -- '- **변경을 보지 못한 저장소**:%s\n' "$unseen"
+    printf '\n'
+    if [ -n "$unseen" ]; then
+      printf '## ⚠ 확인 불가 —%s\n\n' "$unseen"
+      printf '이 저장소의 변경을 **읽지 못했다.** 워크트리가 지워졌거나, 머지된 뒤라 3점 diff 가\n'
+      printf '비었는데 PR·코드 스냅샷도 찾지 못한 경우다. **"접촉 없음"이 아니다** — 못 본 것을\n'
+      printf '없는 것으로 읽지 마라. 아래 중 하나로 직접 확인한다.\n\n'
+      printf '```\ngh pr diff {PR번호} --repo {owner/repo} | grep -nE "%s|%s"\n```\n\n' \
+        "$DOBBY_TRACK_SYMBOLS" "$DOBBY_AD_SYMBOLS"
+    fi
+    if [ -z "$body" ]; then
+      printf '**탐지된 접촉 없음.** 전용 시나리오를 요구하지 않는다.\n\n'
+      printf '> 다만 **상시 그물**(dataLayer 가 비었나 · 추적 콘솔 에러 · 배너 요청 4xx/5xx)은\n'
+      printf '> 모든 회차에서 본다. 이 판정은 diff 로 보이는 것만 가린다 — 레이아웃 변경으로\n'
+      printf '> 배너가 사라지는 것처럼 diff 에 안 드러나는 것은 그물이 받는다.\n'
+    else
+      printf '**접촉 있음.** 아래 갈래마다 `[수집]`·`[광고]` 시나리오를 result.md 에 넣어야 한다.\n'
+      printf '넣지 않으면 `dobby_testrun_lint` 가 회차 마감을 거부한다.\n\n'
+      printf '| 갈래 | 저장소 | 파일 | 근거 |\n|---|---|---|---|\n'
+      printf '%s\n' "$body"
+      printf '\n⛔ `지워짐` 으로 표시된 줄은 **추적 호출이 사라진 것**이다. 의도한 것인지 반드시 확인한다 —\n'
+      printf '화면은 멀쩡하고 데이터만 빠지므로 테스트로도 잡히지 않는다.\n'
+    fi
+  } > "$f"
+
+  if [ -z "$body" ] && [ -n "$unseen" ]; then
+    # 하나도 못 봤는데 "탐지 없음" 이라고 하면 **없다는 말로 읽힌다.** 거짓 음성이 가장 나쁘다.
+    printf '%s — 광고·수집 접촉: ⚠ 확인 불가 (변경을 읽지 못했다)\n' "$key"
+  elif [ -z "$body" ]; then
+    printf '%s — 광고·수집 접촉: 탐지 없음\n' "$key"
+  else
+    n="$(printf '%s\n' "$body" | LC_ALL=C grep -c . )"
+    printf '%s — 광고·수집 접촉: 있음 (%s건)\n' "$key" "$n"
+    # 화면에는 12줄까지만. 전부는 track-scan.md 에 있다 — 쏟아지면 아무도 안 읽는다.
+    printf '%s\n' "$body" | head -12 | awk -F'|' '{ g=$2; p=$4; e=$5
+      gsub(/^[ \t]+|[ \t]+$/, "", g); gsub(/^[ \t]+|[ \t]+$/, "", p); gsub(/^[ \t]+|[ \t]+$/, "", e)
+      printf "  %-6s %s\n         %s\n", g, p, e }'
+    [ "$n" -gt 12 ] && printf '  … 외 %s건 (전부는 track-scan.md)\n' "$(( n - 12 ))"
+  fi
+  [ -n "$unseen" ] && printf '  ⚠ 확인 불가 —%s (못 본 것이지 없는 것이 아니다. 직접 확인하라)\n' "$unseen"
+  printf '→ %s\n' "$f"
+  return 0
+}
+
+# _track_scan_kinds KEY — track-scan.md 가 보고한 갈래들(`[수집]`·`[광고]`). 없으면 빈 값.
+_track_scan_kinds() {
+  local f
+  f="$(_order_dir "$1")/track-scan.md"
+  [ -f "$f" ] || return 0
+  grep -oE '\[(수집|광고)\]' "$f" 2>/dev/null | sort -u | tr '\n' ' '
+}
+
 # dobby_testrun_lint 결과폴더 — 근거 칸에 **파일 이름만** 적힌 행을 잡는다.
 #
 # 왜: 그림은 지금까지 한 번도 화면에 뜬 적이 없다(실측 회차 76개: result.md 가 이미지로
@@ -2915,6 +3131,37 @@ dobby_testrun_lint() {
     _die "근거 칸에 파일 이름만 적힌 행이 있다. 그림은 화면에 뜨지 않으므로 읽는 사람이 볼 수 없다:
 $bad
 관측한 사실을 적어라(응답 본문·이동 경로·번들 시각·화면 문구). 화면을 꼭 보여야 하면 본문에 \`![설명](파일.png)\` 으로 띄우고, 근거 칸에는 무엇을 보라는 것인지 글로 적어라."
+    return 1
+  fi
+
+  # ── 광고·수집: 탐지됐으면 전용 시나리오가 있어야 한다 ─────────────────────
+  # 실측: 추적·광고 코드가 등장한 오더 29건 중 검증에서 실제로 확인한 것은 4건(14%)뿐이다.
+  # 경고로는 안 된다 — 25건이 경고 없이도 그냥 지나갔듯, 경고가 있어도 지나간다.
+  # 확인할 수 없는 사정이면 **시나리오를 넣고 보류로 적으면** 빠져나갈 길이 있다.
+  local tkey tkinds k miss=""
+  tkey="$(basename "$(dirname "$(dirname "$dir")")")"
+  tkinds="$(_track_scan_kinds "$tkey")"
+  # ⛔ `for k in $tkinds` 를 쓰지 않는다 — zsh 는 따옴표 없는 확장을 공백으로 나누지 않아
+  #    `[광고] [수집]` 이 통째로 한 낱말이 되고, grep 이 영원히 안 맞아 **언제나 거부**한다
+  #    (실측: 시나리오를 제대로 넣었는데도 통과하지 못했다). 이 라이브러리가 _words 를 둔 이유다.
+  while IFS= read -r k; do
+    [ -n "$k" ] || continue
+    grep -qF "$k" "$f" || miss="$miss $k"
+  done <<EOF
+$(_words "$tkinds")
+EOF
+  if [ -n "$miss" ]; then
+    _die "광고·수집 접촉이 보고됐는데 result.md 에 해당 시나리오가 없다:$miss
+
+$(sed -n '/^| 갈래/,$p' "$(_order_dir "$tkey")/track-scan.md" 2>/dev/null | head -12)
+
+시나리오의 '확인 항목' 칸에 $miss 를 적어 넣어라. 광고·수집은 **화면에 안 보이게 깨지므로**
+다른 시나리오가 통과해도 이것은 따로 봐야 한다.
+  [수집] 조작 전 window.__dobbyMark=(window.dataLayer||[]).length 로 표시하고,
+         조작 뒤 (window.dataLayer||[]).slice(window.__dobbyMark) 를 근거로 적는다.
+  [광고] 배너가 **75% 보일 때까지 스크롤**한 뒤 ad.section.view 를 본다(threshold 0.75).
+         링크에 _refer_section_st= 가 있는지도 함께 본다 — 없으면 추적 자체가 안 걸린다.
+확인할 수 없는 사정이면 시나리오를 넣고 **판정을 보류**로, 사유를 함께 적어라(빼지 말 것)."
     return 1
   fi
 
