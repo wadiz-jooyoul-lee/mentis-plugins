@@ -1591,14 +1591,45 @@ dobby_set_kind() {
   fi
 }
 
-# dobby_set_session KEY [CWD] — status.md '## 세션'에 세션 ID·경로 기록(대시보드 '이어가기'의 근거).
-# 세션 ID는 손으로 적지 않는다 — cwd로 전사 파일명을 계산한다(스킬 여러 곳의 복붙을 이 함수로 대체).
-dobby_set_session() {
-  local key="$1" cwd="${2:-$(pwd)}" f enc sid
-  f="$(_order_dir "$key")/status.md"; [ -f "$f" ] || return 1
+# ─────────────────────────────────────────────────────────────────────────────
+# 세션 ID — ⛔ **추정하지 않는다.** Claude Code 가 내려 주는 값을 그대로 쓴다.
+#
+# 예전에는 cwd 의 프로젝트 폴더에서 `ls -t | head -1` 로 "가장 최근에 수정된 전사 = 내 세션"
+# 이라고 **가정**했다. `~/work/dobby-playground` 처럼 여러 오더가 공유하는 폴더에서는 이게
+# 틀린다 — 그 순간 남의 세션이 더 최근일 수 있고, 특히 **오래 떠 있는 세션**은 계속 기록되어
+# 자주 이긴다.
+#
+# 실측(오더 전수 검사): 10건이 남의 세션을 가리키고 있었다 —
+#   FE-8218 · FE1-1523 · FE1-1574 · FE1-1576 · FE1-1830 ·
+#   FE1-1912 · FE1-1969 · FE1-1983 · FE1-2134 · TASK-local-rc4-debug
+# FE1-2134 는 TASK-toss-research 의 세션(9/15~10/12 내내 살아 있던 것)을 가리켰다. 그 전사에
+# `FE1-2134` 는 0번, `toss` 는 353번 나온다. 대시보드 '이어가기'를 누르면 남의 세션이 열렸다.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# _session_id [CWD] — 지금 돌고 있는 세션의 ID.
+#   ① CLAUDE_CODE_SESSION_ID (정본) ② 없으면 옛 추정으로 떨어진다(구버전 CLI 대비)
+_session_id() {
+  if [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then printf '%s' "$CLAUDE_CODE_SESSION_ID"; return 0; fi
+  local cwd="${1:-$PWD}" enc
   enc="$(printf '%s' "$cwd" | sed 's#[/.]#-#g')"          # 인코딩cwd: '/'·'.' → '-'
-  sid="$(basename "$(ls -t "$HOME/.claude/projects/$enc"/*.jsonl 2>/dev/null | head -1)" .jsonl 2>/dev/null)"
-  [ -n "$sid" ] || { printf 'dobby-lib: 세션 전사 못 찾음(%s) — 세션 기록 건너뜀\n' "$enc" >&2; return 0; }
+  basename "$(ls -t "$HOME/.claude/projects/$enc"/*.jsonl 2>/dev/null | head -1)" .jsonl 2>/dev/null
+}
+
+# _session_transcript [세션ID] — 그 세션의 전사 파일 경로. 없으면 빈 값.
+# ⛔ cwd 로 폴더를 짐작하지 않고 **ID 로 찾는다** — 세션의 cwd 와 넘겨받은 cwd 가 다를 수 있다.
+_session_transcript() {
+  local sid="${1:-$(_session_id)}"
+  [ -n "$sid" ] || return 0
+  find "$HOME/.claude/projects" -maxdepth 2 -name "$sid.jsonl" 2>/dev/null | head -1
+}
+
+# dobby_set_session KEY [CWD] — status.md '## 세션'에 세션 ID·경로 기록(대시보드 '이어가기'의 근거).
+# 세션 ID는 손으로 적지 않는다 — _session_id 가 준 값을 그대로 쓴다.
+dobby_set_session() {
+  local key="$1" cwd="${2:-$(pwd)}" f sid
+  f="$(_order_dir "$key")/status.md"; [ -f "$f" ] || return 1
+  sid="$(_session_id "$cwd")"
+  [ -n "$sid" ] || { printf 'dobby-lib: 세션 ID 를 알 수 없다(CLAUDE_CODE_SESSION_ID 없음) — 세션 기록 건너뜀\n' >&2; return 0; }
   grep -q '^## 세션' "$f" && return 0                     # 이미 있으면 유지(비파괴)
   cat >> "$f" <<EOF
 
@@ -1606,6 +1637,48 @@ dobby_set_session() {
 - **세션 ID**: $sid
 - **작업 경로**: $cwd
 EOF
+}
+
+# dobby_session_lint [KEY] — 적힌 세션 ID 가 **그 오더의 세션이 맞는지** 검사한다.
+#
+# 판정 기준은 하나다: **그 전사에 오더 키가 한 번이라도 나오는가.** 나오지 않으면 남의 세션이다.
+# 중복(여러 오더가 같은 ID)만으로는 오류가 아니다 — 한 세션이 오더 둘을 실제로 처리하기도 한다.
+#
+# 키를 주면 그 오더만, 안 주면 전부 본다. 문제가 있으면 1을 반환한다.
+#   OK      전사에 키가 있다
+#   WRONG   전사는 있는데 키가 없다 — **남의 세션이다. 이어가기를 누르면 엉뚱한 세션이 열린다**
+#   MISSING 전사 파일이 없다 — 지워졌거나 ID 가 틀렸다
+#   NONE    세션 ID 가 안 적혀 있다(검사 대상 아님)
+dobby_session_lint() {
+  local only="${1:-}" root d k s sid tr bad=0
+  root="$(_meta)"
+  [ -d "$root" ] || { _die "메타 루트가 없다: $root"; return 1; }
+  for d in "$root"/*/; do
+    k="$(basename "$d")"
+    case "$k" in .*) continue ;; esac
+    [ -z "$only" ] || [ "$k" = "$only" ] || continue
+    s="$d/status.md"; [ -f "$s" ] || continue
+    sid="$(grep -oE '세션 ID[^0-9a-f]*[0-9a-f-]{36}' "$s" 2>/dev/null | grep -oE '[0-9a-f-]{36}' | head -1)"
+    [ -n "$sid" ] || continue
+    tr="$(_session_transcript "$sid")"
+    if [ -z "$tr" ]; then
+      printf 'MISSING  %-22s %s  (전사 파일 없음)\n' "$k" "$sid"; bad=$((bad + 1)); continue
+    fi
+    if LC_ALL=C grep -qm1 -- "$k" "$tr" 2>/dev/null; then
+      [ -n "$only" ] && printf 'OK       %-22s %s\n' "$k" "$sid"
+    else
+      printf 'WRONG    %-22s %s  (전사에 %s 가 한 번도 안 나온다 — 남의 세션)\n' "$k" "$sid" "$k"
+      bad=$((bad + 1))
+    fi
+  done
+  if [ "$bad" -gt 0 ]; then
+    printf '\n세션 기록이 틀린 오더 %s건. 대시보드 이어가기가 **남의 세션을 연다.**\n' "$bad" >&2
+    printf '올바른 세션은 이렇게 찾는다 — 키가 든 전사 중 dobby-order 를 부른 것이 오케스트레이터다:\n' >&2
+    printf '  grep -rl {키} ~/.claude/projects/*/*.jsonl | xargs ls -lat | head\n' >&2
+    printf '못 찾으면 ID 를 지운다 — **틀린 ID 보다 없는 편이 낫다.**\n' >&2
+    return 1
+  fi
+  [ -n "$only" ] || printf '세션 기록 이상 없음\n'
 }
 
 # dobby_bootstrap KEY TITLE KIND "kw1|kw2" [CWD] — 진입 즉시 1회. 폴더·골격·제목·종류·세션·docs 게이트를 한 번에.
@@ -1628,9 +1701,10 @@ dobby_bootstrap_inline() {
   dobby_bootstrap "$key" "$title" "$kind" "" "$cwd" || return 1
   dobby_ensure_board "$key"
   dobby_agent_add "$key" "$slug" "$name" "$desc" "$st"
-  local enc tr
-  enc="$(printf '%s' "$cwd" | sed 's#[/.]#-#g')"
-  tr="$(ls -t "$HOME/.claude/projects/$enc"/*.jsonl 2>/dev/null | head -1)"
+  # ⛔ 여기도 `ls -t` 로 추정하면 안 된다 — 대시보드 콘솔 탭이 **남의 세션**을 띄운다
+  #    (실측 FE1-2134: agent-logs 의 inline 이 TASK-toss-research 전사를 가리켰다).
+  local tr
+  tr="$(_session_transcript "$(_session_id "$cwd")")"
   if [ -n "$tr" ]; then dobby_log "$key" "$slug" "$tr"
   else printf 'dobby-lib: 메인 세션 전사 없음 — agent-logs 기록 생략(콘솔 탭이 비게 됨)\n' >&2; fi
 }
