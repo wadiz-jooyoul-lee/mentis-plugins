@@ -37,7 +37,8 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 | `dobby_docs_gate KEY "kw1\|kw2"` | **P1 최초(차단 게이트)** | docs 검색 결과를 `docs-refs.md`에 기록(+경로 stdout). **이 파일 없이 Explore/분석 진행 금지**. 히트 시 그 문서 먼저 읽기 |
 | `dobby_ensure_board KEY` | P0 | orchestration.md 상태표+이벤트로그 골격 |
 | `dobby_setup_worktree REPO KEY PREFIX BASE [루트키]` | P0 | fetch·워크트리·브랜치·origin push (경로 stdout, base 로컬/원격 자동 감지, 재호출 시 재사용) + **status.md `## 워크트리 / 브랜치` 표에 자동 기록**(경로 포함 — 대시보드 PR 링크·정리 감지용). **⛔ 루트의 `docs-refs.md` 없으면 새 워크트리 생성 거부(docs 게이트 B)** — 하위 에이전트는 5번째로 루트키 전달 |
-| `dobby_bootstrap KEY "제목" 종류 "kw1\|kw2" [CWD]` | **진입 즉시 1회** | 폴더·골격 status.md·제목·종류·세션·docs 게이트를 한 번에(내부: scaffold_meta+set_title+set_kind+set_session) |
+| `dobby_bootstrap KEY "제목" 종류 "kw1\|kw2" [CWD]` | **진입 즉시 1회** | 폴더·골격 status.md·제목·종류·세션·docs 게이트를 한 번에(내부: scaffold_meta+set_title+set_kind+set_session). 세션 ID 는 **`CLAUDE_CODE_SESSION_ID`** 를 그대로 쓴다 — 예전처럼 `ls -t` 로 "가장 최근 전사 = 내 세션" 이라 추정하지 않는다(공유 폴더에서 남의 세션을 집었다. 실측 10건) |
+| `dobby_session_lint [KEY]` | 세션 기록을 의심할 때 · 대시보드 이어가기가 이상할 때 | 적힌 세션 ID 가 **그 오더의 세션이 맞는지** 검사한다(판정 기준: 그 전사에 오더 키가 한 번이라도 나오는가). `WRONG` 이면 **남의 세션이라 이어가기가 엉뚱한 세션을 연다.** 틀린 것이 있으면 1 반환 |
 | `dobby_record_branch KEY REPO 브랜치 [경로]` | 워크트리 없이 브랜치만 채택 시(continue 등) | status.md `## 워크트리 / 브랜치` 표에 행 추가(중복 무시). setup_worktree가 자동 호출하므로 대개 직접 쓸 일 없음 |
 | `dobby_set_session KEY [CWD]` | 부트스트랩 미경유 흐름에서 | status.md `## 세션`에 세션 ID·작업 경로 기록(cwd 인코딩·최신 전사 탐색 포함 — 손 계산 금지). 대시보드 "이어가기" 근거 |
 | `dobby_set_kind KEY 종류` | (d) 종류 확인 진입 시 | status.md `- **종류**:` 기록/갱신(정본 개발·산출물·작업 정리로 자동 교정) |
