@@ -120,9 +120,12 @@ dobby_docs_search() {
 # $META/{key}/docs-refs.md에 결과를 기록하고, 히트 경로를 stdout으로 반환한다.
 # ⛔ 이 파일이 있어야 Explore/분석으로 넘어갈 수 있다. 히트가 있으면 오케스트레이터는 그 문서를 '먼저' 읽는다.
 # 루트 없음/히트 없음도 "확인함"으로 파일에 남겨(조용한 스킵 방지) 게이트를 통과시킨다.
+# 다시 부르면 검색 결과는 새로 쓰되, 워크트리를 만들 때 붙은 '## 워크트리 규약 — {repo}' 절은 그대로 옮겨 둔다.
+# 그 절은 워크트리를 새로 만들 때만 붙고(_docs_refs_worktree), 기존 워크트리를 다시 쓸 때는 다시 붙지 않기 때문이다.
 dobby_docs_gate() {
-  local key="$1" kw="$2" f root hits
+  local key="$1" kw="$2" f root hits keep=""
   f="$(_order_dir "$key")/docs-refs.md"; mkdir -p "$(dirname "$f")"
+  [ -f "$f" ] && keep="$(awk '/^## /{k=(index($0,"## 워크트리 규약 — ")==1)} k' "$f")"
   root="${ORCHESTRATION_DOCS_ROOT:-${ORCHESTRATION_REPOS_ROOT:-$HOME/work/repos}/docs}"
   {
     printf '# %s — 착수 docs 확인\n\n' "$key"
@@ -132,15 +135,17 @@ dobby_docs_gate() {
   if [ ! -d "$root" ]; then
     printf '## 결과\n- DOCS_ROOT 없음 — docs 없이 코드 분석 진행(설정 확인 권장)\n' >> "$f"
     printf 'dobby-lib: docs 루트 없음(%s) — docs 없이 진행\n' "$root" >&2
-    return 0
+  else
+    hits="$(dobby_docs_search "$kw")"
+    if [ -z "$hits" ]; then
+      printf '## 결과\n- 히트 없음 — 관련 문서 없음, 코드 분석 진행\n' >> "$f"
+    else
+      { printf '## 결과 (먼저 읽을 문서)\n'; printf '%s\n' "$hits" | sed 's/^/- /'; } >> "$f"
+    fi
   fi
-  hits="$(dobby_docs_search "$kw")"
-  if [ -z "$hits" ]; then
-    printf '## 결과\n- 히트 없음 — 관련 문서 없음, 코드 분석 진행\n' >> "$f"
-    return 0
-  fi
-  { printf '## 결과 (먼저 읽을 문서)\n'; printf '%s\n' "$hits" | sed 's/^/- /'; } >> "$f"
-  printf '%s\n' "$hits"
+  [ -n "$keep" ] && printf '\n%s\n' "$keep" >> "$f"
+  [ -n "$hits" ] && printf '%s\n' "$hits"
+  return 0
 }
 
 # ── 메타 스캐폴딩 ─────────────────────────────────────────────────────
@@ -657,6 +662,60 @@ dobby_setup_worktree() {
   git -C "$wt" push -u origin "$branch" >&2 2>/dev/null || true
   dobby_record_branch "$key" "$repo" "$branch" "$wt"
   _docs_refs_worktree "$gate_key" "$repo" "$wt"
+  printf '%s' "$wt"
+}
+
+# _wt_row FILE REPO — '## 워크트리 …' 표에서 그 저장소의 첫 행을 "브랜치<TAB>경로" 로 준다. 없으면 빈 값.
+# 브랜치 칸 뒤에 붙은 설명 괄호("feature/X (feature/Y 에서 분기)")는 떼고 준다.
+_wt_row() {
+  awk -v want="$2" '
+    function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);gsub(/`|\*/,"",x);return x}
+    /^## /{ins=(index($0,"워크트리")>0)?1:0; hdr=0; next}
+    ins==1 && /^\|/{
+      n=split($0,a,"|")
+      if(hdr==0){for(i=1;i<=n;i++){c=t(a[i]); if(c=="repo")cr=i; if(c=="브랜치")cb=i; if(c=="경로")cp=i}
+        if(cr&&cb&&cp)hdr=1; next}
+      if(t(a[cr])!=want)next
+      b=t(a[cb]); sub(/[ \t]*\(.*$/,"",b); p=t(a[cp])
+      if(b!="" && p!=""){print b "\t" p; exit}
+    }' "$1"
+}
+
+# dobby_ensure_worktree REPO KEY PREFIX BASE — 워크트리가 있으면 그대로 쓰고, 없으면 만든다. 경로를 stdout 으로 준다.
+# dobby-order-v2 용이다. dobby_setup_worktree 는 dobby-order·dobby-qa 가 쓰므로 고치지 않고, 그 앞에서 막힐 곳만 먼저 처리한다.
+#   ① 상태 문서에 이 저장소의 행이 이미 있으면 그 브랜치·경로를 쓴다(새 이름을 조립하지 않는다).
+#   ② 폴더가 지워졌고 브랜치가 남아 있으면 -b 없이 그 브랜치로 되살린다(로컬에 없으면 origin 에서 받아 온다).
+#      dobby_setup_worktree 는 이때 "a branch named … already exists" 로 실패한다.
+#   ③ git 에 등록되지 않은 폴더가 그 자리에 있으면 지우지 않고 멈춘다(사람이 둔 파일일 수 있다).
+#   ④ 새로 기록하는 브랜치는 워크트리의 실제 브랜치다.
+#   그 밖(행도 없고 브랜치도 없음)은 dobby_setup_worktree 로 새로 만든다 — docs 게이트·base·푸시가 그대로 적용된다.
+dobby_ensure_worktree() {
+  local repo="$1" key="$2" prefix="$3" base="$4"
+  local src="$ORCHESTRATION_REPOS_ROOT/$repo" sf rec="" wt branch
+  sf="$(_order_dir "$key")/status.md"
+  git -C "$src" rev-parse --git-dir >/dev/null 2>&1 || { _die "소스 repo 없음: $src"; return 1; }
+  git -C "$src" worktree prune 2>/dev/null
+  [ -f "$sf" ] && rec="$(_wt_row "$sf" "$repo")"
+  if [ -n "$rec" ]; then
+    branch="${rec%%$'\t'*}"; wt="${rec#*$'\t'}"; wt="${wt/#\~/$HOME}"
+  else
+    branch="$prefix/$key"; wt="$ORCHESTRATION_WORKSPACE/subtree/$repo-$key"
+  fi
+  if git -C "$src" worktree list --porcelain | grep -qx "worktree $wt"; then
+    branch="$(git -C "$wt" branch --show-current)"
+  elif [ -e "$wt" ]; then
+    _die "$wt 폴더가 있지만 git 워크트리로 등록되어 있지 않다 — 지우지 않고 멈춘다. 안을 확인한 뒤 옮기거나 지우세요"; return 1
+  elif git -C "$src" show-ref --verify --quiet "refs/heads/$branch" \
+       || git -C "$src" fetch origin "$branch:$branch" >/dev/null 2>&1; then
+    mkdir -p "$(dirname "$wt")"
+    git -C "$src" worktree add "$wt" "$branch" >&2 || { _die "worktree add 실패($branch)"; return 1; }
+    _docs_refs_worktree "$key" "$repo" "$wt"
+  elif [ -n "$rec" ]; then
+    _die "상태 문서의 브랜치 $branch 가 $src 에도 origin 에도 없다 — 브랜치 이름을 확인하세요"; return 1
+  else
+    dobby_setup_worktree "$repo" "$key" "$prefix" "$base"; return
+  fi
+  [ -n "$rec" ] || dobby_record_branch "$key" "$repo" "$branch" "$wt"
   printf '%s' "$wt"
 }
 
@@ -1637,6 +1696,175 @@ dobby_set_session() {
 - **세션 ID**: $sid
 - **작업 경로**: $cwd
 EOF
+}
+
+# dobby_session_log KEY SLUG SUBKEY STEP [CWD] — 세션을 단계마다 새로 여는 오더(dobby-order-v2)의 세션 기록.
+#   ① status.md '## 세션' 의 세션 ID·작업 경로를 **지금 세션으로 바꾼다**(대시보드 '이어가기'가 최신 세션을 연다).
+#      dobby_set_session 은 이미 있으면 두지만, 이 함수는 단계마다 갈아 끼운다.
+#   ② status.md '## 지난 세션' 표에 한 줄을 더한다(시각·단계·세션 아이디·작업 경로) — 나중에 claude --resume 으로 복기.
+#      표 머리는 '세션 아이디'로 쓴다. '세션 ID:' 꼴은 대시보드가 최신 세션으로 읽으므로 이 표에 쓰지 않는다.
+#   ③ agent-logs.json 의 {SLUG:{SUBKEY: 전사 경로}} 로 남겨 대시보드 콘솔에서 단계별 기록을 연다.
+#   같은 세션·같은 단계로 두 번 불러도 표에 한 줄만 남는다.
+#   '## 세션' 에 다른 세션이 적혀 있고 표에 아직 없으면, 덮어쓰기 전에 그 세션을 '이전 세션' 줄로 먼저 옮긴다
+#   (dobby-order 로 시작한 오더의 원래 세션을 잃지 않게). 시각 칸은 그 대화 기록 파일의 마지막 수정 시각이다.
+dobby_session_log() {
+  local key="$1" slug="$2" sub="$3" step="$4" cwd="${5:-$(pwd)}" f sid tr old oldcwd oldtr oldt
+  f="$(_order_dir "$key")/status.md"; [ -f "$f" ] || return 1
+  sid="$(_session_id "$cwd")"
+  [ -n "$sid" ] || { printf 'dobby-lib: 세션 ID 를 알 수 없다(CLAUDE_CODE_SESSION_ID 없음) — 세션 기록 건너뜀\n' >&2; return 0; }
+  old="$(_session_field "$f" '세션 ID')"; oldcwd="$(_session_field "$f" '작업 경로')"
+  if [ -n "$old" ] && [ "$old" != "$sid" ] && ! grep -qF "\`$old\`" "$f"; then
+    oldtr="$(_session_transcript "$old")"
+    [ -n "$oldtr" ] && oldt="$(stat -f '%Sm' -t '%Y-%m-%d %H:%M' "$oldtr" 2>/dev/null)"
+    _past_session_add "$f" "| ${oldt:-(기록 전)} | 이전 세션 | \`$old\` | $oldcwd |"
+  fi
+  if grep -q '^## 세션' "$f"; then
+    awk -v sid="$sid" -v cwd="$cwd" '
+      /^## /{ins=($0 ~ /^## 세션[[:space:]]*$/)?1:0}
+      ins==1 && /^- \*\*세션 ID\*\*:/{print "- **세션 ID**: " sid; next}
+      ins==1 && /^- \*\*작업 경로\*\*:/{print "- **작업 경로**: " cwd; next}
+      {print}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  else
+    dobby_set_session "$key" "$cwd"
+  fi
+  grep -q "| $step | \`$sid\` |" "$f" || _past_session_add "$f" "| $(_now) | $step | \`$sid\` | $cwd |"
+  tr="$(_session_transcript "$sid")"
+  [ -n "$tr" ] && dobby_log "$key" "$slug" "$tr" "$sub"
+  return 0
+}
+
+# _session_field FILE 이름 — status.md '## 세션' 절의 '- **이름**: 값' 의 값(백틱 제거). 없으면 빈 값.
+_session_field() {
+  awk -v k="$2" '
+    /^## /{ins=($0 ~ /^## 세션[[:space:]]*$/)?1:0; next}
+    ins==1 && index($0, "- **" k "**:")==1 {sub(/^[^:]*:[ \t]*/,""); gsub(/`/,""); gsub(/[ \t]+$/,""); print; exit}' "$1"
+}
+
+# _past_session_add FILE ROW — '## 지난 세션' 표 끝에 한 줄을 붙인다(표가 없으면 만든다).
+_past_session_add() {
+  local f="$1" row="$2"
+  grep -q '^## 지난 세션' "$f" || printf '\n## 지난 세션\n| 시각 | 단계 | 세션 아이디 | 작업 경로 |\n|---|---|---|---|\n' >> "$f"
+  awk -v row="$row" '
+    /^## 지난 세션/ {inb=1; print; next}
+    inb==1 && /^\|/ {print; next}
+    inb==1 {print row; inb=0; print; next}
+    {print}
+    END{ if(inb==1) print row }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+
+# ── dobby-order → dobby-order-v2 전환 (dobby-migrate-v2 스킬이 쓴다) ──────────────
+# _board_dev_slug OFILE — 상태표에서 이름이 "분석/개발자" 인 첫 행의 슬러그. 없으면 빈 값.
+_board_dev_slug() {
+  local s st r
+  [ -f "$1" ] || return 0
+  while IFS=$'\t' read -r s st r; do
+    [ "$(_board_role "$1" "$s")" = "분석/개발자" ] && { printf '%s' "$s"; return 0; }
+  done < <(_board_rows "$1")
+}
+
+# _review_last_round KEY — reviews/round-N 중 가장 큰 N. 없으면 0.
+_review_last_round() {
+  local d n=0 x; d="$(_order_dir "$1")/reviews"
+  for x in "$d"/round-*; do [ -d "$x" ] || continue; x="${x##*round-}"; [ "$x" -gt "$n" ] 2>/dev/null && n="$x"; done
+  printf '%s' "$n"
+}
+
+# dobby_migrate_v2_check KEY — dobby-order 로 진행하던 오더를 v2 로 옮길 수 있는지 보고, 옮긴 뒤 채울 것을 알려 준다.
+# 아무것도 고치지 않는다. "항목<TAB>값" 줄로 낸다. 0 = 옮길 수 있음, 1 = 옮길 수 없음('불가' 줄에 이유).
+#   필요 줄은 v2 의 뒷세션이 읽는데 지금 없는 것이다 — 전환 세션이 채운다.
+#   · 설계 보강: 분석 단계, 또는 구현이 안 끝난 구현 단계면 구현 세션이 design.md 의 작업 순서·건드리지 않을 것·검증 명령을 읽는다.
+#   · 리뷰 항목: 분석·구현·리뷰 단계면 앞으로 리뷰 세션이 design.md 의 '## 리뷰 항목' 을 읽는다.
+#   · 테스트 계획: 검증 세션은 test-plan.md 하나만 읽는다.
+dobby_migrate_v2_check() {
+  local key="$1" d f o ph dev rd blk n s st r active="" h miss=""
+  d="$(_order_dir "$key")"; f="$d/status.md"; o="$d/orchestration.md"
+  [ -f "$f" ] || { printf '불가\t메타가 없다(%s)\n' "$d"; return 1; }
+  ph="$(_order_phase "$key")"
+  printf '단계\t%s\n' "${ph:-빈 값}"
+  grep -q '^## 지난 세션' "$f" && { printf '불가\t이미 v2 오더다 — /dobby-order-v2 %s 로 이어간다\n' "$key"; return 1; }
+  case "$ph" in
+    착수) printf '불가\t착수 단계라 옮길 것이 없다 — /dobby-order-v2 %s 로 처음부터 시작한다\n' "$key"; return 1 ;;
+    분석|구현|리뷰|통합|검증) ;;
+    *) printf '불가\t%s 단계는 옮기지 않는다(끝났거나 보류 중이거나 모르는 값)\n' "${ph:-빈 값}"; return 1 ;;
+  esac
+  if [ ! -f "$d/design.md" ] && [ "$ph" != 분석 ]; then
+    printf '불가\t설계 문서 없이 %s 단계까지 왔다 — v2 의 뒷세션은 설계 문서를 기준으로 일하므로 dobby-order 로 마무리한다\n' "$ph"; return 1
+  fi
+  dev="$(_board_dev_slug "$o")"
+  printf '개발담당\t%s\n' "${dev:-없음(전환 때 v2-dev 행을 만든다)}"
+  if [ -f "$o" ]; then
+    while IFS=$'\t' read -r s st r; do
+      case "$st" in 분석|구현|리뷰) active="$active $s($st)" ;; esac
+    done < <(_board_rows "$o")
+  fi
+  printf '진행중행\t%s\n' "${active# }"
+  rd="$(_review_last_round "$key")"
+  if [ "$rd" -gt 0 ]; then
+    n="$(find "$d/reviews/round-$rd" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l | tr -d ' ')"
+    if [ "$n" -gt 0 ]; then blk="$(dobby_blocking "$key" "$rd" 2>/dev/null)"; else blk="결과 없음"; fi
+    printf '마지막리뷰\t%s차 · 파일 %s개 · 막는 지적 %s\n' "$rd" "$n" "$blk"
+    [ "$rd" -ge 3 ] && printf '주의\t리뷰가 이미 %s차다. v2 는 3차를 넘기면 수정 뒤 멈추고 사람에게 넘긴다\n' "$rd"
+  else
+    printf '마지막리뷰\t없음\n'
+  fi
+  [ "$ph" = 구현 ] && [ -n "$active" ] && printf '확인\t구현 단계인데 진행 중인 행이 있다 — 구현이 끝났는지 사람에게 묻는다\n'
+  if [ ! -f "$d/design.md" ]; then
+    printf '필요\t없음 — 설계 문서가 없어 다음 v2 세션이 분석 문서부터 다시 설계한다\n'
+  else
+    if [ "$ph" = 분석 ] || [ "$ph" = 구현 ]; then
+      for h in '작업 순서' '건드리지 않을 것' '검증 명령'; do grep -q "^## $h" "$d/design.md" || miss="$miss, $h"; done
+      [ -n "$miss" ] && printf '필요\t설계 보강 — design.md 에 %s 절%s\n' "${miss#, }" \
+        "$([ "$ph" = 구현 ] && printf ' (구현이 안 끝났을 때만 — 끝났으면 구현 세션이 다시 돌지 않는다)')"
+    fi
+    case "$ph" in 분석|구현|리뷰)
+      grep -q '^## 리뷰 항목' "$d/design.md" || printf '필요\t리뷰 항목 — design.md 끝에 ## 리뷰 항목 절\n' ;;
+    esac
+    [ -f "$d/test-plan.md" ] || printf '필요\t테스트 계획 — test-plan.md\n'
+  fi
+  return 0
+}
+
+# dobby_migrate_v2_apply KEY [구현미완료] — 전환의 기계적인 부분을 한다. 문서 "내용"은 쓰지 않는다(전환 세션의 몫).
+#   ① 상태 문서의 워크트리를 확인하고, 지워졌으면 남은 브랜치로 되살린다(dobby_ensure_worktree).
+#   ② 개발 담당 행이 없으면 v2-dev 행을 만든다.
+#   ③ dobby_session_log 로 '## 지난 세션' 표를 만든다 — v2 오더의 표지다. 원래 세션은 '이전 세션' 줄로 옮겨진다.
+#   ④ 진행 중(분석·구현·리뷰) 행을 대기로 돌린다 — 세션 사이 빈 시간에 보드가 정체로 경고하지 않게.
+#   ⑤ 단계를 v2 의 뜻에 맞춘다. dobby-order 의 '구현' 은 "구현 중", v2 의 '구현' 은 "구현 끝" 이다.
+#      · 구현미완료=1 이면 '분석' 으로 되돌린다 — 다음 v2 세션이 설계를 보여 주고 확정받은 뒤 구현 세션으로 간다.
+#      · 구현이 끝났고 마지막 리뷰 폴더에 결과가 있으면 다음 차수의 빈 폴더를 연다 — 옛 결과를 덮어쓰지 않게.
+#   첫 워크트리 경로를 stdout 으로 준다.
+dobby_migrate_v2_apply() {
+  local key="$1" unfinished="${2:-0}" d f o ph dev rd repo wt="" p s st r
+  dobby_migrate_v2_check "$key" >/dev/null || { _die "옮길 수 없는 오더다 — dobby_migrate_v2_check $key 로 이유를 확인"; return 1; }
+  d="$(_order_dir "$key")"; f="$d/status.md"; o="$d/orchestration.md"; ph="$(_order_phase "$key")"
+  for repo in $(awk '
+      function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);gsub(/`|\*/,"",x);return x}
+      /^## /{ins=(index($0,"워크트리")>0)?1:0; hdr=0; next}
+      ins==1 && /^\|/{ n=split($0,a,"|")
+        if(hdr==0){for(i=1;i<=n;i++){if(t(a[i])=="repo")cr=i}; if(cr)hdr=1; next}
+        v=t(a[cr]); if(v!="" && v !~ /^-+$/ && !(v in seen)){seen[v]=1; print v} }' "$f"); do
+    p="$(dobby_ensure_worktree "$repo" "$key" feature "${ORCHESTRATION_DEFAULT_BASE:-master}")" || return 1
+    [ -n "$wt" ] || wt="$p"
+  done
+  dev="$(_board_dev_slug "$o")"
+  [ -n "$dev" ] || { dev=v2-dev; dobby_agent_add "$key" "$dev" "분석/개발자" "v2 전환으로 만든 개발 담당 행" 대기; }
+  dobby_session_log "$key" "$dev" migrate "v2 전환" "${wt:-$PWD}"
+  if [ -f "$o" ]; then
+    while IFS=$'\t' read -r s st r; do
+      case "$st" in 분석|구현|리뷰) dobby_agent_state "$key" "$s" 대기 ;; esac
+    done < <(_board_rows "$o")
+  fi
+  if [ "$ph" = 구현 ]; then
+    if [ "$unfinished" = 1 ]; then
+      dobby_phase "$key" 분석
+    else
+      rd="$(_review_last_round "$key")"
+      [ "$rd" -gt 0 ] && [ -n "$(find "$d/reviews/round-$rd" -maxdepth 1 -name '*.md' 2>/dev/null)" ] \
+        && dobby_review_path "$key" $((rd + 1)) review-agent >/dev/null
+    fi
+  fi
+  dobby_event "$key" "dobby-order-v2 로 전환 — 전환 전 단계 $ph, 지금 단계 $(_order_phase "$key")"
+  printf '%s' "${wt:-$PWD}"
 }
 
 # dobby_session_lint [KEY] — 적힌 세션 ID 가 **그 오더의 세션이 맞는지** 검사한다.
