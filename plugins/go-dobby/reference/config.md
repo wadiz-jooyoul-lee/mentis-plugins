@@ -43,7 +43,7 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 | `dobby_set_session KEY [CWD]` | 부트스트랩 미경유 흐름에서 | status.md `## 세션`에 세션 ID·작업 경로 기록(cwd 인코딩·최신 전사 탐색 포함 — 손 계산 금지). 대시보드 "이어가기" 근거 |
 | `dobby_set_kind KEY 종류` | (d) 종류 확인 진입 시 | status.md `- **종류**:` 기록/갱신(정본 개발·산출물·작업 정리로 자동 교정) |
 | `dobby_agent_add KEY 슬러그 이름 설명 상태 [라운드]` | 스폰 전(선갱신) | 상태표 행 추가(중복 무시, 활성이면 착수=now) |
-| `dobby_agent_state KEY 슬러그 상태 [라운드]` | 전이마다 | 그 행 상태/갱신만 수정(비활성→활성 진입 시 착수 갱신) |
+| `dobby_agent_state KEY 슬러그 상태 [라운드] [설명]` | 전이마다 | 그 행 상태/갱신을 수정. 라운드·설명을 주면 그 칸도 바꾼다(비활성→활성 진입 시 착수 갱신) |
 | `dobby_add_condition KEY "조건 한 줄"` | **P1 닫히는 조건 선언 직후(필수)·P8 범위 확장** | status.md `## 닫히는 조건 항목` 표에 `C{n}` 행 추가(번호 자동, stdout). 테스트 시나리오가 이 번호를 달고 대시보드가 "조건 N개 중 M개 확인"을 센다 |
 | `dobby_set_title KEY "제목"` | **이슈 조회 직후(필수)** | status.md 제목을 실제 요약으로 갱신(골격 임시 제목 덮어씀). dobby-start 경유 여부와 무관 |
 | `dobby_append KEY 파일 "블록"` | append 문서마다 | decisions.md 등 append-only 문서에 읽기 없이 블록 추가(토큰 0) |

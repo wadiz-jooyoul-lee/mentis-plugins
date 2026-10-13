@@ -222,9 +222,9 @@ _board_role() {
     }' "$1" 2>/dev/null
 }
 
-# dobby_agent_state KEY SLUG STATE [ROUND] — 그 행 상태/갱신만 수정. 비활성→활성 진입 시 착수 갱신.
+# dobby_agent_state KEY SLUG STATE [ROUND] [DESC] — 그 행 상태/갱신(+라운드·설명을 주면 그 칸도) 수정. 비활성→활성 진입 시 착수 갱신.
 dobby_agent_state() {
-  local key="$1" slug="$2" st rd="${4:-}"
+  local key="$1" slug="$2" st rd="${4:-}" desc="${5:-}"
   st="$(dobby_norm_state "$3")"
   local f now; f="$(_order_dir "$key")/orchestration.md"; now="$(_now)"
 
@@ -256,15 +256,16 @@ dobby_agent_state() {
   fi
   # 헤더 인식형: `## 에이전트 상태표` 헤더에서 상태/라운드/착수/갱신 컬럼 위치를 찾아 그 칸만 수정한다.
   # (오더마다 상태표 스키마가 달라 컬럼 위치를 하드코딩하면 엉뚱한 칸을 덮어써 표가 깨진다.)
-  awk -F'|' -v OFS='|' -v slug="$slug" -v st="$st" -v rd="$rd" -v now="$now" '
+  awk -F'|' -v OFS='|' -v slug="$slug" -v st="$st" -v rd="$rd" -v now="$now" -v desc="$desc" '
     function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
-    BEGIN{ins=0;hdr=0;ci_slug=0;ci_st=0;ci_rd=0;ci_start=0;ci_up=0}
+    BEGIN{ins=0;hdr=0;ci_slug=0;ci_st=0;ci_rd=0;ci_start=0;ci_up=0;ci_desc=0}
     /^## / { ins=($0 ~ /에이전트 상태표/)?1:0; hdr=0; print; next }
     ins==1 && /^\|/ {
       if (hdr==0) {
         for(i=1;i<=NF;i++){c=t($i)
           if(c=="슬러그")ci_slug=i; else if(c=="상태")ci_st=i
-          else if(c=="라운드")ci_rd=i; else if(c=="착수")ci_start=i; else if(c=="갱신")ci_up=i}
+          else if(c=="라운드")ci_rd=i; else if(c=="착수")ci_start=i; else if(c=="갱신")ci_up=i
+          else if(c=="설명")ci_desc=i}
         if(ci_slug>0 && ci_st>0) hdr=1
         print; next
       }
@@ -276,6 +277,7 @@ dobby_agent_state() {
         if(ci_start>0 && active && (old=="대기"||old=="완료"||old==""||ost=="")) $(ci_start)=" " now " "
         $(ci_st)=" " st " "
         if(ci_rd>0 && rd!="") $(ci_rd)=" " rd " "
+        if(ci_desc>0 && desc!="") $(ci_desc)=" " desc " "
         if(ci_up>0) $(ci_up)=" " now " "
       }
       print; next
@@ -2496,6 +2498,15 @@ dobby_v2_autorun() {
   fi
   printf '자동 실행을 시작할 수 없습니다: %s\n' "$(printf '%s' "$res" | jq -r '.error // "응답 없음"' 2>/dev/null)"
   return 1
+}
+
+# dobby_fix_count KEY SLUG — 그 담당이 지금까지 한 수정 세션 수(리뷰 지적 수정 fix-N + 검증 실패 수정 fix-test-*).
+# agent-logs.json 의 그 슬러그 하위 키를 센다. 수정 세션은 dobby_session_log 를 먼저 부르므로 지금 세션도 들어간다.
+# v2 개발 담당의 라운드 칸(보드 카드 숫자)이 이 값이다 — 리뷰 차수가 아니라 실제로 고친 횟수를 보이기 위해서다.
+dobby_fix_count() {
+  local f; f="$(_order_dir "$1")/agent-logs.json"
+  [ -f "$f" ] || { printf '0'; return 0; }
+  jq -r --arg s "$2" '(.[$s] // {}) | if type == "object" then [keys[] | select(test("^fix-"))] | length else 0 end' "$f" 2>/dev/null || printf '0'
 }
 
 # ── v2 세션 이어 쓰기 판정 — run.sh 와 대화형 세션 마무리(dobby_v2_next_hint)가 같은 규칙을 쓴다 ──
