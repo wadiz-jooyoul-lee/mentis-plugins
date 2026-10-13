@@ -2498,6 +2498,100 @@ dobby_v2_autorun() {
   return 1
 }
 
+# ── v2 세션 이어 쓰기 판정 — run.sh 와 대화형 세션 마무리(dobby_v2_next_hint)가 같은 규칙을 쓴다 ──
+# 기본은 단계마다 새 세션. 다음 일이 '수정'이고, 직전 세션의 마지막 문맥이 DOBBY_REUSE_MAX_CTX 이하이며,
+# 마지막 호출 뒤 DOBBY_REUSE_MAX_GAP 초 안일 때만 이어 쓴다. 근거 수치는 skills/dobby-order-v2/session-reuse.md.
+DOBBY_REUSE_MAX_CTX=120000
+DOBBY_REUSE_MAX_GAP=300
+
+# _v2_test_passed KEY — 검증 이력 표의 마지막 행이 '완료'이고 실패가 0이면 0.
+_v2_test_passed() {
+  awk -F'|' '
+    function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
+    /^## /{ins=(index($0,"테스트 실행 이력")>0)?1:0; next}
+    ins && /^\|/ && $2 !~ /회차|---/ {st=t($4); split(t($5),c,"/")}
+    END{exit (st=="완료" && c[2]+0==0)?0:1}' "$(_order_dir "$1")/status.md"
+}
+
+# _v2_next_is_fix KEY — 다음 세션이 할 일이 '수정'인가(단계 판정 표의 수정 두 줄과 같은 조건).
+_v2_next_is_fix() {
+  local key="$1" d ph rd
+  d="$(_order_dir "$key")"; ph="$(_order_phase "$key")"
+  if [ "$ph" = 검증 ]; then ! _v2_test_passed "$key"; return; fi
+  [ "$ph" = 리뷰 ] || return 1
+  rd="$(find "$d/reviews" -maxdepth 1 -type d -name 'round-*' 2>/dev/null | sed 's/.*round-//' | sort -n | tail -1)"
+  [ -n "$rd" ] && ls "$d/reviews/round-$rd"/*.md >/dev/null 2>&1 \
+    && [ "$(dobby_blocking "$key" "$rd" 2>/dev/null)" -gt 0 ]
+}
+
+# _v2_last_call SID — 세션 기록의 마지막 호출 "문맥크기<TAB>경과초". 기록을 못 찾으면 빈 출력.
+_v2_last_call() {
+  local f
+  f="$(ls ~/.claude/projects/*/"$1".jsonl 2>/dev/null | head -1)"
+  [ -n "$f" ] || return 0
+  jq -rs '[.[] | select(.type == "assistant" and .message.usage != null)] | last // empty
+    | [(.message.usage | (.input_tokens // 0) + (.cache_creation_input_tokens // 0) + (.cache_read_input_tokens // 0)),
+       (now - (.timestamp | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) | floor)] | @tsv' "$f" 2>/dev/null
+}
+
+# dobby_v2_reuse_ok KEY SID — 이어 쓰는 쪽이 싸면 "문맥크기<TAB>경과초" 를 내고 0, 아니면 출력 없이 1.
+dobby_v2_reuse_ok() {
+  local key="$1" sid="$2" ctx gap
+  [ -n "$sid" ] && _v2_next_is_fix "$key" || return 1
+  IFS=$'\t' read -r ctx gap <<<"$(_v2_last_call "$sid")"
+  [ -n "${ctx:-}" ] && [ "$ctx" -le "$DOBBY_REUSE_MAX_CTX" ] && [ "$gap" -le "$DOBBY_REUSE_MAX_GAP" ] || return 1
+  printf '%s\t%s\n' "$ctx" "$gap"
+}
+
+# dobby_v2_next_hint KEY — 대화형 세션 마무리용. 이어 쓰는 쪽이 쌀 때만 '다음' 칸에 넣을 줄을 내고, 아니면 아무것도 내지 않는다.
+# 평소에 침묵하는 이유: 이 출력도 마지막 응답의 입력이 된다. 30번 중 1번꼴로만 이득이라 매번 출력하면 아끼는 양과 비슷하게 든다.
+# 헤드리스(-p) 세션에서는 run.sh 가 판정하므로 침묵한다. 기한은 지금+4분 — 대화형 캐시 5분에서 마지막 응답 시간을 뺐다.
+dobby_v2_next_hint() {
+  local key="$1" r ctx
+  [ "${CLAUDE_CODE_ENTRYPOINT:-}" = cli ] || return 0
+  r="$(dobby_v2_reuse_ok "$key" "$(_session_id)")" || return 0
+  ctx="${r%%$'\t'*}"
+  printf '  - 이번엔 이 세션을 이어 쓰는 쪽이 쌉니다(다음 일: 수정, 지금 문맥 %s 토큰).\n' "$ctx"
+  printf '  - %s 전이면 /clear 없이 바로: /dobby-order-v2 %s\n' "$(date -v+4M '+%H:%M' 2>/dev/null || date -d '+4 min' '+%H:%M')" "$key"
+  printf '  - 그 시각이 지났으면 /clear 후 같은 명령을 입력하세요.\n'
+}
+
+# dobby_v2_change_open KEY [check] — v2 오더에 들어온 변경 요청(수정 지시·새 버그·추가 설계)을 구현 차례로 되돌린다.
+#
+# 설계 문서에 변경 절을 적고 사람이 확정한 **뒤에** 부른다. 그다음 dobby_design_ack 를 부르면
+# 새 세션의 단계 판정이 "분석 + 승인 = 구현" 으로 읽어 그 변경만 구현한다.
+#   · 자동 실행이 돌고 있으면 거부(반환 1) — 그 실행이 같은 상태 문서를 고치고 있다. 대시보드에 닿지 못하면 확인 없이 진행한다.
+#   · 단계가 해결이면 해결 표시를 무른다(dobby_resolve undo 와 같은 일).
+#   · 다음 리뷰 차수의 빈 폴더를 연다. 이걸 안 하면 리뷰 세션이 지난 차수의 결과 파일에 덮어쓰고,
+#     지적 0건인 옛 결과 때문에 리뷰 없이 통합으로 넘어간다. 마지막 차수 폴더가 비어 있으면 그대로 쓴다.
+#   · 단계를 분석으로 바꾼다. stdout 으로 이번 변경의 리뷰 시작 차수를 낸다(설계 문서 변경 절에 적는다).
+#   · check 를 주면 자동 실행 확인만 하고 아무것도 바꾸지 않는다(변경 절을 쓰기 전에 부른다).
+dobby_v2_change_open() {
+  local key="$1" mode="${2:-}" url="${ORCHESTRATION_DASHBOARD_URL:-http://localhost:7253}" d f ph rd chk
+  [ -n "$key" ] || { _die "쓰임: dobby_v2_change_open KEY"; return 1; }
+  d="$(_order_dir "$key")"; f="$d/status.md"
+  [ -f "$f" ] || { _die "$key 의 상태 문서가 없습니다"; return 1; }
+  if chk="$(curl -fsS --max-time 5 "$url/api/orders?v2run=$key" 2>/dev/null)" \
+     && [ "$(printf '%s' "$chk" | jq -r '.running // false' 2>/dev/null)" = "true" ]; then
+    printf '%s 의 자동 실행이 돌고 있어 변경을 접수하지 않았습니다. 대시보드 오더 화면에서 실행이 끝나거나 멈춘 뒤 다시 해 주세요.\n' "$key" >&2
+    return 1
+  fi
+  [ "$mode" = check ] && return 0
+  ph="$(_order_phase "$key")"
+  if [ "$ph" = "해결" ]; then
+    awk '/^## 해결/{skip=1; next} /^## /{if(skip)skip=0} !skip{print}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+    dobby_event "$key" "해결 취소 — 변경 요청 접수" 2>/dev/null
+  fi
+  rd="$(find "$d/reviews" -maxdepth 1 -type d -name 'round-*' 2>/dev/null | sed 's/.*round-//' | sort -n | tail -1)"
+  if [ -z "$rd" ]; then rd=1
+  elif ls "$d/reviews/round-$rd"/*.md >/dev/null 2>&1; then rd=$((rd + 1))
+  fi
+  mkdir -p "$d/reviews/round-$rd"
+  dobby_phase "$key" 분석
+  dobby_event "$key" "변경 요청 접수 — 단계 $ph → 분석, 리뷰는 ${rd}차부터" 2>/dev/null
+  printf '%s\n' "$rd"
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 릴리즈 노트 등록 기록 — dobby-release 가 update-release-note 결과를 확인한 뒤 남긴다.
 # ─────────────────────────────────────────────────────────────────────────────

@@ -13,8 +13,8 @@
 #     --approve-commit  사람이 커밋·푸시를 미리 승인한 실행. 세션마다 그 승인을 지시로 덧붙여 통합 세션이 묻고 멈추지 않게 한다.
 #
 # 세션 이어 쓰기: 기본은 단계마다 새 세션이다. 다음 일이 '수정'이고, 직전 세션의 마지막 문맥이
-# REUSE_MAX_CTX 이하이며, 직전 호출 뒤 REUSE_MAX_GAP 초가 지나지 않았을 때만 직전 세션을
-# `claude -p --resume` 으로 이어 쓴다(근거: SKILL.md '세션 이어 쓰기 판정').
+# DOBBY_REUSE_MAX_CTX 이하이며(dobby-lib.sh), 직전 호출 뒤 DOBBY_REUSE_MAX_GAP 초가 지나지 않았을 때만 직전 세션을
+# `claude -p --resume` 으로 이어 쓴다(근거: session-reuse.md).
 #
 # 멈추는 경우:
 #   dobby-order 가 만든 메타 · 설계 미확정 · 통합 완료(--with-test 없을 때) · 검증 전부 통과
@@ -60,14 +60,7 @@ design_approved() {
     jq -r '.["사용자"] // empty, .auto // empty' "$D/design-ack.json" | grep -qx "$rev"
 }
 
-# 검증 이력 표의 마지막 행이 '완료'이고 실패가 0이면 통과.
-test_passed() {
-  awk -F'|' '
-    function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
-    /^## /{ins=(index($0,"테스트 실행 이력")>0)?1:0; next}
-    ins && /^\|/ && $2 !~ /회차|---/ {st=t($4); split(t($5),c,"/")}
-    END{exit (st=="완료" && c[2]+0==0)?0:1}' "$D/status.md"
-}
+test_passed() { _v2_test_passed "$KEY"; }
 
 # 세션 한 번이 무엇이든 남겼는지 보는 지문 — 단계, 리뷰·검증 폴더 목록, 주요 문서의 수정 시각.
 fingerprint() {
@@ -78,33 +71,6 @@ fingerprint() {
       [ -f "$D/$f" ] && stat -f '%m %N' "$D/$f" 2>/dev/null
     done
   } | shasum | cut -c1-12
-}
-
-# 세션 이어 쓰기 기준. 실측(FE1-2139~2142): 새 세션 시작 문맥 5.7만~9.2만, 첫 호출 가중 비용 4.3만~10만.
-# 이어 쓰면 호출마다 0.1×(직전 문맥−새 시작 문맥)을 더 내므로 12만을 넘으면 수정 세션 길이(15~21회)에서 손해다.
-# 캐시 유지 시간은 대화형 세션에서 5분이 관측돼 안전하게 5분으로 둔다 — 지나면 누적 문맥 전체를 다시 캐시에 쓴다.
-REUSE_MAX_CTX=120000
-REUSE_MAX_GAP=300
-
-# 이번 세션에서 할 일이 '수정'인가 — SKILL.md '단계 판정' 표의 수정 두 줄과 같은 조건.
-next_is_fix() {
-  local ph rd
-  ph="$(phase)"
-  if [ "$ph" = 검증 ]; then ! test_passed; return; fi
-  [ "$ph" = 리뷰 ] || return 1
-  rd="$(find "$D/reviews" -maxdepth 1 -type d -name 'round-*' 2>/dev/null | sed 's/.*round-//' | sort -n | tail -1)"
-  [ -n "$rd" ] && ls "$D/reviews/round-$rd"/*.md >/dev/null 2>&1 \
-    && [ "$(dobby_blocking "$KEY" "$rd" 2>/dev/null)" -gt 0 ]
-}
-
-# 세션 기록의 마지막 호출 — "문맥크기 경과초" 를 낸다. 기록을 못 찾으면 아무것도 내지 않는다.
-last_call() {
-  local f
-  f="$(ls ~/.claude/projects/*/"$1".jsonl 2>/dev/null | head -1)"
-  [ -n "$f" ] || return 0
-  jq -rs '[.[] | select(.type == "assistant" and .message.usage != null)] | last // empty
-    | [(.message.usage | (.input_tokens // 0) + (.cache_creation_input_tokens // 0) + (.cache_read_input_tokens // 0)),
-       (now - (.timestamp | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) | floor)] | @tsv' "$f" 2>/dev/null
 }
 
 WT="$(_order_worktree "$KEY")"
@@ -133,12 +99,11 @@ while :; do
   n=$((n + 1))
   before="$(fingerprint)"
   resume=(); how="새 세션"
-  if [ -n "$sid" ] && next_is_fix; then
-    read -r ctx gap <<<"$(last_call "$sid")"
-    if [ -n "${ctx:-}" ] && [ "$ctx" -le "$REUSE_MAX_CTX" ] && [ "$gap" -le "$REUSE_MAX_GAP" ]; then
-      resume=(--resume "$sid"); how="직전 세션 이어 쓰기(문맥 ${ctx}, ${gap}초 전)"
+  if [ -n "$sid" ] && _v2_next_is_fix "$KEY"; then
+    if r="$(dobby_v2_reuse_ok "$KEY" "$sid")"; then
+      resume=(--resume "$sid"); how="직전 세션 이어 쓰기(문맥 ${r%%$'\t'*}, ${r##*$'\t'}초 전)"
     else
-      how="새 세션(직전 문맥 ${ctx:-알 수 없음}, ${gap:-?}초 전 — 이어 쓰기 기준 넘음)"
+      how="새 세션(직전 세션이 이어 쓰기 기준을 넘음)"
     fi
   fi
   printf '\n━━ %s · 세션 %d · 시작 단계 %s · %s · %s\n' "$KEY" "$n" "$ph" "$how" "$(date '+%H:%M')"
