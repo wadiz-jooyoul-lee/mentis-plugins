@@ -6,10 +6,11 @@
 # (세션 안에서도 dobby_session_log 가 상태 문서의 '## 지난 세션' 표에 남긴다).
 #
 # 사용법:
-#   run.sh {키} [--mode {권한모드}] [--max {최대 세션 수}] [--with-test]
+#   run.sh {키} [--mode {권한모드}] [--max {최대 세션 수}] [--with-test] [--approve-commit]
 #     --mode       claude 의 --permission-mode 값. 기본 auto.
 #     --max        이번 실행에서 띄울 세션 수 상한. 기본 10.
 #     --with-test  통합 뒤 검증까지 돈다. 기본은 통합에서 멈춘다(검증은 배포가 끝난 뒤에야 의미가 있다).
+#     --approve-commit  사람이 커밋·푸시를 미리 승인한 실행. 세션마다 그 승인을 지시로 덧붙여 통합 세션이 묻고 멈추지 않게 한다.
 #
 # 멈추는 경우:
 #   dobby-order 가 만든 메타 · 설계 미확정 · 통합 완료(--with-test 없을 때) · 검증 전부 통과
@@ -20,12 +21,13 @@ set -uo pipefail
 die() { printf '자동 실행 중단: %s\n' "$1" >&2; exit "${2:-1}"; }
 
 KEY="${1:-}"; [ -n "$KEY" ] && shift || die "오더 키를 주세요. 예: run.sh FE1-1234"
-MODE=auto; MAX=10; WITH_TEST=0
+MODE=auto; MAX=10; WITH_TEST=0; APPROVE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --mode) MODE="$2"; shift 2 ;;
     --max) MAX="$2"; shift 2 ;;
     --with-test) WITH_TEST=1; shift ;;
+    --approve-commit) APPROVE=1; shift ;;
     *) die "모르는 인자: $1" ;;
   esac
 done
@@ -77,6 +79,11 @@ fingerprint() {
 WT="$(_order_worktree "$KEY")"
 [ -n "$WT" ] && [ -d "$WT" ] || WT="$PWD"
 
+CONSENT="이 실행은 사용자가 커밋과 푸시를 미리 승인한 자동 실행이다(대시보드 '자동 실행' 확인 창 또는 --approve-commit). \
+dobby-order-v2 통합 단계에서 오더 작업 브랜치에 커밋하고 푸시하는 것은 이미 동의를 받았으니 다시 묻지 말고 진행한다. \
+정식 배포 브랜치로의 PR·머지·배포는 이 승인에 들어가지 않는다."
+extra=(); [ "$APPROVE" = 1 ] && extra=(--append-system-prompt "$CONSENT")
+
 n=0
 while :; do
   ph="$(phase)"
@@ -95,7 +102,7 @@ while :; do
   n=$((n + 1))
   before="$(fingerprint)"
   printf '\n━━ %s · 세션 %d · 시작 단계 %s · %s\n' "$KEY" "$n" "$ph" "$(date '+%H:%M')"
-  out="$(cd "$WT" && claude -p "/dobby-order-v2 $KEY" --permission-mode "$MODE" --output-format json 2>/dev/null)"
+  out="$(cd "$WT" && claude -p "/dobby-order-v2 $KEY" ${extra[@]+"${extra[@]}"} --permission-mode "$MODE" --output-format json 2>/dev/null)"
   code=$?
   sid="$(printf '%s' "$out" | jq -r '.session_id // empty' 2>/dev/null)"
   err="$(printf '%s' "$out" | jq -r '.is_error // false' 2>/dev/null)"
