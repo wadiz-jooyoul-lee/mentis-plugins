@@ -1645,21 +1645,58 @@ EOF
 # 중복(여러 오더가 같은 ID)만으로는 오류가 아니다 — 한 세션이 오더 둘을 실제로 처리하기도 한다.
 #
 # 키를 주면 그 오더만, 안 주면 전부 본다. 문제가 있으면 1을 반환한다.
-#   OK      전사에 키가 있다
-#   WRONG   전사는 있는데 키가 없다 — **남의 세션이다. 이어가기를 누르면 엉뚱한 세션이 열린다**
-#   MISSING 전사 파일이 없다 — 지워졌거나 ID 가 틀렸다
-#   NONE    세션 ID 가 안 적혀 있다(검사 대상 아님)
+#   OK       전사에 키가 있다
+#   WRONG    전사는 있는데 키가 없다 — **남의 세션이다. 이어가기를 누르면 엉뚱한 세션이 열린다**
+#   MISSING  전사 파일이 없다 — 지워졌거나 ID 가 틀렸다
+#   NONE     세션 ID 가 안 적혀 있다(검사 대상 아님)
+#   WORKTREE 워크트리 폴더는 있는데 '## 워크트리 / 브랜치' 표에 없다 — 대시보드가 코드 위치를 모른다
+#   CWD      세션 cwd 가 **이 오더의 워크트리가 아닌 다른 체크아웃**이다
+#            → 이어가기가 딴 브랜치가 걸린 폴더로 데려간다(실측 FE1-1301: cwd 가 메인 저장소였고
+#              그 저장소는 feature/FE1-1883 에 체크아웃돼 있었다. 코드는 subtree 워크트리에 있었다)
 dobby_session_lint() {
-  local only="${1:-}" root d k s sid tr bad=0
+  local only="${1:-}" root d k s sid tr bad=0 wtdir found top w cwd
   root="$(_meta)"
   [ -d "$root" ] || { _die "메타 루트가 없다: $root"; return 1; }
+  wtdir="${ORCHESTRATION_WORKSPACE:-$HOME/work}/subtree"
   for d in "$root"/*/; do
     k="$(basename "$d")"
     case "$k" in .*) continue ;; esac
     [ -z "$only" ] || [ "$k" = "$only" ] || continue
     s="$d/status.md"; [ -f "$s" ] || continue
+
+    # ── 워크트리 폴더는 있는데 표에 없나 ────────────────────────────────
+    # 표가 없으면 대시보드가 코드 위치를 모르고, 사라진 워크트리 복원 안내도 못 한다.
+    # ⛔ glob 을 쓰지 않는다 — zsh 는 맞는 게 없으면 `no matches found` 로 **함수를 죽인다**
+    #    (실측: 전수 검사가 첫 오더에서 멈췄다). find 는 없으면 그냥 빈 값이다.
+    found="$(find "$wtdir" -maxdepth 1 -type d -name "*-$k" 2>/dev/null | tr '\n' ' ')"
+    found="${found% }"
+    if [ -n "$found" ] && ! grep -q '^##[[:space:]]*워크트리' "$s"; then
+      printf 'WORKTREE %-22s 표 없음 — 실제 폴더:%s\n' "$k" "$found"
+      printf '         → dobby_record_branch %s {repo} {브랜치} {경로}\n' "$k"
+      bad=$((bad + 1))
+    fi
+
     sid="$(grep -oE '세션 ID[^0-9a-f]*[0-9a-f-]{36}' "$s" 2>/dev/null | grep -oE '[0-9a-f-]{36}' | head -1)"
     [ -n "$sid" ] || continue
+
+    # ── 세션 cwd 가 이 오더의 워크트리가 아닌 **다른 체크아웃**인가 ──────
+    # playground 처럼 git 저장소가 아닌 폴더는 괜찮다(오케스트레이터 자리). 문제는
+    # "다른 브랜치가 걸린 저장소"다 — 거기로 이동하면 이 오더와 무관한 코드가 열린다.
+    cwd="$(sed -nE 's#^[[:space:]]*-[[:space:]]*\*\*작업 경로\*\*[[:space:]]*[:：][[:space:]]*(.+)$#\1#p' "$s" | head -1)"
+    cwd="${cwd%"${cwd##*[![:space:]]}"}"
+    if [ -n "$found" ] && [ -n "$cwd" ] && [ -d "$cwd" ]; then
+      top="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)"
+      if [ -n "$top" ] && ! _ship_has "$top" "$found"; then
+        # ⛔ 실패로 세지 않는다. 전사는 **그 폴더에 묶여** 있어서 작업 경로를 워크트리로
+        #    바꾸면 그 세션을 --resume 으로 못 연다. 고칠 수 있는 결함이 아니라 **알려 줄 사실**이다.
+        #    워크트리 표만 있으면 대시보드가 "코드는 여기 있다"를 보여 줄 수 있다.
+        printf 'CWD      %-22s %s\n' "$k" "$cwd"
+        printf '         저장소 %s 는 지금 [%s] — 이 오더 워크트리가 아니다\n' \
+          "$top" "$(git -C "$top" branch --show-current 2>/dev/null)"
+        printf '         이어가기는 그 폴더로 연다(전사가 거기 묶여 있다). 코드는 여기 있다:%s\n' "$found"
+      fi
+    fi
+
     tr="$(_session_transcript "$sid")"
     if [ -z "$tr" ]; then
       printf 'MISSING  %-22s %s  (전사 파일 없음)\n' "$k" "$sid"; bad=$((bad + 1)); continue
@@ -1672,10 +1709,13 @@ dobby_session_lint() {
     fi
   done
   if [ "$bad" -gt 0 ]; then
-    printf '\n세션 기록이 틀린 오더 %s건. 대시보드 이어가기가 **남의 세션을 연다.**\n' "$bad" >&2
-    printf '올바른 세션은 이렇게 찾는다 — 키가 든 전사 중 dobby-order 를 부른 것이 오케스트레이터다:\n' >&2
-    printf '  grep -rl {키} ~/.claude/projects/*/*.jsonl | xargs ls -lat | head\n' >&2
-    printf '못 찾으면 ID 를 지운다 — **틀린 ID 보다 없는 편이 낫다.**\n' >&2
+    printf '\n세션 기록에 문제가 있는 오더 %s건 — 대시보드 이어가기가 엉뚱한 곳으로 간다.\n' "$bad" >&2
+    printf '  WRONG    남의 세션이다. 키가 든 전사 중 dobby-order 를 부른 것이 오케스트레이터다:\n' >&2
+    printf '             grep -rl {키} ~/.claude/projects/*/*.jsonl | xargs ls -lat | head\n' >&2
+    printf '           못 찾으면 ID 를 지운다 — **틀린 ID 보다 없는 편이 낫다.**\n' >&2
+    printf '  WORKTREE 표를 채운다: dobby_record_branch {키} {repo} {브랜치} {경로}\n' >&2
+    printf '  CWD      는 결함이 아니라 안내다(실패로 세지 않는다) — 전사가 그 폴더에 묶여 있어\n' >&2
+    printf '           경로를 바꾸면 --resume 이 세션을 못 찾는다. 워크트리 표로 코드 위치를 알린다.\n' >&2
     return 1
   fi
   [ -n "$only" ] || printf '세션 기록 이상 없음\n'
