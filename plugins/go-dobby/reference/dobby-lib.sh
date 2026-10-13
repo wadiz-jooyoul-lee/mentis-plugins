@@ -2468,6 +2468,84 @@ dobby_ship_stage() {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
+# dobby_v2_autorun KEY — 설계를 확정한 v2 오더의 자동 실행(run.sh)을 대시보드에 맡겨 띄운다.
+#
+# 대시보드가 띄우면 터미널·이 세션이 닫혀도 실행이 살아 있고(분리된 프로세스),
+# 대시보드 '자동 실행' 잡으로 진행이 보이며, 커밋·푸시 승인(--approve-commit)도 대시보드가 넘긴다.
+# 대시보드 주소는 ORCHESTRATION_DASHBOARD_URL (기본 http://localhost:7253).
+#   반환 0 = 시작함 · 1 = 대시보드가 시작을 거부(이유 출력) · 2 = 대시보드에 닿지 못함(직접 실행 명령 출력)
+dobby_v2_autorun() {
+  local key="$1" url="${ORCHESTRATION_DASHBOARD_URL:-http://localhost:7253}" chk res run
+  [ -n "$key" ] || { _die "쓰임: dobby_v2_autorun KEY"; return 1; }
+  run="$DOBBY_LIB_DIR/../skills/dobby-order-v2/run.sh"
+  chk="$(curl -fsS --max-time 5 "$url/api/orders?v2run=$key" 2>/dev/null)" || {
+    printf '대시보드(%s)에 닿지 못해 자동 실행을 띄우지 못했습니다.\n' "$url"
+    printf '대시보드를 켠 뒤 오더 화면의 "자동 실행" 버튼을 누르거나, 터미널에서 직접 실행해 주세요:\n  bash %s %s --approve-commit\n' "$run" "$key"
+    return 2
+  }
+  if [ "$(printf '%s' "$chk" | jq -r '.ok')" != "true" ]; then
+    printf '자동 실행을 시작할 수 없습니다: %s\n' "$(printf '%s' "$chk" | jq -r '.reason // "이유 없음"')"
+    return 1
+  fi
+  res="$(curl -sS --max-time 10 -X POST "$url/api/orders" -H 'content-type: application/json' \
+    -d "$(jq -nc --arg k "$key" '{v2run:true,key:$k}')" 2>/dev/null)"
+  if [ "$(printf '%s' "$res" | jq -r '.ok' 2>/dev/null)" = "true" ]; then
+    printf '자동 실행을 시작했습니다. 진행 상황은 대시보드 %s/ 의 %s 오더 화면에서 볼 수 있습니다.\n' "$url" "$key"
+    dobby_event "$key" "설계 세션이 자동 실행을 시작함 — 구현부터 통합(커밋·푸시)까지" 2>/dev/null
+    return 0
+  fi
+  printf '자동 실행을 시작할 수 없습니다: %s\n' "$(printf '%s' "$res" | jq -r '.error // "응답 없음"' 2>/dev/null)"
+  return 1
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 릴리즈 노트 등록 기록 — dobby-release 가 update-release-note 결과를 확인한 뒤 남긴다.
+# ─────────────────────────────────────────────────────────────────────────────
+
+DOBBY_RELEASE_MERGE_LIST="머지됨 / 머지 안 함 / 충돌 / 건너뜀 / 확인 못 함"
+
+# dobby_release_note KEY 배포일 저장소 브랜치 행번호 PR 머지 [페이지주소]
+#
+# status.md `## 릴리즈 노트` 표를 **(배포일, 저장소)별 한 행**으로 넣거나 고친다. 갱신 시각은 자동.
+#   · 배포일은 YYYY-MM-DD. 대시보드가 "다음 정기배포에 올라가 있나"를 이 값으로 가른다.
+#   · PR 은 `#번호` 또는 `-`(PR 을 만들지 않았거나 건너뜀). 머지는 위 어휘 다섯 개 밖이면 거부.
+#   · 표가 없으면 `## 세션` 앞에(없으면 문서 끝에) 새로 만든다.
+dobby_release_note() {
+  local key="$1" day="$2" rp="$3" br="$4" row="$5" pr="$6" mg="$7" url="${8:--}" f ts
+  [ -n "$key" ] && [ -n "$day" ] && [ -n "$rp" ] && [ -n "$br" ] && [ -n "$row" ] && [ -n "$pr" ] && [ -n "$mg" ] \
+    || { _die "쓰임: dobby_release_note KEY 배포일 저장소 브랜치 행번호 PR 머지 [페이지주소]"; return 1; }
+  [[ "$day" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { _die "배포일은 YYYY-MM-DD 로: '$day'"; return 1; }
+  case "$mg" in 머지됨|"머지 안 함"|충돌|건너뜀|"확인 못 함") ;;
+    *) _die "머지 칸 어휘가 아니다: '$mg' (허용: $DOBBY_RELEASE_MERGE_LIST)"; return 1 ;; esac
+  f="$(_order_dir "$key")/status.md"
+  [ -f "$f" ] || { _die "status.md 가 없다: $key"; return 1; }
+  ts="$(date '+%Y-%m-%d %H:%M')"
+
+  if ! grep -q '^##[[:space:]]*릴리즈 노트[[:space:]]*$' "$f"; then
+    awk '
+      function head() { print "## 릴리즈 노트"; print "| 배포일 | 저장소 | 브랜치 | 행 | 릴리스 PR | 머지 | 페이지 | 갱신 |"; print "|---|---|---|---|---|---|---|---|"; print ""; done = 1 }
+      !done && /^##[ \t]*세션[ \t]*$/ { head() }
+      { print }
+      END { if (!done) { print ""; head() } }
+    ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  fi
+
+  awk -v day="$day" -v rp="$rp" -v br="$br" -v row="$row" -v pr="$pr" -v mg="$mg" -v url="$url" -v ts="$ts" '
+    function trim(x) { gsub(/^[ \t]+|[ \t]+$/, "", x); return x }
+    function emit() { printf "| %s | %s | %s | %s | %s | %s | %s | %s |\n", day, rp, br, row, pr, mg, url, ts; found = 1 }
+    /^## / { if (insec && !found) emit(); insec = ($0 ~ /^##[ \t]*릴리즈 노트[ \t]*$/) }
+    insec && /^[ \t]*\|/ {
+      split($0, c, "|")
+      if (trim(c[2]) == day && trim(c[3]) == rp) { emit(); next }
+      print; next
+    }
+    insec && !found && /^[ \t]*$/ { emit() }
+    { print }
+    END { if (insec && !found) emit() }
+  ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 충돌 해결 브랜치 — {브랜치}_into_{환경}
 #
 # ⛔ 이 저장소에서는 **언제나** 충돌 해결 브랜치로 올린다. 충돌이 없어도 그렇게 한다.
