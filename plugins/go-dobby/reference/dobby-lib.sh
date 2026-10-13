@@ -222,9 +222,9 @@ _board_role() {
     }' "$1" 2>/dev/null
 }
 
-# dobby_agent_state KEY SLUG STATE [ROUND] — 그 행 상태/갱신만 수정. 비활성→활성 진입 시 착수 갱신.
+# dobby_agent_state KEY SLUG STATE [ROUND] [DESC] — 그 행 상태/갱신(+라운드·설명을 주면 그 칸도) 수정. 비활성→활성 진입 시 착수 갱신.
 dobby_agent_state() {
-  local key="$1" slug="$2" st rd="${4:-}"
+  local key="$1" slug="$2" st rd="${4:-}" desc="${5:-}"
   st="$(dobby_norm_state "$3")"
   local f now; f="$(_order_dir "$key")/orchestration.md"; now="$(_now)"
 
@@ -256,15 +256,16 @@ dobby_agent_state() {
   fi
   # 헤더 인식형: `## 에이전트 상태표` 헤더에서 상태/라운드/착수/갱신 컬럼 위치를 찾아 그 칸만 수정한다.
   # (오더마다 상태표 스키마가 달라 컬럼 위치를 하드코딩하면 엉뚱한 칸을 덮어써 표가 깨진다.)
-  awk -F'|' -v OFS='|' -v slug="$slug" -v st="$st" -v rd="$rd" -v now="$now" '
+  awk -F'|' -v OFS='|' -v slug="$slug" -v st="$st" -v rd="$rd" -v now="$now" -v desc="$desc" '
     function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
-    BEGIN{ins=0;hdr=0;ci_slug=0;ci_st=0;ci_rd=0;ci_start=0;ci_up=0}
+    BEGIN{ins=0;hdr=0;ci_slug=0;ci_st=0;ci_rd=0;ci_start=0;ci_up=0;ci_desc=0}
     /^## / { ins=($0 ~ /에이전트 상태표/)?1:0; hdr=0; print; next }
     ins==1 && /^\|/ {
       if (hdr==0) {
         for(i=1;i<=NF;i++){c=t($i)
           if(c=="슬러그")ci_slug=i; else if(c=="상태")ci_st=i
-          else if(c=="라운드")ci_rd=i; else if(c=="착수")ci_start=i; else if(c=="갱신")ci_up=i}
+          else if(c=="라운드")ci_rd=i; else if(c=="착수")ci_start=i; else if(c=="갱신")ci_up=i
+          else if(c=="설명")ci_desc=i}
         if(ci_slug>0 && ci_st>0) hdr=1
         print; next
       }
@@ -276,6 +277,7 @@ dobby_agent_state() {
         if(ci_start>0 && active && (old=="대기"||old=="완료"||old==""||ost=="")) $(ci_start)=" " now " "
         $(ci_st)=" " st " "
         if(ci_rd>0 && rd!="") $(ci_rd)=" " rd " "
+        if(ci_desc>0 && desc!="") $(ci_desc)=" " desc " "
         if(ci_up>0) $(ci_up)=" " now " "
       }
       print; next
@@ -2464,6 +2466,187 @@ dobby_ship_stage() {
       print
     }
     END { if (insec && !found && seen) emit() }
+  ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# dobby_v2_autorun KEY — 설계를 확정한 v2 오더의 자동 실행(run.sh)을 대시보드에 맡겨 띄운다.
+#
+# 대시보드가 띄우면 터미널·이 세션이 닫혀도 실행이 살아 있고(분리된 프로세스),
+# 대시보드 '자동 실행' 잡으로 진행이 보이며, 커밋·푸시 승인(--approve-commit)도 대시보드가 넘긴다.
+# 대시보드 주소는 ORCHESTRATION_DASHBOARD_URL (기본 http://localhost:7253).
+#   반환 0 = 시작함 · 1 = 대시보드가 시작을 거부(이유 출력) · 2 = 대시보드에 닿지 못함(직접 실행 명령 출력)
+dobby_v2_autorun() {
+  local key="$1" url="${ORCHESTRATION_DASHBOARD_URL:-http://localhost:7253}" chk res run
+  [ -n "$key" ] || { _die "쓰임: dobby_v2_autorun KEY"; return 1; }
+  run="$DOBBY_LIB_DIR/../skills/dobby-order-v2/run.sh"
+  chk="$(curl -fsS --max-time 5 "$url/api/orders?v2run=$key" 2>/dev/null)" || {
+    printf '대시보드(%s)에 닿지 못해 자동 실행을 띄우지 못했습니다.\n' "$url"
+    printf '대시보드를 켠 뒤 오더 화면의 "자동 실행" 버튼을 누르거나, 터미널에서 직접 실행해 주세요:\n  bash %s %s --approve-commit\n' "$run" "$key"
+    return 2
+  }
+  if [ "$(printf '%s' "$chk" | jq -r '.ok')" != "true" ]; then
+    printf '자동 실행을 시작할 수 없습니다: %s\n' "$(printf '%s' "$chk" | jq -r '.reason // "이유 없음"')"
+    return 1
+  fi
+  res="$(curl -sS --max-time 10 -X POST "$url/api/orders" -H 'content-type: application/json' \
+    -d "$(jq -nc --arg k "$key" '{v2run:true,key:$k}')" 2>/dev/null)"
+  if [ "$(printf '%s' "$res" | jq -r '.ok' 2>/dev/null)" = "true" ]; then
+    printf '자동 실행을 시작했습니다. 진행 상황은 대시보드 %s/ 의 %s 오더 화면에서 볼 수 있습니다.\n' "$url" "$key"
+    dobby_event "$key" "설계 세션이 자동 실행을 시작함 — 구현부터 통합(커밋·푸시)까지" 2>/dev/null
+    return 0
+  fi
+  printf '자동 실행을 시작할 수 없습니다: %s\n' "$(printf '%s' "$res" | jq -r '.error // "응답 없음"' 2>/dev/null)"
+  return 1
+}
+
+# dobby_fix_count KEY SLUG — 그 담당이 지금까지 한 수정 세션 수(리뷰 지적 수정 fix-N + 검증 실패 수정 fix-test-*).
+# agent-logs.json 의 그 슬러그 하위 키를 센다. 수정 세션은 dobby_session_log 를 먼저 부르므로 지금 세션도 들어간다.
+# v2 개발 담당의 라운드 칸(보드 카드 숫자)이 이 값이다 — 리뷰 차수가 아니라 실제로 고친 횟수를 보이기 위해서다.
+dobby_fix_count() {
+  local f; f="$(_order_dir "$1")/agent-logs.json"
+  [ -f "$f" ] || { printf '0'; return 0; }
+  jq -r --arg s "$2" '(.[$s] // {}) | if type == "object" then [keys[] | select(test("^fix-"))] | length else 0 end' "$f" 2>/dev/null || printf '0'
+}
+
+# ── v2 세션 이어 쓰기 판정 — run.sh 와 대화형 세션 마무리(dobby_v2_next_hint)가 같은 규칙을 쓴다 ──
+# 기본은 단계마다 새 세션. 다음 일이 '수정'이고, 직전 세션의 마지막 문맥이 DOBBY_REUSE_MAX_CTX 이하이며,
+# 마지막 호출 뒤 DOBBY_REUSE_MAX_GAP 초 안일 때만 이어 쓴다. 근거 수치는 skills/dobby-order-v2/session-reuse.md.
+DOBBY_REUSE_MAX_CTX=120000
+DOBBY_REUSE_MAX_GAP=300
+
+# _v2_test_passed KEY — 검증 이력 표의 마지막 행이 '완료'이고 실패가 0이면 0.
+_v2_test_passed() {
+  awk -F'|' '
+    function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
+    /^## /{ins=(index($0,"테스트 실행 이력")>0)?1:0; next}
+    ins && /^\|/ && $2 !~ /회차|---/ {st=t($4); split(t($5),c,"/")}
+    END{exit (st=="완료" && c[2]+0==0)?0:1}' "$(_order_dir "$1")/status.md"
+}
+
+# _v2_next_is_fix KEY — 다음 세션이 할 일이 '수정'인가(단계 판정 표의 수정 두 줄과 같은 조건).
+_v2_next_is_fix() {
+  local key="$1" d ph rd
+  d="$(_order_dir "$key")"; ph="$(_order_phase "$key")"
+  if [ "$ph" = 검증 ]; then ! _v2_test_passed "$key"; return; fi
+  [ "$ph" = 리뷰 ] || return 1
+  rd="$(find "$d/reviews" -maxdepth 1 -type d -name 'round-*' 2>/dev/null | sed 's/.*round-//' | sort -n | tail -1)"
+  [ -n "$rd" ] && ls "$d/reviews/round-$rd"/*.md >/dev/null 2>&1 \
+    && [ "$(dobby_blocking "$key" "$rd" 2>/dev/null)" -gt 0 ]
+}
+
+# _v2_last_call SID — 세션 기록의 마지막 호출 "문맥크기<TAB>경과초". 기록을 못 찾으면 빈 출력.
+_v2_last_call() {
+  local f
+  f="$(ls ~/.claude/projects/*/"$1".jsonl 2>/dev/null | head -1)"
+  [ -n "$f" ] || return 0
+  jq -rs '[.[] | select(.type == "assistant" and .message.usage != null)] | last // empty
+    | [(.message.usage | (.input_tokens // 0) + (.cache_creation_input_tokens // 0) + (.cache_read_input_tokens // 0)),
+       (now - (.timestamp | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) | floor)] | @tsv' "$f" 2>/dev/null
+}
+
+# dobby_v2_reuse_ok KEY SID — 이어 쓰는 쪽이 싸면 "문맥크기<TAB>경과초" 를 내고 0, 아니면 출력 없이 1.
+dobby_v2_reuse_ok() {
+  local key="$1" sid="$2" ctx gap
+  [ -n "$sid" ] && _v2_next_is_fix "$key" || return 1
+  IFS=$'\t' read -r ctx gap <<<"$(_v2_last_call "$sid")"
+  [ -n "${ctx:-}" ] && [ "$ctx" -le "$DOBBY_REUSE_MAX_CTX" ] && [ "$gap" -le "$DOBBY_REUSE_MAX_GAP" ] || return 1
+  printf '%s\t%s\n' "$ctx" "$gap"
+}
+
+# dobby_v2_next_hint KEY — 대화형 세션 마무리용. 이어 쓰는 쪽이 쌀 때만 '다음' 칸에 넣을 줄을 내고, 아니면 아무것도 내지 않는다.
+# 평소에 침묵하는 이유: 이 출력도 마지막 응답의 입력이 된다. 30번 중 1번꼴로만 이득이라 매번 출력하면 아끼는 양과 비슷하게 든다.
+# 헤드리스(-p) 세션에서는 run.sh 가 판정하므로 침묵한다. 기한은 지금+4분 — 대화형 캐시 5분에서 마지막 응답 시간을 뺐다.
+dobby_v2_next_hint() {
+  local key="$1" r ctx
+  [ "${CLAUDE_CODE_ENTRYPOINT:-}" = cli ] || return 0
+  r="$(dobby_v2_reuse_ok "$key" "$(_session_id)")" || return 0
+  ctx="${r%%$'\t'*}"
+  printf '  - 이번엔 이 세션을 이어 쓰는 쪽이 쌉니다(다음 일: 수정, 지금 문맥 %s 토큰).\n' "$ctx"
+  printf '  - %s 전이면 /clear 없이 바로: /dobby-order-v2 %s\n' "$(date -v+4M '+%H:%M' 2>/dev/null || date -d '+4 min' '+%H:%M')" "$key"
+  printf '  - 그 시각이 지났으면 /clear 후 같은 명령을 입력하세요.\n'
+}
+
+# dobby_v2_change_open KEY [check] — v2 오더에 들어온 변경 요청(수정 지시·새 버그·추가 설계)을 구현 차례로 되돌린다.
+#
+# 설계 문서에 변경 절을 적고 사람이 확정한 **뒤에** 부른다. 그다음 dobby_design_ack 를 부르면
+# 새 세션의 단계 판정이 "분석 + 승인 = 구현" 으로 읽어 그 변경만 구현한다.
+#   · 자동 실행이 돌고 있으면 거부(반환 1) — 그 실행이 같은 상태 문서를 고치고 있다. 대시보드에 닿지 못하면 확인 없이 진행한다.
+#   · 단계가 해결이면 해결 표시를 무른다(dobby_resolve undo 와 같은 일).
+#   · 다음 리뷰 차수의 빈 폴더를 연다. 이걸 안 하면 리뷰 세션이 지난 차수의 결과 파일에 덮어쓰고,
+#     지적 0건인 옛 결과 때문에 리뷰 없이 통합으로 넘어간다. 마지막 차수 폴더가 비어 있으면 그대로 쓴다.
+#   · 단계를 분석으로 바꾼다. stdout 으로 이번 변경의 리뷰 시작 차수를 낸다(설계 문서 변경 절에 적는다).
+#   · check 를 주면 자동 실행 확인만 하고 아무것도 바꾸지 않는다(변경 절을 쓰기 전에 부른다).
+dobby_v2_change_open() {
+  local key="$1" mode="${2:-}" url="${ORCHESTRATION_DASHBOARD_URL:-http://localhost:7253}" d f ph rd chk
+  [ -n "$key" ] || { _die "쓰임: dobby_v2_change_open KEY"; return 1; }
+  d="$(_order_dir "$key")"; f="$d/status.md"
+  [ -f "$f" ] || { _die "$key 의 상태 문서가 없습니다"; return 1; }
+  if chk="$(curl -fsS --max-time 5 "$url/api/orders?v2run=$key" 2>/dev/null)" \
+     && [ "$(printf '%s' "$chk" | jq -r '.running // false' 2>/dev/null)" = "true" ]; then
+    printf '%s 의 자동 실행이 돌고 있어 변경을 접수하지 않았습니다. 대시보드 오더 화면에서 실행이 끝나거나 멈춘 뒤 다시 해 주세요.\n' "$key" >&2
+    return 1
+  fi
+  [ "$mode" = check ] && return 0
+  ph="$(_order_phase "$key")"
+  if [ "$ph" = "해결" ]; then
+    awk '/^## 해결/{skip=1; next} /^## /{if(skip)skip=0} !skip{print}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+    dobby_event "$key" "해결 취소 — 변경 요청 접수" 2>/dev/null
+  fi
+  rd="$(find "$d/reviews" -maxdepth 1 -type d -name 'round-*' 2>/dev/null | sed 's/.*round-//' | sort -n | tail -1)"
+  if [ -z "$rd" ]; then rd=1
+  elif ls "$d/reviews/round-$rd"/*.md >/dev/null 2>&1; then rd=$((rd + 1))
+  fi
+  mkdir -p "$d/reviews/round-$rd"
+  dobby_phase "$key" 분석
+  dobby_event "$key" "변경 요청 접수 — 단계 $ph → 분석, 리뷰는 ${rd}차부터" 2>/dev/null
+  printf '%s\n' "$rd"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 릴리즈 노트 등록 기록 — dobby-release 가 update-release-note 결과를 확인한 뒤 남긴다.
+# ─────────────────────────────────────────────────────────────────────────────
+
+DOBBY_RELEASE_MERGE_LIST="머지됨 / 머지 안 함 / 충돌 / 건너뜀 / 확인 못 함"
+
+# dobby_release_note KEY 배포일 저장소 브랜치 행번호 PR 머지 [페이지주소]
+#
+# status.md `## 릴리즈 노트` 표를 **(배포일, 저장소)별 한 행**으로 넣거나 고친다. 갱신 시각은 자동.
+#   · 배포일은 YYYY-MM-DD. 대시보드가 "다음 정기배포에 올라가 있나"를 이 값으로 가른다.
+#   · PR 은 `#번호` 또는 `-`(PR 을 만들지 않았거나 건너뜀). 머지는 위 어휘 다섯 개 밖이면 거부.
+#   · 표가 없으면 `## 세션` 앞에(없으면 문서 끝에) 새로 만든다.
+dobby_release_note() {
+  local key="$1" day="$2" rp="$3" br="$4" row="$5" pr="$6" mg="$7" url="${8:--}" f ts
+  [ -n "$key" ] && [ -n "$day" ] && [ -n "$rp" ] && [ -n "$br" ] && [ -n "$row" ] && [ -n "$pr" ] && [ -n "$mg" ] \
+    || { _die "쓰임: dobby_release_note KEY 배포일 저장소 브랜치 행번호 PR 머지 [페이지주소]"; return 1; }
+  [[ "$day" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { _die "배포일은 YYYY-MM-DD 로: '$day'"; return 1; }
+  case "$mg" in 머지됨|"머지 안 함"|충돌|건너뜀|"확인 못 함") ;;
+    *) _die "머지 칸 어휘가 아니다: '$mg' (허용: $DOBBY_RELEASE_MERGE_LIST)"; return 1 ;; esac
+  f="$(_order_dir "$key")/status.md"
+  [ -f "$f" ] || { _die "status.md 가 없다: $key"; return 1; }
+  ts="$(date '+%Y-%m-%d %H:%M')"
+
+  if ! grep -q '^##[[:space:]]*릴리즈 노트[[:space:]]*$' "$f"; then
+    awk '
+      function head() { print "## 릴리즈 노트"; print "| 배포일 | 저장소 | 브랜치 | 행 | 릴리스 PR | 머지 | 페이지 | 갱신 |"; print "|---|---|---|---|---|---|---|---|"; print ""; done = 1 }
+      !done && /^##[ \t]*세션[ \t]*$/ { head() }
+      { print }
+      END { if (!done) { print ""; head() } }
+    ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  fi
+
+  awk -v day="$day" -v rp="$rp" -v br="$br" -v row="$row" -v pr="$pr" -v mg="$mg" -v url="$url" -v ts="$ts" '
+    function trim(x) { gsub(/^[ \t]+|[ \t]+$/, "", x); return x }
+    function emit() { printf "| %s | %s | %s | %s | %s | %s | %s | %s |\n", day, rp, br, row, pr, mg, url, ts; found = 1 }
+    /^## / { if (insec && !found) emit(); insec = ($0 ~ /^##[ \t]*릴리즈 노트[ \t]*$/) }
+    insec && /^[ \t]*\|/ {
+      split($0, c, "|")
+      if (trim(c[2]) == day && trim(c[3]) == rp) { emit(); next }
+      print; next
+    }
+    insec && !found && /^[ \t]*$/ { emit() }
+    { print }
+    END { if (insec && !found) emit() }
   ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
 }
 

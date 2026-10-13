@@ -12,6 +12,10 @@
 #     --with-test  통합 뒤 검증까지 돈다. 기본은 통합에서 멈춘다(검증은 배포가 끝난 뒤에야 의미가 있다).
 #     --approve-commit  사람이 커밋·푸시를 미리 승인한 실행. 세션마다 그 승인을 지시로 덧붙여 통합 세션이 묻고 멈추지 않게 한다.
 #
+# 세션 이어 쓰기: 기본은 단계마다 새 세션이다. 다음 일이 '수정'이고, 직전 세션의 마지막 문맥이
+# DOBBY_REUSE_MAX_CTX 이하이며(dobby-lib.sh), 직전 호출 뒤 DOBBY_REUSE_MAX_GAP 초가 지나지 않았을 때만 직전 세션을
+# `claude -p --resume` 으로 이어 쓴다(근거: session-reuse.md).
+#
 # 멈추는 경우:
 #   dobby-order 가 만든 메타 · 설계 미확정 · 통합 완료(--with-test 없을 때) · 검증 전부 통과
 #   · 해결/종료/완료/보류 단계 · 모르는 단계값
@@ -56,14 +60,7 @@ design_approved() {
     jq -r '.["사용자"] // empty, .auto // empty' "$D/design-ack.json" | grep -qx "$rev"
 }
 
-# 검증 이력 표의 마지막 행이 '완료'이고 실패가 0이면 통과.
-test_passed() {
-  awk -F'|' '
-    function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
-    /^## /{ins=(index($0,"테스트 실행 이력")>0)?1:0; next}
-    ins && /^\|/ && $2 !~ /회차|---/ {st=t($4); split(t($5),c,"/")}
-    END{exit (st=="완료" && c[2]+0==0)?0:1}' "$D/status.md"
-}
+test_passed() { _v2_test_passed "$KEY"; }
 
 # 세션 한 번이 무엇이든 남겼는지 보는 지문 — 단계, 리뷰·검증 폴더 목록, 주요 문서의 수정 시각.
 fingerprint() {
@@ -84,7 +81,7 @@ dobby-order-v2 통합 단계에서 오더 작업 브랜치에 커밋하고 푸�
 정식 배포 브랜치로의 PR·머지·배포는 이 승인에 들어가지 않는다."
 extra=(); [ "$APPROVE" = 1 ] && extra=(--append-system-prompt "$CONSENT")
 
-n=0
+n=0; sid=""
 while :; do
   ph="$(phase)"
   case "$ph" in
@@ -101,8 +98,16 @@ while :; do
 
   n=$((n + 1))
   before="$(fingerprint)"
-  printf '\n━━ %s · 세션 %d · 시작 단계 %s · %s\n' "$KEY" "$n" "$ph" "$(date '+%H:%M')"
-  out="$(cd "$WT" && claude -p "/dobby-order-v2 $KEY" ${extra[@]+"${extra[@]}"} --permission-mode "$MODE" --output-format json 2>/dev/null)"
+  resume=(); how="새 세션"
+  if [ -n "$sid" ] && _v2_next_is_fix "$KEY"; then
+    if r="$(dobby_v2_reuse_ok "$KEY" "$sid")"; then
+      resume=(--resume "$sid"); how="직전 세션 이어 쓰기(문맥 ${r%%$'\t'*}, ${r##*$'\t'}초 전)"
+    else
+      how="새 세션(직전 세션이 이어 쓰기 기준을 넘음)"
+    fi
+  fi
+  printf '\n━━ %s · 세션 %d · 시작 단계 %s · %s · %s\n' "$KEY" "$n" "$ph" "$how" "$(date '+%H:%M')"
+  out="$(cd "$WT" && claude -p ${resume[@]+"${resume[@]}"} "/dobby-order-v2 $KEY" ${extra[@]+"${extra[@]}"} --permission-mode "$MODE" --output-format json 2>/dev/null)"
   code=$?
   sid="$(printf '%s' "$out" | jq -r '.session_id // empty' 2>/dev/null)"
   err="$(printf '%s' "$out" | jq -r '.is_error // false' 2>/dev/null)"
@@ -110,7 +115,7 @@ while :; do
   denied="$(printf '%s' "$out" | jq -r '.permission_denials[]?.tool_input.command // empty' 2>/dev/null)"
   [ -n "$denied" ] && printf '권한이 막혀 실행하지 못한 명령:\n%s\n' "$denied"
 
-  dobby_event "$KEY" "자동 실행 세션 $n 종료 — 시작 단계 $ph → 지금 $(phase), 세션 ${sid:-알 수 없음}" 2>/dev/null
+  dobby_event "$KEY" "자동 실행 세션 $n 종료 — 시작 단계 $ph → 지금 $(phase), ${how}, 세션 ${sid:-알 수 없음}" 2>/dev/null
   printf '━━ 세션 %d 끝 · 세션 아이디 %s · 지금 단계 %s\n' "$n" "${sid:-알 수 없음}" "$(phase)"
 
   [ "$code" -eq 0 ] && [ "$err" != "true" ] || die "세션이 오류로 끝났습니다(종료 코드 $code). 복기: claude --resume ${sid:-?}"
