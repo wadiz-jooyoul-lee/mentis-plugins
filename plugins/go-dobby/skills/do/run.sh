@@ -56,6 +56,7 @@ grep -q '^## 지난 세션' "$D/status.md" || [ "$(phase)" = 착수 ] \
 
 design_approved() {
   local rev; rev="$(dobby_design_rev "$KEY")"
+  _v2_takeover_pending "$KEY" && return 1   # dobby-order 에서 옮겨 와 이어받기 설계가 아직 확정 전
   [ -n "$rev" ] && [ -f "$D/design-ack.json" ] &&
     jq -r '.["사용자"] // empty, .auto // empty' "$D/design-ack.json" | grep -qx "$rev"
 }

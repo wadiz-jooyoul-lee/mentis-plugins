@@ -1112,6 +1112,7 @@ dobby_design_ack() {
   f="$(_order_dir "$key")/design-ack.json"
   [ -f "$f" ] || printf '{}' > "$f"
   jq --arg s "$slug" --arg r "$rev" '.[$s] = $r' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  case "$slug" in 사용자|auto) _v2_takeover_clear "$key" ;; esac   # /do 이어받기 설계 확정
   printf '%s' "$rev"
 }
 
@@ -1771,14 +1772,34 @@ _review_last_round() {
   printf '%s' "$n"
 }
 
-# dobby_migrate_v2_check KEY — dobby-order 로 진행하던 오더를 v2 로 옮길 수 있는지 보고, 옮긴 뒤 채울 것을 알려 준다.
+# _v2_takeover_pending KEY — 상태 문서에 '이어받기' 표시가 있으면 0. 표시는 dobby_migrate_v2_apply 가 남기고,
+# 사람(또는 auto)이 이어받기 설계를 확정할 때 dobby_design_ack 가 지운다. /do 단계 판정과 run.sh 가 본다.
+_v2_takeover_pending() {
+  grep -q '^- \*\*이어받기\*\*:' "$(_order_dir "$1")/status.md" 2>/dev/null
+}
+
+# _v2_takeover_mark KEY 문구 — '## 현재 단계' 의 단계 줄 아래에 이어받기 표시를 넣는다(있으면 바꾼다).
+_v2_takeover_mark() {
+  local f; f="$(_order_dir "$1")/status.md"; [ -f "$f" ] || return 1
+  awk -v m="- **이어받기**: $2" '
+    /^## / { insec = ($0 ~ /현재 단계/) }
+    insec && /^- \*\*이어받기\*\*:/ { next }
+    { print; if (insec && $0 ~ /^[ \t]*-[ \t]*\*\*단계\*\*/) print m }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+
+# _v2_takeover_clear KEY — 이어받기 표시를 지운다.
+_v2_takeover_clear() {
+  local f; f="$(_order_dir "$1")/status.md"; [ -f "$f" ] || return 0
+  _v2_takeover_pending "$1" || return 0
+  awk '!/^- \*\*이어받기\*\*:/' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+
+# dobby_migrate_v2_check KEY — dobby-order 로 진행하던 오더를 v2 로 옮길 수 있는지 보고, 옮긴 뒤 /do 가 무엇을 하는지 알려 준다.
 # 아무것도 고치지 않는다. "항목<TAB>값" 줄로 낸다. 0 = 옮길 수 있음, 1 = 옮길 수 없음('불가' 줄에 이유).
-#   필요 줄은 v2 의 뒷세션이 읽는데 지금 없는 것이다 — 전환 세션이 채운다.
-#   · 설계 보강: 분석 단계, 또는 구현이 안 끝난 구현 단계면 구현 세션이 design.md 의 작업 순서·건드리지 않을 것·검증 명령을 읽는다.
-#   · 리뷰 항목: 분석·구현·리뷰 단계면 앞으로 리뷰 세션이 design.md 의 '## 리뷰 항목' 을 읽는다.
-#   · 테스트 계획: 검증 세션은 test-plan.md 하나만 읽는다.
+#   진행 중(분석·구현·리뷰)인 오더는 끝났는지를 여기서 판정하지 않는다. 전환이 이어받기 표시를 남기면
+#   /do 가 기존 설계와 작업 브랜치를 보고 끝난 것과 남은 것을 가른 뒤 남은 작업을 설계한다.
 dobby_migrate_v2_check() {
-  local key="$1" d f o ph dev rd blk n s st r active="" h miss=""
+  local key="$1" d f o ph dev rd blk n s st r active=""
   d="$(_order_dir "$key")"; f="$d/status.md"; o="$d/orchestration.md"
   [ -f "$f" ] || { printf '불가\t메타가 없다(%s)\n' "$d"; return 1; }
   ph="$(_order_phase "$key")"
@@ -1805,38 +1826,36 @@ dobby_migrate_v2_check() {
     n="$(find "$d/reviews/round-$rd" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l | tr -d ' ')"
     if [ "$n" -gt 0 ]; then blk="$(dobby_blocking "$key" "$rd" 2>/dev/null)"; else blk="결과 없음"; fi
     printf '마지막리뷰\t%s차 · 파일 %s개 · 막는 지적 %s\n' "$rd" "$n" "$blk"
-    [ "$rd" -ge 3 ] && printf '주의\t리뷰가 이미 %s차다. v2 는 3차를 넘기면 수정 뒤 멈추고 사람에게 넘긴다\n' "$rd"
   else
     printf '마지막리뷰\t없음\n'
   fi
-  [ "$ph" = 구현 ] && [ -n "$active" ] && printf '확인\t구현 단계인데 진행 중인 행이 있다 — 구현이 끝났는지 사람에게 묻는다\n'
-  if [ ! -f "$d/design.md" ]; then
-    printf '필요\t없음 — 설계 문서가 없어 다음 v2 세션이 분석 문서부터 다시 설계한다\n'
-  else
-    if [ "$ph" = 분석 ] || [ "$ph" = 구현 ]; then
-      for h in '작업 순서' '건드리지 않을 것' '검증 명령'; do grep -q "^## $h" "$d/design.md" || miss="$miss, $h"; done
-      [ -n "$miss" ] && printf '필요\t설계 보강 — design.md 에 %s 절%s\n' "${miss#, }" \
-        "$([ "$ph" = 구현 ] && printf ' (구현이 안 끝났을 때만 — 끝났으면 구현 세션이 다시 돌지 않는다)')"
-    fi
-    case "$ph" in 분석|구현|리뷰)
-      grep -q '^## 리뷰 항목' "$d/design.md" || printf '필요\t리뷰 항목 — design.md 끝에 ## 리뷰 항목 절\n' ;;
-    esac
-    [ -f "$d/test-plan.md" ] || printf '필요\t테스트 계획 — test-plan.md\n'
-  fi
+  case "$ph" in
+    분석|구현|리뷰)
+      if [ -f "$d/design.md" ]; then
+        printf '다음\t이어받기 설계 — /do 가 기존 설계와 작업 브랜치를 보고 끝난 것과 남은 것을 가른 뒤, 남은 작업을 설계해 확정받는다\n'
+      else
+        printf '다음\t설계 — 설계 문서가 없어 /do 가 분석 문서부터 다시 설계한다\n'
+      fi ;;
+    통합) printf '다음\t검증 — 배포가 끝난 뒤에 /do 를 실행한다\n' ;;
+    검증) printf '다음\t검증 결과에 따라 수정 또는 끝\n' ;;
+  esac
+  case "$ph" in 통합|검증)
+    [ -f "$d/test-plan.md" ] || printf '필요\t테스트 계획 — test-plan.md (검증 세션은 이 문서 하나만 읽는다)\n' ;;
+  esac
   return 0
 }
 
-# dobby_migrate_v2_apply KEY [구현미완료] — 전환의 기계적인 부분을 한다. 문서 "내용"은 쓰지 않는다(전환 세션의 몫).
-#   ① 상태 문서의 워크트리를 확인하고, 지워졌으면 남은 브랜치로 되살린다(dobby_ensure_worktree).
+# dobby_migrate_v2_apply KEY — 전환의 기계적인 부분을 한다. 문서 "내용"은 쓰지 않는다.
+#   ① 상태 문서의 워크트리를 확인하고, 지워졌으면 남은 브랜치로 되살린다(dobby_ensure_worktree). 새 브랜치는 만들지 않는다.
 #   ② 개발 담당 행이 없으면 v2-dev 행을 만든다.
 #   ③ dobby_session_log 로 '## 지난 세션' 표를 만든다 — v2 오더의 표지다. 원래 세션은 '이전 세션' 줄로 옮겨진다.
 #   ④ 진행 중(분석·구현·리뷰) 행을 대기로 돌린다 — 세션 사이 빈 시간에 보드가 정체로 경고하지 않게.
-#   ⑤ 단계를 v2 의 뜻에 맞춘다. dobby-order 의 '구현' 은 "구현 중", v2 의 '구현' 은 "구현 끝" 이다.
-#      · 구현미완료=1 이면 '분석' 으로 되돌린다 — 다음 v2 세션이 설계를 보여 주고 확정받은 뒤 구현 세션으로 간다.
-#      · 구현이 끝났고 마지막 리뷰 폴더에 결과가 있으면 다음 차수의 빈 폴더를 연다 — 옛 결과를 덮어쓰지 않게.
+#   ⑤ 분석·구현·리뷰 단계이고 설계 문서가 있으면 단계를 '분석' 으로 두고 이어받기 표시를 남긴다.
+#      dobby-order 의 '구현' 은 "구현 중", v2 의 '구현' 은 "구현 끝" 이라 그대로 두면 남은 일을 건너뛴다.
+#      끝난 것과 남은 것은 /do 의 이어받기 설계가 작업 브랜치를 보고 가른다.
 #   첫 워크트리 경로를 stdout 으로 준다.
 dobby_migrate_v2_apply() {
-  local key="$1" unfinished="${2:-0}" d f o ph dev rd repo wt="" p s st r
+  local key="$1" d f o ph dev repo wt="" p s st r
   dobby_migrate_v2_check "$key" >/dev/null || { _die "옮길 수 없는 오더다 — dobby_migrate_v2_check $key 로 이유를 확인"; return 1; }
   d="$(_order_dir "$key")"; f="$d/status.md"; o="$d/orchestration.md"; ph="$(_order_phase "$key")"
   for repo in $(awk '
@@ -1856,16 +1875,13 @@ dobby_migrate_v2_apply() {
       case "$st" in 분석|구현|리뷰) dobby_agent_state "$key" "$s" 대기 ;; esac
     done < <(_board_rows "$o")
   fi
-  if [ "$ph" = 구현 ]; then
-    if [ "$unfinished" = 1 ]; then
-      dobby_phase "$key" 분석
-    else
-      rd="$(_review_last_round "$key")"
-      [ "$rd" -gt 0 ] && [ -n "$(find "$d/reviews/round-$rd" -maxdepth 1 -name '*.md' 2>/dev/null)" ] \
-        && dobby_review_path "$key" $((rd + 1)) review-agent >/dev/null
-    fi
-  fi
-  dobby_event "$key" "/do 로 전환 — 전환 전 단계 $ph, 지금 단계 $(_order_phase "$key")"
+  case "$ph" in 분석|구현|리뷰)
+    if [ -f "$d/design.md" ]; then
+      [ "$ph" = 분석 ] || dobby_phase "$key" 분석
+      _v2_takeover_mark "$key" "설계 필요 (전환 전 단계 $ph)"
+    fi ;;
+  esac
+  dobby_event "$key" "/do 로 전환 — 전환 전 단계 $ph, 지금 단계 $(_order_phase "$key")$(_v2_takeover_pending "$key" && printf ', 이어받기 설계 대기')"
   printf '%s' "${wt:-$PWD}"
 }
 
