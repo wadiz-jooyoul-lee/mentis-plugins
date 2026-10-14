@@ -69,10 +69,10 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 | `dobby_conflict_evidence 임시워크트리 브랜치 환경브랜치` | 충돌을 풀기 전 | 충돌 파일마다 양쪽 이력·diff 를 한 번에. **근거 없이 한쪽을 고르지 않는다** |
 | `dobby_bridge_finish 임시워크트리 브랜치 환경브랜치` | 충돌을 푼 뒤 | 표시자·스테이지·저장소 규칙을 검사하고 커밋·푸시·임시 워크트리 정리 |
 | `dobby_ship_stage KEY 저장소 환경 단계 [PR] [빌드] [비고]` | dobby-ship 단계 전이마다 | status.md `## 배포` 표를 **(저장소, 환경)별 한 행**으로 upsert. **어휘 아홉 개·환경 네 개·저장소 둘 밖이면 거부.** 저장소 칸이 없는 옛 6칸 표는 이때 7칸으로 올린다. 다음 실행이 여기서 이어받는다 |
-| `dobby_v2_autorun KEY` | dobby-order-v2 설계 확정 직후 | 대시보드 '자동 실행'(run.sh, 커밋·푸시 승인 포함)을 불러 띄운다. 0 시작 · 1 대시보드가 거부(이유 출력) · 2 대시보드에 닿지 못함(직접 실행 명령 출력). 대시보드가 띄워야 세션을 닫아도 실행이 살아 있다 |
-| `dobby_v2_reuse_ok KEY SID` | run.sh 다음 세션 띄우기 전 | 다음 일이 수정이고 SID 세션의 마지막 문맥 12만 이하·5분 안이면 "문맥<TAB>경과초" 출력 후 0, 아니면 출력 없이 1. 근거는 `skills/dobby-order-v2/session-reuse.md` |
-| `dobby_v2_next_hint KEY` | dobby-order-v2 세션 마무리(대화형) | 이어 쓰는 쪽이 쌀 때만 `다음` 칸 안내 세 줄(기한 지금+4분)을 출력. 아니면 출력 없음. 헤드리스 세션에서는 늘 침묵 |
-| `dobby_v2_change_open KEY [check]` | dobby-order-v2 변경 접수 | 자동 실행 중이면 거부(1). `check` 면 그 확인만 한다. 아니면 해결 표시를 무르고, 다음 리뷰 차수 빈 폴더를 열고(마지막 폴더가 비었으면 재사용), 단계를 분석으로 바꾼 뒤 리뷰 시작 차수를 출력한다. 그다음 `dobby_design_ack` 를 부르면 새 세션이 그 변경을 구현한다 |
+| `dobby_v2_autorun KEY` | `/do` 설계 확정 직후 | 대시보드 '자동 실행'(run.sh, 커밋·푸시 승인 포함)을 불러 띄운다. 0 시작 · 1 대시보드가 거부(이유 출력) · 2 대시보드에 닿지 못함(직접 실행 명령 출력). 대시보드가 띄워야 세션을 닫아도 실행이 살아 있다 |
+| `dobby_v2_reuse_ok KEY SID` | run.sh 다음 세션 띄우기 전 | 다음 일이 수정이고 SID 세션의 마지막 문맥 12만 이하·5분 안이면 "문맥<TAB>경과초" 출력 후 0, 아니면 출력 없이 1. 근거는 `skills/do/session-reuse.md` |
+| `dobby_v2_next_hint KEY` | `/do` 세션 마무리(대화형) | 이어 쓰는 쪽이 쌀 때만 `다음` 칸 안내 세 줄(기한 지금+4분)을 출력. 아니면 출력 없음. 헤드리스 세션에서는 늘 침묵 |
+| `dobby_v2_change_open KEY [check]` | `/do` 변경 접수 | 자동 실행 중이면 거부(1). `check` 면 그 확인만 한다. 아니면 해결 표시를 무르고, 다음 리뷰 차수 빈 폴더를 열고(마지막 폴더가 비었으면 재사용), 단계를 분석으로 바꾼 뒤 리뷰 시작 차수를 출력한다. 그다음 `dobby_design_ack` 를 부르면 새 세션이 그 변경을 구현한다 |
 | `dobby_release_note KEY 배포일 저장소 브랜치 행번호 PR 머지 [페이지주소]` | dobby-release 기록 단계 | status.md `## 릴리즈 노트` 표를 **(배포일, 저장소)별 한 행**으로 upsert. 배포일은 `YYYY-MM-DD`, 머지 칸은 `머지됨·머지 안 함·충돌·건너뜀·확인 못 함` 밖이면 거부. 표가 없으면 `## 세션` 앞에 만든다. 대시보드 오더 화면이 이 표로 등록 여부를 보여 준다 |
 | `dobby_commit_push 워크트리 브랜치 "메시지"` | P6 통과 후 | commit --no-verify + push. **⛔ 메시지에 내부 용어(`round-N`·리뷰 반영·슬러그)·금지 서명(Co-Authored-By 등) 감지 시 거부**(코드 강제) |
 | `dobby_bootstrap_inline KEY "제목" 종류 슬러그 "이름" "설명" [상태] [CWD]` | P4-L·P4-C·P4-W 인라인 분기 | status 골격+제목+종류+세션+상태표 1행+agent-logs(메인 세션 전사)를 한 번에 |
@@ -118,7 +118,7 @@ ORCHESTRATION_META="${ORCHESTRATION_META_PATH:-$ORCHESTRATION_WORKSPACE/meta}"
 | `ORCHESTRATION_DOCS_ROOT` | 참고 문서 루트. 문서 = `$ORCHESTRATION_DOCS_ROOT/{repo}.md`(파일) 또는 `$ORCHESTRATION_DOCS_ROOT/{repo}/`(폴더) | `$HOME/work/repos/docs` | 전체 |
 | `ORCHESTRATION_BACKUP_DIR` | 메타 백업 저장 위치(선택) | `$HOME/claude-projects-backup/orchestration` | dobby-resolve |
 | `ORCHESTRATION_BACKUP_KEEP_DAYS` | 진행중 백업 보관 기간(일, 선택) | `14` | dobby-resolve |
-| `ORCHESTRATION_DASHBOARD_URL` | 대시보드 주소(선택). 설계 확정 뒤 자동 실행을 대시보드에 맡겨 띄울 때 쓴다 | `http://localhost:7253` | dobby-order-v2 |
+| `ORCHESTRATION_DASHBOARD_URL` | 대시보드 주소(선택). 설계 확정 뒤 자동 실행을 대시보드에 맡겨 띄울 때 쓴다 | `http://localhost:7253` | `/do` |
 | `TEST_LOGIN_ID` / `TEST_LOGIN_PW` | 테스트 계정(선택) | (없음 → 로그인 필요 테스트는 건너뜀) | dobby-test |
 
 - "사용 스킬"은 그 변수를 **직접 쓰는** 스킬을 표시한 것이다. 설정 파일(`config.env`)에는 모든 변수를 함께 두고, 각 스킬은 자기에게 필요한 값만 사용한다.
