@@ -1,29 +1,9 @@
 # mentis-plugins
 
-Jira 이슈 생명주기와 멀티 에이전트 오케스트레이션, 문서 동기화를 담은 Claude Code 플러그인 마켓플레이스입니다. 세 플러그인을 제공합니다:
+Jira 이슈 생명주기와 멀티 에이전트 오케스트레이션, 문서 동기화를 담은 Claude Code 플러그인 마켓플레이스입니다. 두 플러그인을 제공합니다:
 
-- **`work-dobby`** — 이슈의 **착수 → 구현 → 테스트 → 종료** 생명주기 + 멀티 에이전트 오케스트레이션 (원본).
-- **`go-dobby`** — work-dobby를 재설계한 **단일 진입점 오케스트레이션**. 모든 이슈/작업을 `dobby-order` 하나로 시작해 필요한 에이전트 수(팬아웃 K)를 스스로 판단해 진행합니다. 설계 상세는 `plugins/go-dobby/reference/redesign-spec.md` 참고.
+- **`go-dobby`** — 이전 플러그인 work-dobby(삭제됨)를 재설계한 **단일 진입점 오케스트레이션**. 모든 이슈/작업을 `dobby-order` 하나로 시작해 필요한 에이전트 수(팬아웃 K)를 스스로 판단해 진행합니다. 설계 상세는 `plugins/go-dobby/reference/redesign-spec.md` 참고.
 - **`mentis-docs`** — 레포 **git pull 후 diff를 근거로 대응 문서를 자동 갱신**하는 `docs-sync` 스킬.
-
-## work-dobby 스킬
-
-**단독 이슈 생명주기** (`issue-start → issue-impl → issue-test → issue-end`)
-
-| 스킬 | 역할 |
-|------|------|
-| `issue-start` | 이슈 착수 — 워크트리·브랜치 생성 + 코드 분석 + 테스트 목록 초안 |
-| `issue-impl` | 이슈 구현 — 분석 설계대로 구현 + 적대적 셀프 코드리뷰 + 커밋·푸시 + (리뷰 안정 시) 베이스 머지 |
-| `issue-test` | 이슈 테스트 — chrome-devtools로 시나리오 검증, 결과 리포트 |
-| `issue-end` | 이슈 종료 — 마무리·워크트리 정리 |
-
-**멀티 에이전트 오케스트레이션**
-
-| 스킬 | 역할 |
-|------|------|
-| `i-order-you-to-develop` | 메인 오케스트레이터 — 하위이슈 분배·구현·리뷰 루프·통합 |
-| `agent-start` | 멀티 에이전트용 착수·분석 + 오케스트레이션 메타(계약·보드) 규격 |
-| `agent-impl` | 서브 에이전트의 구현 단계 (자기 워크트리·계약 범위 안에서 구현·커밋·리뷰 요청) |
 
 ## go-dobby 스킬 (재설계)
 
@@ -56,33 +36,20 @@ Jira 이슈 생명주기와 멀티 에이전트 오케스트레이션, 문서 �
 
 ## 설정 (첫 실행 시 1회)
 
-스킬을 처음 실행하면 아래 값을 확인해 `~/.config/work-dobby/config.env`에 저장하고 이후 재사용합니다. **기본값이 있는 항목은 현재 값을 보여주고 변경 의사를 묻고**, 선택 항목은 건너뛸 수 있습니다.
-
-| 변수 | 뜻 | 기본값 |
-|------|----|--------|
-| `JIRA_BASE_URL` | Jira 호스트 | `https://wadiz.atlassian.net` |
-| `DOBBY_WORKSPACE` | 작업 루트(하위 `subtree/`·`meta/`) | `$HOME/work/dobby-workspace` |
-| `DOBBY_META_PATH` (선택) | 메타 경로 직접 지정(subtree와 분리) | 없음 → `$DOBBY_WORKSPACE/meta` |
-| `DOBBY_DEFAULT_BASE` | 기본 베이스 브랜치 | `master` |
-| `DOBBY_REPOS_ROOT` | 원본 저장소 상위 폴더 (소스 루트 = `$DOBBY_REPOS_ROOT/{repo}`) | `$HOME/work/repos` |
-| `DOBBY_ENV_MAP` | 테스트 환경→호스트 매핑 | `dev=dev.wadiz.io,rc=rc.wadiz.kr,rc2=rc2.wadiz.kr,rc4=rc4.wadiz.io` |
-| `DOBBY_DOCS_ROOT` | 참고 문서 루트 (`{repo}.md` 또는 `{repo}/`, 없으면 소스 확인) | `$HOME/work/repos/docs` |
-| `TEST_LOGIN_ID`/`TEST_LOGIN_PW` (선택) | 테스트 계정 | 없음 → 로그인 필요 테스트 생략 |
-
-작업 폴더는 `$DOBBY_WORKSPACE/subtree/{repo}-{이슈키}`, 메타는 `$DOBBY_META/.issue-start/...`(기본 `$DOBBY_WORKSPACE/meta`, `DOBBY_META_PATH`로 별도 지정 가능)처럼 **분리 저장**됩니다. 설정 예시는 `plugins/work-dobby/config.env.example`, 스킬이 공유하는 설정 절차·변수 규격의 단일 출처는 `plugins/work-dobby/reference/config.md` 참고.
+go-dobby 설정은 `/dobby-init` 으로 `~/.config/go-dobby/config.env` 에 저장합니다. 변수 규격은 `plugins/go-dobby/reference/config.md` 참고.
 
 ## 설치
 
 ```
 /plugin marketplace add <github-owner>/mentis-plugins
-/plugin install work-dobby@mentis-plugins     # 또는 go-dobby@mentis-plugins
+/plugin install go-dobby@mentis-plugins     # 또는 mentis-docs@mentis-plugins
 ```
 
 로컬에서 바로:
 
 ```
 /plugin marketplace add ~/work/mentis-plugins
-/plugin install work-dobby@mentis-plugins     # 또는 go-dobby@mentis-plugins
+/plugin install go-dobby@mentis-plugins     # 또는 mentis-docs@mentis-plugins
 ```
 
 ## 구조
@@ -91,13 +58,6 @@ Jira 이슈 생명주기와 멀티 에이전트 오케스트레이션, 문서 �
 mentis-plugins/
 ├── .claude-plugin/marketplace.json
 └── plugins/
-    ├── work-dobby/                      # 원본
-    │   ├── .claude-plugin/plugin.json
-    │   ├── config.env.example
-    │   ├── reference/config.md          # 공통 설정(단일 출처)
-    │   └── skills/
-    │       ├── issue-start/  issue-impl/  issue-test/  issue-end/
-    │       └── i-order-you-to-develop/  agent-start/  agent-impl/
     └── go-dobby/                        # 재설계 (단일 진입점)
         ├── .claude-plugin/plugin.json
         ├── config.env.example
