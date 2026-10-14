@@ -684,7 +684,7 @@ _wt_row() {
 }
 
 # dobby_ensure_worktree REPO KEY PREFIX BASE — 워크트리가 있으면 그대로 쓰고, 없으면 만든다. 경로를 stdout 으로 준다.
-# dobby-order-v2 용이다. dobby_setup_worktree 는 dobby-order·dobby-qa 가 쓰므로 고치지 않고, 그 앞에서 막힐 곳만 먼저 처리한다.
+# /do 용이다. dobby_setup_worktree 는 dobby-order·dobby-qa 가 쓰므로 고치지 않고, 그 앞에서 막힐 곳만 먼저 처리한다.
 #   ① 상태 문서에 이 저장소의 행이 이미 있으면 그 브랜치·경로를 쓴다(새 이름을 조립하지 않는다).
 #   ② 폴더가 지워졌고 브랜치가 남아 있으면 -b 없이 그 브랜치로 되살린다(로컬에 없으면 origin 에서 받아 온다).
 #      dobby_setup_worktree 는 이때 "a branch named … already exists" 로 실패한다.
@@ -1700,7 +1700,7 @@ dobby_set_session() {
 EOF
 }
 
-# dobby_session_log KEY SLUG SUBKEY STEP [CWD] — 세션을 단계마다 새로 여는 오더(dobby-order-v2)의 세션 기록.
+# dobby_session_log KEY SLUG SUBKEY STEP [CWD] — 세션을 단계마다 새로 여는 오더(/do)의 세션 기록.
 #   ① status.md '## 세션' 의 세션 ID·작업 경로를 **지금 세션으로 바꾼다**(대시보드 '이어가기'가 최신 세션을 연다).
 #      dobby_set_session 은 이미 있으면 두지만, 이 함수는 단계마다 갈아 끼운다.
 #   ② status.md '## 지난 세션' 표에 한 줄을 더한다(시각·단계·세션 아이디·작업 경로) — 나중에 claude --resume 으로 복기.
@@ -1754,7 +1754,7 @@ _past_session_add() {
     END{ if(inb==1) print row }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
 }
 
-# ── dobby-order → dobby-order-v2 전환 (dobby-migrate-v2 스킬이 쓴다) ──────────────
+# ── dobby-order → /do 전환 (dobby-migrate-v2 스킬이 쓴다) ──────────────
 # _board_dev_slug OFILE — 상태표에서 이름이 "분석/개발자" 인 첫 행의 슬러그. 없으면 빈 값.
 _board_dev_slug() {
   local s st r
@@ -1783,9 +1783,9 @@ dobby_migrate_v2_check() {
   [ -f "$f" ] || { printf '불가\t메타가 없다(%s)\n' "$d"; return 1; }
   ph="$(_order_phase "$key")"
   printf '단계\t%s\n' "${ph:-빈 값}"
-  grep -q '^## 지난 세션' "$f" && { printf '불가\t이미 v2 오더다 — /dobby-order-v2 %s 로 이어간다\n' "$key"; return 1; }
+  grep -q '^## 지난 세션' "$f" && { printf '불가\t이미 v2 오더다 — /do %s 로 이어간다\n' "$key"; return 1; }
   case "$ph" in
-    착수) printf '불가\t착수 단계라 옮길 것이 없다 — /dobby-order-v2 %s 로 처음부터 시작한다\n' "$key"; return 1 ;;
+    착수) printf '불가\t착수 단계라 옮길 것이 없다 — /do %s 로 처음부터 시작한다\n' "$key"; return 1 ;;
     분석|구현|리뷰|통합|검증) ;;
     *) printf '불가\t%s 단계는 옮기지 않는다(끝났거나 보류 중이거나 모르는 값)\n' "${ph:-빈 값}"; return 1 ;;
   esac
@@ -1865,7 +1865,7 @@ dobby_migrate_v2_apply() {
         && dobby_review_path "$key" $((rd + 1)) review-agent >/dev/null
     fi
   fi
-  dobby_event "$key" "dobby-order-v2 로 전환 — 전환 전 단계 $ph, 지금 단계 $(_order_phase "$key")"
+  dobby_event "$key" "/do 로 전환 — 전환 전 단계 $ph, 지금 단계 $(_order_phase "$key")"
   printf '%s' "${wt:-$PWD}"
 }
 
@@ -2479,7 +2479,7 @@ dobby_ship_stage() {
 dobby_v2_autorun() {
   local key="$1" url="${ORCHESTRATION_DASHBOARD_URL:-http://localhost:7253}" chk res run
   [ -n "$key" ] || { _die "쓰임: dobby_v2_autorun KEY"; return 1; }
-  run="$DOBBY_LIB_DIR/../skills/dobby-order-v2/run.sh"
+  run="$DOBBY_LIB_DIR/../skills/do/run.sh"
   chk="$(curl -fsS --max-time 5 "$url/api/orders?v2run=$key" 2>/dev/null)" || {
     printf '대시보드(%s)에 닿지 못해 자동 실행을 띄우지 못했습니다.\n' "$url"
     printf '대시보드를 켠 뒤 오더 화면의 "자동 실행" 버튼을 누르거나, 터미널에서 직접 실행해 주세요:\n  bash %s %s --approve-commit\n' "$run" "$key"
@@ -2511,7 +2511,7 @@ dobby_fix_count() {
 
 # ── v2 세션 이어 쓰기 판정 — run.sh 와 대화형 세션 마무리(dobby_v2_next_hint)가 같은 규칙을 쓴다 ──
 # 기본은 단계마다 새 세션. 다음 일이 '수정'이고, 직전 세션의 마지막 문맥이 DOBBY_REUSE_MAX_CTX 이하이며,
-# 마지막 호출 뒤 DOBBY_REUSE_MAX_GAP 초 안일 때만 이어 쓴다. 근거 수치는 skills/dobby-order-v2/session-reuse.md.
+# 마지막 호출 뒤 DOBBY_REUSE_MAX_GAP 초 안일 때만 이어 쓴다. 근거 수치는 skills/do/session-reuse.md.
 DOBBY_REUSE_MAX_CTX=120000
 DOBBY_REUSE_MAX_GAP=300
 
@@ -2563,7 +2563,7 @@ dobby_v2_next_hint() {
   r="$(dobby_v2_reuse_ok "$key" "$(_session_id)")" || return 0
   ctx="${r%%$'\t'*}"
   printf '  - 이번엔 이 세션을 이어 쓰는 쪽이 쌉니다(다음 일: 수정, 지금 문맥 %s 토큰).\n' "$ctx"
-  printf '  - %s 전이면 /clear 없이 바로: /dobby-order-v2 %s\n' "$(date -v+4M '+%H:%M' 2>/dev/null || date -d '+4 min' '+%H:%M')" "$key"
+  printf '  - %s 전이면 /clear 없이 바로: /do %s\n' "$(date -v+4M '+%H:%M' 2>/dev/null || date -d '+4 min' '+%H:%M')" "$key"
   printf '  - 그 시각이 지났으면 /clear 후 같은 명령을 입력하세요.\n'
 }
 

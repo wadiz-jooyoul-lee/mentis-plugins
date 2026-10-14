@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# dobby-order-v2 자동 실행 장치 — 설계가 확정된 오더를 단계마다 새 세션으로 끝까지 돌린다.
+# /do 자동 실행 장치 — 설계가 확정된 오더를 단계마다 새 세션으로 끝까지 돌린다.
 #
-# 한 단계 = `claude -p "/dobby-order-v2 {키}"` 한 번. 실행이 끝나면 프로세스가 사라지므로
+# 한 단계 = `claude -p "/do {키}"` 한 번. 실행이 끝나면 프로세스가 사라지므로
 # 사람이 /clear 할 일이 없다. 단계가 끝날 때마다 세션 아이디를 이벤트 로그에 남긴다
 # (세션 안에서도 dobby_session_log 가 상태 문서의 '## 지난 세션' 표에 남긴다).
 #
@@ -46,7 +46,7 @@ dobby_load_config >/dev/null || die "설정을 읽지 못했습니다(/dobby-ini
 command -v jq >/dev/null || die "jq 가 필요합니다(brew install jq)"
 
 D="$ORCHESTRATION_META/$KEY"
-[ -f "$D/status.md" ] || die "$KEY 의 메타가 없습니다. 먼저 터미널에서 /dobby-order-v2 $KEY 로 설계를 확정하세요"
+[ -f "$D/status.md" ] || die "$KEY 의 메타가 없습니다. 먼저 터미널에서 /do $KEY 로 설계를 확정하세요"
 
 phase() { sed -nE 's/^- \*\*단계\*\*: *(.*)$/\1/p' "$D/status.md" | head -1; }
 # v2 오더의 표지는 '## 지난 세션' 표다(설계 세션이 1-1 에서 dobby_session_log 로 만든다).
@@ -77,7 +77,7 @@ WT="$(_order_worktree "$KEY")"
 [ -n "$WT" ] && [ -d "$WT" ] || WT="$PWD"
 
 CONSENT="이 실행은 사용자가 커밋과 푸시를 미리 승인한 자동 실행이다(대시보드 '자동 실행' 확인 창 또는 --approve-commit). \
-dobby-order-v2 통합 단계에서 오더 작업 브랜치에 커밋하고 푸시하는 것은 이미 동의를 받았으니 다시 묻지 말고 진행한다. \
+/do 통합 단계에서 오더 작업 브랜치에 커밋하고 푸시하는 것은 이미 동의를 받았으니 다시 묻지 말고 진행한다. \
 정식 배포 브랜치로의 PR·머지·배포는 이 승인에 들어가지 않는다."
 extra=(); [ "$APPROVE" = 1 ] && extra=(--append-system-prompt "$CONSENT")
 
@@ -87,10 +87,10 @@ while :; do
   case "$ph" in
     해결|종료|완료) echo "$KEY 는 이미 $ph 단계입니다."; exit 0 ;;
     보류)     die "$KEY 는 보류 중입니다. 다시 진행하려면 상태 문서의 단계를 되돌린 뒤 실행하세요" ;;
-    착수|"")  die "설계가 끝나지 않았습니다. 터미널에서 /dobby-order-v2 $KEY 로 설계를 확정하세요" ;;
-    분석)     design_approved || die "설계가 확정되지 않았습니다. 터미널에서 /dobby-order-v2 $KEY 로 설계를 보고 \"확정\"해 주세요" ;;
+    착수|"")  die "설계가 끝나지 않았습니다. 터미널에서 /do $KEY 로 설계를 확정하세요" ;;
+    분석)     design_approved || die "설계가 확정되지 않았습니다. 터미널에서 /do $KEY 로 설계를 보고 \"확정\"해 주세요" ;;
     구현|리뷰) ;;
-    통합)     [ "$WITH_TEST" = 1 ] || { echo "통합까지 끝났습니다. 배포한 뒤 run.sh $KEY --with-test 또는 /dobby-order-v2 $KEY 로 검증하세요."; exit 0; } ;;
+    통합)     [ "$WITH_TEST" = 1 ] || { echo "통합까지 끝났습니다. 배포한 뒤 run.sh $KEY --with-test 또는 /do $KEY 로 검증하세요."; exit 0; } ;;
     검증)     test_passed && { echo "검증을 전부 통과했습니다. /dobby-resolve $KEY 로 해결 처리하세요."; exit 0; } ;;
     *)        die "모르는 단계값입니다: $ph. 상태 문서를 확인하세요" ;;
   esac
@@ -107,7 +107,7 @@ while :; do
     fi
   fi
   printf '\n━━ %s · 세션 %d · 시작 단계 %s · %s · %s\n' "$KEY" "$n" "$ph" "$how" "$(date '+%H:%M')"
-  out="$(cd "$WT" && claude -p ${resume[@]+"${resume[@]}"} "/dobby-order-v2 $KEY" ${extra[@]+"${extra[@]}"} --permission-mode "$MODE" --output-format json 2>/dev/null)"
+  out="$(cd "$WT" && claude -p ${resume[@]+"${resume[@]}"} "/do $KEY" ${extra[@]+"${extra[@]}"} --permission-mode "$MODE" --output-format json 2>/dev/null)"
   code=$?
   sid="$(printf '%s' "$out" | jq -r '.session_id // empty' 2>/dev/null)"
   err="$(printf '%s' "$out" | jq -r '.is_error // false' 2>/dev/null)"
