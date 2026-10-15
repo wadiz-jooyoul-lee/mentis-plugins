@@ -83,7 +83,17 @@ description: 테스트까지 끝난 오더(이슈/작업)의 지금까지 작업
 - 최근 회차의 실패·`SKIP(미비)` — 결과 절에 그대로 드러난다는 것.
 
 ### S3. 원고 작성
-여덟 절을 위 순서대로 쓴다. 각 절의 제목에 `id`를 달고 머리에 목차를 둔다.
+여덟 절을 위 순서대로 쓴다. 각 절의 제목에 `id`를 단다.
+
+- **목차는 왼쪽 열에 둔다.** 화면 폭 1000px 이상이면 본문 왼쪽 220px 열에 붙어, 본문을 내려도 따라온다. 그보다 좁으면(휴대폰) 제목 아래에 그대로 둔다. 원고는 `.wrap` 안에 머리글, 목차(`nav.toc`), 여덟 절 순서로 두고 아래 규칙을 스타일 끝에 넣는다. `span 9` 는 머리글 하나와 여덟 절을 더한 수다.
+
+```css
+@media (min-width: 1000px) {
+  .wrap { max-width: 1160px; display: grid; grid-template-columns: 220px minmax(0, 1fr); column-gap: 40px; row-gap: 28px; }
+  .wrap > * { grid-column: 2; min-width: 0; }
+  .wrap > .toc { grid-column: 1; grid-row: 1 / span 9; align-self: start; position: sticky; top: calc(env(safe-area-inset-top, 0px) + 24px); max-height: calc(100vh - 48px); overflow-y: auto; }
+}
+```
 
 - **설계 절에 흐름도를 넣는다.** 사용자가 무엇을 하면 화면·코드·서버가 어떤 순서로 움직이는지를 인라인 SVG로 그린다. 그림으로 옮길 흐름이 없으면 번호 매긴 단계 목록으로 대신한다. 그림은 `artifact-diagramming` 스킬 지침을 따른다.
 - **결과 절은 결론부터** — 맨 위에 "통과 N · 실패 N · 보류 N (환경)" 한 줄. 실패·보류는 시나리오 이름과 사유를 함께, 통과는 시나리오 이름만.
