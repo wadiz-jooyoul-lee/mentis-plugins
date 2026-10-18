@@ -178,6 +178,7 @@ dobby-order — 이슈/작업을 분석해 개발·리뷰·통합까지 자동 �
      - **`statusCategory.key`로 판정**: `new`(할 일)면 `mcp__mcp-atlassian__jira_get_transitions`로 도착 상태 `statusCategory`가 `indeterminate`인 전이를 골라 `mcp__mcp-atlassian__jira_transition_issue`로 전환한다. `indeterminate`(이미 진행 중)면 그대로 둔다. `done`(완료)이면 전환하지 말고 사용자에게 확인한다.
      - 하위이슈로 팬아웃하는 경우, 각 대상 하위이슈도 착수 시 동일하게 진행 중으로 전환한다(dobby-start가 그 대상을 맡으면 dobby-start의 1단계가, 메인이 직접 조회했으면 여기서).
      - 도착 상태 이름은 프로젝트마다 다르므로 **이름이 아니라 `statusCategory`로 판정**한다(하드코딩 금지). 애매하면 사용자에게 확인.
+     - **전환 판정 직후 `${CLAUDE_PLUGIN_ROOT}/reference/jira-start.md` 를 따른다** — 이번에 진행 중으로 바꿨으면 시작 날짜를 오늘로 적고, 상위 이슈에 레이블이 있으면 같은 레이블을 더한다. 하위이슈를 진행 중으로 바꿀 때도 같다.
 2. 분리 가능한 오너십 영역을 도출한다:
    - 병렬 가능한 영역이 **2개 이상** → `K = 영역 수`(다중). 영역과 하위이슈를 **1:1**로 맞춘다(없으면 그 분해로 하위이슈 생성).
    - **한 덩어리(cohesive)** → `K=1`(단일). 하위이슈 불필요.

@@ -115,7 +115,7 @@ cloud_live
 편입된 버그마다:
 
 1. **담당 에이전트 특정**: 버그를 분석해 고쳐야 할 파일을 `파일:라인`으로 잡고, 그 파일이 어느 에이전트의 **계약(`agents/{슬러그}.md`) 화이트리스트**에 속하는지로 담당을 정한다. 여러 계약에 걸치거나 못 정하면 **확인 게이트**로 사용자에게 확인. 에이전트가 하나뿐이면 그 에이전트가 담당이다.
-2. **버그 이슈 진행중 전환**: `jira_get_transitions`에서 도착 상태 `indeterminate`인 전이로 `jira_transition_issue`.
+2. **버그 이슈 진행중 전환**: `jira_get_transitions`에서 도착 상태 `indeterminate`인 전이로 `jira_transition_issue`. 이어서 `${CLAUDE_PLUGIN_ROOT}/reference/jira-start.md` 를 따라 시작 날짜를 적고 상위 이슈 레이블을 더한다.
 3. **브랜치·워크트리 — 루트 브랜치에서 가지를 친다**:
    ```bash
    WT="$(dobby_setup_worktree {repo} {버그키} bugfix {루트브랜치} {루트키})"
