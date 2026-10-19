@@ -2838,17 +2838,30 @@ dobby_release_note() {
 # 충돌이 있으면 **임시 워크트리**에 병합을 멈춘 상태로 만들어 두고 그 경로를 돌려준다.
 #   → stdout: `conflict {임시워크트리경로}` + 충돌 파일 목록(stderr), 반환값 2
 #   오더 워크트리는 건드리지 않는다 — 리뷰를 통과한 상태 그대로 둔다.
+# 이미 올린 충돌 해결 브랜치가 두 브랜치를 다 담고 있으면 다시 만들지 않고 `clean`.
+# 환경 브랜치만 담고 있으면 그 위에 작업 브랜치의 새 커밋만 합친다 — 앞서 푼 충돌을 다시 풀지 않는다.
 dobby_bridge_make() {
   local wt="$1" br="$2" env="$3"
   [ -d "$wt" ] || { _die "워크트리가 없다: $wt"; return 1; }
   local bridge="${br}_into_${env}"
   git -C "$wt" fetch -q origin "$env" "$br" 2>/dev/null
+  git -C "$wt" fetch -q origin "$bridge" 2>/dev/null
+  if git -C "$wt" rev-parse -q --verify "origin/$bridge" >/dev/null \
+     && git -C "$wt" merge-base --is-ancestor "origin/$br" "origin/$bridge" \
+     && git -C "$wt" merge-base --is-ancestor "origin/$env" "origin/$bridge"; then
+    printf 'clean'
+    return 0
+  fi
+  local from="origin/$env"
+  git -C "$wt" rev-parse -q --verify "origin/$bridge" >/dev/null \
+    && git -C "$wt" merge-base --is-ancestor "origin/$env" "origin/$bridge" \
+    && from="origin/$bridge"
 
   local tree
-  tree="$(git -C "$wt" merge-tree --write-tree "origin/$env" "origin/$br" 2>/dev/null | head -1)"
-  if [ -n "$tree" ] && git -C "$wt" merge-tree --write-tree "origin/$env" "origin/$br" >/dev/null 2>&1; then
+  tree="$(git -C "$wt" merge-tree --write-tree "$from" "origin/$br" 2>/dev/null | head -1)"
+  if [ -n "$tree" ] && git -C "$wt" merge-tree --write-tree "$from" "origin/$br" >/dev/null 2>&1; then
     local commit
-    commit="$(git -C "$wt" commit-tree "$tree" -p "origin/$env" -p "origin/$br" \
+    commit="$(git -C "$wt" commit-tree "$tree" -p "$from" -p "origin/$br" \
       -m "Merge branch '$br' into $env" 2>/dev/null)" \
       || { _die "병합 커밋을 만들지 못했다"; return 1; }
     git -C "$wt" push -q origin "${commit}:refs/heads/${bridge}" --force-with-lease 2>/dev/null \
@@ -2861,7 +2874,7 @@ dobby_bridge_make() {
   # ── 충돌 — 임시 워크트리에서 진짜 병합을 해 둔다 ────────────────────────
   local tmp; tmp="$(mktemp -d -t dobbybridge)" || { _die "임시 폴더를 만들지 못했다"; return 1; }
   rm -rf "$tmp"
-  git -C "$wt" worktree add -q --detach "$tmp" "origin/$env" 2>/dev/null \
+  git -C "$wt" worktree add -q --detach "$tmp" "$from" 2>/dev/null \
     || { _die "임시 워크트리를 만들지 못했다: $tmp"; return 1; }
   git -C "$tmp" checkout -q -B "$bridge" 2>/dev/null
   git -C "$tmp" merge --no-commit --no-ff "origin/$br" >/dev/null 2>&1
@@ -3036,6 +3049,41 @@ $dirty"
   [ -n "$n" ] || { _die "PR 을 만들었는데 번호를 못 찾았다"; return 1; }
   dobby_event "$key" "PR 생성 — $name #$n ($bridge → $base)"
   dobby_ship_stage "$key" "$name" "$env" "PR 생성" "#$n"
+  printf '%s' "$n"
+}
+
+# dobby_ship_resubmit KEY 워크트리 브랜치 환경 PR번호 — 리뷰 반영을 새 PR 로 다시 리뷰받는다. 새 번호 stdout.
+#
+# 자동 코드리뷰는 리뷰 요청에만 돈다. 리뷰를 받으면 요청이 지워져 반영 푸시로는 다시 돌지 않고,
+# 요청을 다시 걸어도 돌지 않는다(사용자 확인). 새 PR 을 열면 돈다(실측 FE1-2054 #30106 → #30109).
+# 충돌 해결 브랜치를 반영분까지 갱신한 뒤 옛 PR 을 닫고 같은 제목·본문으로 새 PR 을 연다.
+dobby_ship_resubmit() {
+  local key="$1" wt="$2" br="$3" env="$4" old="$5" name base rp made rc title body n
+  name="$(basename "$(_ship_repo "$wt")")"
+  _ship_reviewbot "$name" || { _die "'$name' 에는 자동 코드리뷰가 없다 — 새 PR 로 갈아탈 이유가 없다."; return 1; }
+  base="$(_ship_branch "$name" "$env")"
+  [ -n "$base" ] || { _die "'$name' 에는 '$env' 환경이 없다."; return 1; }
+  rp="$(_ship_repo "$wt")"
+  [ "$(gh pr view "$old" --repo "$rp" --json state -q .state 2>/dev/null)" = OPEN ] \
+    || { _die "PR #$old 이 열려 있지 않다."; return 1; }
+
+  made="$(dobby_bridge_make "$wt" "$br" "$base")"; rc=$?
+  if [ "$rc" -eq 2 ]; then
+    _die "반영분을 충돌 해결 브랜치에 합치다 충돌이 났다. 임시 워크트리에서 풀어라: ${made#conflict }
+  ① dobby_conflict_evidence {임시워크트리} $br $base
+  ② 근거로 판단해 직접 고친다
+  ③ dobby_bridge_finish {임시워크트리} $br $base
+  그 뒤 이 함수를 다시 부른다."
+    return 1
+  fi
+  [ "$rc" -eq 0 ] || return 1
+
+  title="$(gh pr view "$old" --repo "$rp" --json title -q .title)" || return 1
+  body="$(gh pr view "$old" --repo "$rp" --json body -q .body)" || return 1
+  gh pr close "$old" --repo "$rp" --comment "리뷰 반영분을 새로 리뷰받기 위해 닫고 새 PR 로 이어 갑니다." >&2 || return 1
+  n="$(dobby_ship_pr "$key" "$wt" "$br" "$env" "$title" "$body")" || return 1
+  gh pr comment "$old" --repo "$rp" --body "#$n 으로 이어 갑니다." >&2
+  dobby_event "$key" "PR 다시 열기 — $name #$old 닫음, #$n 에서 리뷰를 새로 받는다"
   printf '%s' "$n"
 }
 
