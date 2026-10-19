@@ -20,6 +20,8 @@
 # DOBBY_REUSE_MAX_CTX 이하이며(dobby-lib.sh), 직전 호출 뒤 DOBBY_REUSE_MAX_GAP 초가 지나지 않았을 때만 직전 세션을
 # `claude -p --resume` 으로 이어 쓴다(근거: session-reuse.md).
 #
+# MCP: 세션마다 크롬 도구 하나만 붙인다(--strict-mcp-config). 슬랙·메일 알림은 dobby_v2_notify 가 따로 띄운 세션이 보낸다.
+#
 # 멈추는 경우:
 #   dobby-order 가 만든 메타 · 설계 미확정 · 통합 완료(--with-test 없고 auto 배포 오더도 아닐 때) · 검증 전부 통과
 #   · 배포 표의 막힘(⚠) · 리뷰봇 30분 · 빌드 30분
@@ -91,6 +93,19 @@ fingerprint() {
 WT="$(_order_worktree "$KEY")"
 [ -n "$WT" ] && [ -d "$WT" ] || WT="$PWD"
 
+# 자동 실행 세션에는 크롬 도구 MCP 하나만 붙인다. 검증 단계만 브라우저를 쓰고 나머지 단계는 MCP 를 쓰지 않는다.
+# 연결 도구까지 다 붙으면 첫 호출 문맥이 42,648, 크롬 도구만이면 35,454 다(2026-10-19 실측). 근거: token-diet.md 작업 C.
+# --strict-mcp-config 는 claude.ai 연결 도구(슬랙·메일)도 뺀다. 그래서 세션 안의 알림은 dobby_v2_notify 로 보낸다.
+# 크롬 도구 설정은 사람마다 경로가 달라 ~/.claude.json 에서 그대로 옮겨 온다. 없으면 제한 없이 실행한다.
+mcp=()
+MCP_CFG="${TMPDIR:-/tmp}/dobby-mcp-$KEY.json"
+if jq -e '.mcpServers["chrome-devtools"]' ~/.claude.json >/dev/null 2>&1 \
+   && jq '{mcpServers: {"chrome-devtools": .mcpServers["chrome-devtools"]}}' ~/.claude.json >"$MCP_CFG" 2>/dev/null; then
+  mcp=(--strict-mcp-config --mcp-config "$MCP_CFG")
+else
+  dobby_event "$KEY" "자동 실행 MCP 제한 못 함 — ~/.claude.json 에 chrome-devtools 설정이 없어 모든 MCP 를 붙인 채 실행" 2>/dev/null
+fi
+
 CONSENT="이 실행은 사용자가 커밋과 푸시를 미리 승인한 자동 실행이다(대시보드 '자동 실행' 확인 창 또는 --approve-commit). \
 /do 통합 단계에서 오더 작업 브랜치에 커밋하고 푸시하는 것은 이미 동의를 받았으니 다시 묻지 말고 진행한다. \
 정식 배포 브랜치로의 PR·머지·배포는 이 승인에 들어가지 않는다."
@@ -155,7 +170,7 @@ while :; do
     fi
   fi
   printf '\n━━ %s · 세션 %d · 시작 단계 %s · %s · %s\n' "$KEY" "$n" "$ph" "$how" "$(date '+%H:%M')"
-  out="$(cd "$WT" && claude -p ${resume[@]+"${resume[@]}"} "/do $KEY" ${extra[@]+"${extra[@]}"} --permission-mode "$MODE" --output-format json 2>/dev/null)"
+  out="$(cd "$WT" && claude -p ${resume[@]+"${resume[@]}"} "/do $KEY" ${extra[@]+"${extra[@]}"} ${mcp[@]+"${mcp[@]}"} --permission-mode "$MODE" --output-format json 2>/dev/null)"
   code=$?
   sid="$(printf '%s' "$out" | jq -r '.session_id // empty' 2>/dev/null)"
   err="$(printf '%s' "$out" | jq -r '.is_error // false' 2>/dev/null)"

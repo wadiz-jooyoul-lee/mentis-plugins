@@ -870,14 +870,15 @@ Jira 상태는 건드리지 않는다. 이미 '해결됨'이면 다시 열지는
 
 ## 알림 보내는 법 (자동 배포 오더)
 
-슬랙 DM 과 메일로 같은 본문을 보낸다. 받는 사람은 `dobby-lib.sh` 의 `DOBBY_NOTIFY_SLACK`·`DOBBY_NOTIFY_EMAIL` 이다.
+알림은 셸 한 줄로 보낸다.
 
-| 어디로 | 도구 |
-|---|---|
-| 슬랙 DM | `mcp__claude_ai_Slack__slack_send_message` (channel_id 에 받는 사람 아이디) |
-| 메일 | `mcp__claude_ai_Gmail__send_message` (제목 `[dobby] {키} {첫 줄}`) |
+    dobby_v2_notify {키} "{본문}"
 
-도구가 안 보이면 연결이 늦은 것이니 다시 찾는다. 보내지 못해도 세션을 멈추지 않는다. `dobby_event` 로 "알림 못 보냄"을 남긴다.
+이 헬퍼가 알림 전용 짧은 세션을 따로 띄워 슬랙 DM 과 메일로 같은 본문을 보낸다. 받는 사람은 `dobby-lib.sh` 의 `DOBBY_NOTIFY_SLACK`·`DOBBY_NOTIFY_EMAIL` 이다.
+
+슬랙·메일 도구를 이 세션에서 직접 찾거나 부르지 않는다. 자동 실행 세션에는 그 도구가 붙어 있지 않다(`run.sh` 가 크롬 도구 하나만 붙인다).
+
+보내지 못해도 세션을 멈추지 않는다. 헬퍼가 알림 내용을 이벤트 로그에 먼저 남긴다.
 
 ## 사람에게 묻지 않는다 (설계 세션의 수정 대화는 예외)
 
