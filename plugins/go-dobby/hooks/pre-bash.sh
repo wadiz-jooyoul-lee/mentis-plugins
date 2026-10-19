@@ -12,6 +12,7 @@
 #       argocd app sync 는 라이브 앱(web-live-*·client-live-*)·서버 미지정이면 차단.
 #   G5: dobby 워크스페이스 안에서 subtree/ 밖 폴더 제거 금지 (dobby-end 안전 경계)
 #   G6: 메타 폴더($ORCHESTRATION_META) 삭제 금지 (비파괴 원칙 — 생명주기 기록 보존)
+#   G18: twg Jira 조회(get·bulk-get·query)는 결과를 줄이는 옵션과 함께만 (옵션 없는 get 2만 6천 자, bulk-get 17만 자)
 #
 # 동작: stdin으로 받은 tool_input.command를 검사해, 위반이면 JSON(permissionDecision: deny)
 #       으로 차단 사유를 돌려준다. 그 외에는 조용히 통과(exit 0). go-dobby 설정이 없는
@@ -93,6 +94,30 @@ in_dobby_scope() {
   esac
   return 1
 }
+
+# ── G18. twg Jira 조회는 결과를 줄이는 옵션과 함께 ─────────────────────
+# 옵션 없는 조회는 결과가 그대로 문맥에 들어간다(실측 2026-10-19: get 25,681자, bulk-get 2건 166,771자,
+# query 54,344자). 문맥에 한 번 들어간 글은 그 세션의 남은 호출마다 다시 읽힌다.
+# 줄이는 옵션 하나라도 있으면 통과한다. 사람이 전체를 원했으면 TWG_RAW=1 로 우회한다.
+# dobby 스코프 가드를 두지 않는다 — 어느 폴더에서 부르든 문맥 비용은 같다(공통 규율 3의 "전역 성격" 규칙).
+case "$CMD" in
+  *twg*)
+    case "$CMD" in *TWG_RAW=1*) ;; *)
+      # ; && || 줄바꿈으로 단순 명령을 나눈다. 파이프(|)는 나누지 않는다 — 뒤 프로그램이 결과를 줄이는 경우라서.
+      while IFS= read -r seg; do
+        printf '%s' "$seg" | grep -qE '(^|[[:space:]])twg[[:space:]]+jira[[:space:]]+workitem[[:space:]]+(get|bulk-get|query)([[:space:]]|$)' || continue
+        case "$seg" in *'|'*) continue ;; esac                            # 파이프: 뒤 프로그램이 줄인다
+        printf '%s' "$seg" | sed -E 's/[0-9]?>&[0-9]//g; s/2>[[:space:]]*[^[:space:]]+//g' | grep -q '>' && continue   # 결과를 파일로 보냄(2> 는 제외)
+        case "$seg" in *--fields*|*'--field '*|*--field=*|*--select*|*--output-file*) continue ;; esac
+        printf '%s' "$seg" | grep -qE -- '--output-summary([[:space:]]+(auto|stats|inline)|=(auto|stats|inline)|[[:space:]]*$|[[:space:]]+-)' && continue
+        if printf '%s' "$seg" | grep -qE 'workitem[[:space:]]+query'; then
+          n="$(printf '%s' "$seg" | sed -nE 's/.*--(limit|first)[ =]+([0-9]+).*/\2/p')"
+          [ -n "$n" ] && [ "$n" -le 20 ] && continue
+        fi
+        deny G18 "twg Jira 조회 결과가 너무 큽니다(옵션 없는 get 약 2만 6천 자, bulk-get 이슈 2개 약 17만 자, query 약 5만 4천 자). 다음 중 하나를 붙여 다시 실행하세요. 필요한 칸만: --fields summary,status,labels / 파일로 받기: -o json --output-file {경로} / 요약만 받기: -o json --output-summary / 값 고르기: -o json --output-summary none --select data.{경로} / query 는 개수 제한: --limit 20. 사람이 전체 결과를 원했으면 명령 앞에 TWG_RAW=1 을 붙이세요."
+      done <<<"$(printf '%s\n' "$CMD" | awk '{gsub(/&&|\|\||;/, "\n"); print}')"
+    ;; esac ;;
+esac
 
 # ── G12. 설계 문서(design.md) 셸 덮어쓰기 금지 ──────────────────────────
 # design.md는 사용자가 대시보드·편집기로 직접 고치는 유일한 메타 파일이다. 다른 메타처럼

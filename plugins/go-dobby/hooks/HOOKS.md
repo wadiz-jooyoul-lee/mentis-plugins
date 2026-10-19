@@ -181,6 +181,9 @@ v2.1.246에서 실측 확인: 설치본 스크립트를 수동 실행하면 deny
 | G15 | 구현 라운드 4회 이상인데 에스컬레이션 기록 없음 | `dobby_lint` 19 | 경고 | 코드 강제(훅 아님) | dobby-order P6 |
 | G16 | 워크트리 생성 시 그 저장소의 코딩 규약 문서 목록(`CLAUDE.md` 전체 + 상위 2단계 `README.md`)을 `docs-refs.md`에 자동 기록 | `dobby_setup_worktree` | 자동 기록 | 코드 강제(훅 아님) | dobby-impl 규약 확인 |
 | G17 | 산출물 문서(`outcome`·`explainer`·`produce`·`implementation*`)에 메타 보정 흔적(`dobby_*`·`artifact-share`·`design-ack`·"메타 보정"·"산출물 보강") | `dobby_lint` 21 | 경고 | 코드 강제(훅 아님) | dobby-order C10 |
+| G18 | twg Jira 조회(`get`·`bulk-get`·`query`)에 결과를 줄이는 옵션(`--fields`·`--field`·`--select`·`--output-file`·`--output-summary`(none 제외)·파이프·파일 저장·query `--limit`/`--first` 20 이하)이 없으면 차단. 옵션 없는 get 2만 6천 자, bulk-get 2건 17만 자(2026-10-19 실측). `TWG_RAW=1` 우회. dobby 스코프와 무관한 전역 규칙 | PreToolUse·Bash | deny | settings.json(if: twg — dobby-init 등록) | 토큰 절감(`skills/do/token-diet.md`) |
+| G19 | 문맥 25만 토큰 이상 세션에서 `/do`·`/go-dobby:*`·`/dobby-*` 시작 금지. 기준 `DOBBY_PROMPT_GUARD_CTX`, 끄기 `DOBBY_PROMPT_GUARD=off`(config.env) | UserPromptSubmit | block | 플러그인 hooks.json(prompt-guard.sh) | 상동 |
+| G20 | `/do` 세션 닫기 안내("이 세션을 닫아 주세요") 뒤 일반 요청에 경고(막지 않음) | UserPromptSubmit | systemMessage + additionalContext | 플러그인 hooks.json(prompt-guard.sh) | 상동 |
 | — | 안전 훅 미등록·구버전 감지 안내 | SessionStart | 안내 출력 | 플러그인 hooks.json(라이프사이클 훅은 정상 발화) | dobby-init |
 
 ## 로드맵 (다음 단계 후보 — 분석 완료, 미구현)

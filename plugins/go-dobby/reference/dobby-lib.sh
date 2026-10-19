@@ -2758,6 +2758,39 @@ dobby_v2_test_fixes() {
   jq -r '[.[] | objects | keys[] | select(startswith("fix-test-"))] | length' "$f" 2>/dev/null || printf '0'
 }
 
+# dobby_jira_desc KEY [저장 경로] — 이슈 설명을 마크다운으로 받는다. 경로를 주면 파일로, 없으면 화면으로.
+# twg 는 설명을 문서 구조 JSON(ADF)으로 준다(FE1-2140: 2만 자 안팎). 그대로 읽으면 MCP(약 5천 자)보다 커서
+# 같은 폴더의 adf-to-md.jq 로 바꾼다(같은 이슈 1,872자). 설명이 비어 있으면 아무것도 쓰지 않고 1 을 돌려준다.
+# --select 는 반드시 --fields 와 같이 쓴다. 경로가 틀리면 --select 가 무시되고 전체(12만 자)가 나온다.
+# 훅 복사본(~/.config/go-dobby/hooks/)에는 adf-to-md.jq 가 없다. 이 헬퍼는 플러그인 원본에서만 부른다.
+dobby_jira_desc() {
+  local key="$1" out="${2:-}" md
+  md="$(twg jira workitem get "$key" --fields description -o json --output-summary none --select data.description 2>/dev/null \
+    | jq '.data[0].description | objects | select(.type=="doc")' 2>/dev/null \
+    | jq -r -f "$DOBBY_LIB_DIR/adf-to-md.jq" 2>/dev/null)"
+  [ -n "$md" ] || return 1
+  if [ -n "$out" ]; then printf '%s\n' "$md" >"$out"; else printf '%s\n' "$md"; fi
+}
+
+# dobby_jira_start_transition KEY — 할 일(new) 상태면 진행 중으로 바꾼다. 출력: changed / already / done / failed
+# 상태 이름이 아니라 분류(statusCategory)로 판정한다. 프로젝트마다 상태 이름이 다를 수 있다.
+dobby_jira_start_transition() {
+  local key="$1" cat id
+  cat="$(twg jira workitem get "$key" --fields status -o json --output-summary none --select data.status.statusCategory.key 2>/dev/null \
+    | jq -r '.data[0].status.statusCategory.key // empty' 2>/dev/null)"
+  case "$cat" in
+    indeterminate) echo already; return 0 ;;
+    done) echo done; return 0 ;;
+    new) ;;
+    *) echo failed; return 1 ;;
+  esac
+  # 도착 분류가 '진행 중'인 전환을 고른다(전환 목록은 분류별로 묶여 나온다, 552자).
+  id="$(twg jira workitem transitions query --id "$key" -o json --output-summary none 2>/dev/null \
+    | jq -r '[.data.transitions[]? | select(.category=="진행 중") | .id] | first // empty' 2>/dev/null)"
+  [ -n "$id" ] || { echo failed; return 1; }
+  if twg jira workitem transition --id "$key" --transition-id "$id" >/dev/null 2>&1; then echo changed; else echo failed; return 1; fi
+}
+
 # dobby_v2_notify KEY 본문 — 셸(run.sh)이 사람에게 알린다. 슬랙 DM 과 Gmail 로 같은 본문을 보낸다.
 # 셸에서 바로 보낼 길이 없어 짧은 헤드리스 세션 하나를 띄우고, 그 세션에는 보내기 도구 둘만 허용한다.
 # 보내지 못해도 이벤트 로그에는 남는다. 반환은 언제나 0 — 알림 실패로 실행 판단이 바뀌지 않게.

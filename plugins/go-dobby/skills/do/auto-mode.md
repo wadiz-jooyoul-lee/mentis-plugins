@@ -255,7 +255,7 @@ dobby-auto 의 충돌 처리(근거로 풀고, 확정 안 되면 해결안을 �
 | 시험 | 결과 | 근거 |
 |---|---|---|
 | 헤드리스 세션에서 브라우저 검증 | **된다.** 와디즈 메인을 열고, 화면 구조를 읽어 '로그인' 버튼을 찾고, 페이지를 닫았다 | chrome-devtools 의 `new_page`, `take_snapshot`, `close_page` 호출 성공 |
-| 헤드리스 세션의 슬랙·Gmail 연결 | **연결돼 있다.** 시작 정보에 `claude.ai Slack`, `claude.ai Gmail`, `claude.ai Atlassian` 이 connected 이고, `slack_send_message`, `send_message` 도구가 보인다 | 세션 시작 정보(`subtype: init`)의 연결 목록과 도구 목록 |
+| 헤드리스 세션의 슬랙·Gmail 연결 | **연결돼 있다.** 시작 정보에 `claude.ai Slack`, `claude.ai Gmail`, `claude.ai Atlassian` 이 connected 이고, `slack_send_message`, `send_message` 도구가 보인다. 2026-10-19 부터 run.sh 가 --strict-mcp-config 로 크롬 도구만 붙이므로, 단계 세션에는 이 연결이 없다. 알림은 dobby_v2_notify 가 띄운 별도 세션이 보낸다(token-diet.md 작업 C) | 세션 시작 정보(`subtype: init`)의 연결 목록과 도구 목록 |
 | 덧붙인 승인 지시가 스킬의 "⛔ 사용자 확인"을 넘는가 | **넘는다.** dobby-ship 과 같은 문구("머지 ⛔ 사용자 확인 … 승인 없이 머지하지 않는다")를 넣은 시험 문서로 비교했다. 지시가 없으면 "머지를 진행할까요?"라고 묻고 아무것도 하지 않은 채 끝났다. 지시가 있으면 묻지 않고 머지 표시 파일을 썼다 | 시험 두 번의 결과 |
 | 커밋 승인 지시가 실제 자동 실행에서 통했나 | **통했다.** FE1-2140 자동 실행이 사람 없이 커밋하고 푸시했다 | `c982d77ecc 2026-10-13 18:50:55 FE1-2140 새소식 목록 봇 SEO 마크업의 상세 링크 경로 수정`, 1분 뒤 "통합 완료" 이벤트 |
 

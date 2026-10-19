@@ -89,7 +89,7 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 | `dobby_repair KEY` | 게이트 실패 시(자동) | 손으로 어긋난 메타를 헬퍼로 다시 찍어 정규화(비파괴 — 단계·상태·상태표 골격) |
 | `dobby_gate KEY 다음단계 [interactive\|auto]` | **단계 전이마다** | strict 검사 → 실패 시 dobby_repair 자동 복구 → 재검사. interactive=치명 남으면 차단, auto=needs-attention.md 기록 후 계속 |
 
-- **여전히 LLM 몫(스크립트가 안 함)**: 팬아웃 K·활성경로 증명·범위 배분·이름/설명/슬러그 값 결정·커밋 메시지 문구·리뷰 findings·분석/문서 본문 서술·Jira 상태 전환(MCP)·base 모호 시 확정.
+- **여전히 LLM 몫(스크립트가 안 함)**: 팬아웃 K·활성경로 증명·범위 배분·이름/설명/슬러그 값 결정·커밋 메시지 문구·리뷰 findings·분석/문서 본문 서술·Jira 상태 전환(twg)·base 모호 시 확정.
 - 값에 `|`·개행이 들어가면 안 된다(표 깨짐). 이름의 `/`는 허용(슬러그엔 금지 — dobby-lib이 그대로 기록만 함).
 
 ## 메타 루트
