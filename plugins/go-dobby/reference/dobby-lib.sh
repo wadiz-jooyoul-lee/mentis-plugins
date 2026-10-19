@@ -2495,6 +2495,13 @@ dobby_ship_stage() {
 dobby_v2_autorun() {
   local key="$1" url="${ORCHESTRATION_DASHBOARD_URL:-http://localhost:7253}" chk res run
   [ -n "$key" ] || { _die "쓰임: dobby_v2_autorun KEY"; return 1; }
+  # 대시보드 오더 실행 탭이 띄운 설계 세션이면 이 세션이 끝난 뒤 같은 잡이 run.sh 를 이어서 실행한다.
+  # 여기서 띄우면 잡 이름(오더 키)이 겹쳐 대시보드가 "이미 실행 중"으로 거부한다.
+  if [ -n "${DOBBY_V2_CHAINED:-}" ]; then
+    printf '이 설계 세션이 끝나면 대시보드 잡이 자동 실행을 이어서 시작합니다.\n'
+    dobby_event "$key" "설계 세션 끝 — 대시보드 잡이 자동 실행을 이어 감" 2>/dev/null
+    return 0
+  fi
   run="$DOBBY_LIB_DIR/../skills/do/run.sh"
   chk="$(curl -fsS --max-time 5 "$url/api/orders?v2run=$key" 2>/dev/null)" || {
     printf '대시보드(%s)에 닿지 못해 자동 실행을 띄우지 못했습니다.\n' "$url"
