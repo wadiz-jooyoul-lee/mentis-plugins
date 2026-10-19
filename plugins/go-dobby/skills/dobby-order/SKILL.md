@@ -171,11 +171,11 @@ dobby-order — 이슈/작업을 분석해 개발·리뷰·통합까지 자동 �
 > - **⛔ 코드 강제(B): `docs-refs.md`가 없으면 `dobby_setup_worktree`가 워크트리 생성을 거부한다.** 즉 게이트를 건너뛰면 구현할 워크트리 자체가 안 만들어진다 — 문구가 아니라 실행이 막힌다. (기존 워크트리 재사용은 차단하지 않는다.)
 > - **⛔ `docs-refs.md`가 생성되기 전에는 Explore·분석·팬아웃·P4로 넘어가지 않는다.** dobby-start를 거치지 않고 pre-Explore를 직접 띄우는 경로에서도 예외 없다.
 
-1. 이슈/문서 조회 + 하위이슈 탐색(`parent = {상위}` JQL) + (멀티 repo면) repo별 **읽기 전용 Explore 에이전트**로 범위를 사실 기준으로 분석한다.
+1. 이슈/문서 조회(`twg jira workitem get {키} --fields summary,status,issuetype,parent,labels`, 명령은 `${CLAUDE_PLUGIN_ROOT}/reference/jira-twg.md`) + 하위이슈 탐색(`twg jira workitem query --jql "parent = {상위}" --fields summary,status,issuetype --limit 50`, 하위이슈가 20개를 넘을 수 있어 상한을 50으로 둔다) + (멀티 repo면) repo별 **읽기 전용 Explore 에이전트**로 범위를 사실 기준으로 분석한다.
    - **⛔ status.md 제목 갱신(필수 · 조회 직후 · dobby-start 무관)**: 이슈 요약(문서 전용이면 확정한 작업 제목)을 받은 **바로 이 자리에서** 골격 status.md의 임시 제목(키/slug)을 **실제 요약으로 갱신**한다. **→ 헬퍼 `dobby_set_title {루트키} "{실제 제목}"`**. light·K=1·TASK 등 dobby-start를 거치지 않는 흐름에서도 반드시 한다.
-   - **이슈 원문 저장(재활용 · 대시보드 Jira 탭용)**: 루트 키가 실제 Jira 이슈면(문서 전용 `TASK-` 제외), **방금 조회한 이슈 원문(설명 본문)을 그대로** `$ORCHESTRATION_META/{루트키}/jira-issue.md`에 저장한다. 이미 읽은 내용을 파일로 쓰는 것뿐이라 **추가 조회·분석·요약은 하지 않는다**(메인 진행에 부담 없음). 설명이 비어 있으면 저장하지 않는다. 정리·코멘트 요약·업데이트 보강·게시는 **대시보드 버튼**이 별도 스킬(`dobby-jira-tab`)로 처리하므로, 여기서는 **원문 저장만** 한다.
+   - **이슈 원문 저장(재활용 · 대시보드 Jira 탭용)**: 루트 키가 실제 Jira 이슈면(문서 전용 `TASK-` 제외), **이슈 원문(설명 본문)을** `dobby_jira_desc {루트키} $ORCHESTRATION_META/{루트키}/jira-issue.md` 로 저장한다. 설명은 이 파일을 읽어 파악한다. **분석·요약은 하지 않는다**(메인 진행에 부담 없음). 설명이 비어 있으면 헬퍼가 파일을 만들지 않는다. 정리·코멘트 요약·업데이트 보강·게시는 **대시보드 버튼**이 별도 스킬(`dobby-jira-tab`)로 처리하므로, 여기서는 **원문 저장만** 한다.
    - **⛔ Jira 상태 → 진행 중 전환(필수 · dobby-order가 직접)**: 루트 키가 실제 Jira 이슈면(문서 전용 `TASK-` 제외), 이슈를 조회한 **바로 이 자리에서** 상태를 진행 중으로 전환한다. **dobby-start에 미루지 않는다**(단일/`light`/인라인 흐름에선 dobby-start가 안 뜨거나 메인이 이미 조회해 전환이 누락될 수 있다).
-     - **`statusCategory.key`로 판정**: `new`(할 일)면 `mcp__mcp-atlassian__jira_get_transitions`로 도착 상태 `statusCategory`가 `indeterminate`인 전이를 골라 `mcp__mcp-atlassian__jira_transition_issue`로 전환한다. `indeterminate`(이미 진행 중)면 그대로 둔다. `done`(완료)이면 전환하지 말고 사용자에게 확인한다.
+     - **`dobby_jira_start_transition {키}` 로 전환한다.** 헬퍼가 `statusCategory.key` 로 판정한다. `new`(할 일)면 진행 중으로 바꾸고 `changed`, 이미 진행 중이면 `already`, 완료면 바꾸지 않고 `done` 을 돌려준다. `done` 이면 사용자에게 확인한다. `failed` 면 `transitions query` 로 목록을 보고 판단한다.
      - 하위이슈로 팬아웃하는 경우, 각 대상 하위이슈도 착수 시 동일하게 진행 중으로 전환한다(dobby-start가 그 대상을 맡으면 dobby-start의 1단계가, 메인이 직접 조회했으면 여기서).
      - 도착 상태 이름은 프로젝트마다 다르므로 **이름이 아니라 `statusCategory`로 판정**한다(하드코딩 금지). 애매하면 사용자에게 확인.
      - **전환 판정 직후 `${CLAUDE_PLUGIN_ROOT}/reference/jira-start.md` 를 따른다** — 이번에 진행 중으로 바꿨으면 시작 날짜를 오늘로 적고, 상위 이슈에 레이블이 있으면 같은 레이블을 더한다. 하위이슈를 진행 중으로 바꿀 때도 같다.

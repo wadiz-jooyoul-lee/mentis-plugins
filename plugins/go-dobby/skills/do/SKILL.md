@@ -141,9 +141,13 @@ run.sh {키} [--mode {권한 모드}] [--max {최대 세션 수}] [--with-test] 
 ## 1-1. 골격과 착수
 
 1. `dobby_bootstrap {키} "{임시제목}" 개발 "{키워드1|키워드2}"` — 폴더·골격·종류·세션·docs 게이트를 한 번에 깐다.
-2. Jira 이슈를 조회한다(작업 키 `TASK-` 면 건너뛴다). 조회 직후 **그 자리에서** 두 가지를 한다.
+2. Jira 이슈를 조회한다(작업 키 `TASK-` 면 건너뛴다). Jira 는 MCP 가 아니라 `twg` 로 다룬다(`${CLAUDE_PLUGIN_ROOT}/reference/jira-twg.md`).
+   - 조회: `twg jira workitem get {키} --fields summary,status,issuetype,parent,labels`
+   - 설명: `dobby_jira_desc {키} $ORCHESTRATION_META/{키}/jira-issue.md` 로 파일에 받아 읽는다. 대시보드 Jira 탭도 이 파일을 쓴다.
+
+   조회 직후 **그 자리에서** 두 가지를 한다.
    - `dobby_set_title {키} "{실제 이슈 요약}"` — 임시 제목을 실제 요약으로 바꾼다.
-   - Jira 상태를 진행 중으로 전환한다. 이어서 `${CLAUDE_PLUGIN_ROOT}/reference/jira-start.md` 를 따라 시작 날짜를 적고 상위 이슈 레이블을 더한다.
+   - `dobby_jira_start_transition {키}` 로 진행 중으로 전환한다. 이어서 `${CLAUDE_PLUGIN_ROOT}/reference/jira-start.md` 를 따라 시작 날짜를 적고 상위 이슈 레이블을 더한다.
 3. 워크트리를 준비한다 — `dobby_ensure_worktree {저장소} {키} {prefix} {base}`. `prefix` 는 버그면 `bugfix`, 그 밖은 `feature` 다(빗금은 헬퍼가 붙인다). 이 헬퍼는 상태 문서에 이미 적힌 워크트리가 있으면 그것을 쓰고, 폴더가 지워졌으면 남은 브랜치로 되살리고, 아무것도 없을 때만 새로 만든다. git 에 등록되지 않은 폴더가 같은 자리에 있으면 지우지 않고 멈춘다. 그때는 사람에게 그 폴더를 확인해 달라고 알린다.
 4. `dobby_agent_add {키} {슬러그} "분석/개발자" "{작업 한 줄}" 분석 0` — 상태표에 담당 한 행을 넣는다. 마지막 0 은 수정 횟수다(아래 "보드의 상태표"). 슬러그는 `dobby_slug` 로 만든다.
 5. `dobby_session_log {키} {슬러그} design 설계 {워크트리경로}` — 이 세션의 아이디를 기록한다(공통 규칙 "세션 기록").

@@ -1,6 +1,6 @@
 # Jira 착수 처리 (진행 중 전환 직후 공통)
 
-이슈를 진행 중으로 바꾸는 스킬(`do` 설계 세션, `dobby-order`, `dobby-start`, `dobby-qa`)이 **진행 중 전환을 판정한 바로 뒤에** 따르는 단일 출처다. 전환 판정(`statusCategory` 로 고르기) 자체는 각 스킬 본문의 규칙을 그대로 쓴다. 이 문서는 그 뒤에 하는 두 가지를 정한다.
+이슈를 진행 중으로 바꾸는 스킬(`do` 설계 세션, `dobby-order`, `dobby-start`, `dobby-qa`)이 **진행 중 전환을 판정한 바로 뒤에** 따르는 단일 출처다. 전환 판정(`statusCategory` 로 고르기) 자체는 각 스킬 본문의 규칙을 그대로 쓴다. 이 문서는 그 뒤에 하는 두 가지를 정한다. 명령은 모두 `twg` 다(`${CLAUDE_PLUGIN_ROOT}/reference/jira-twg.md`).
 
 1. 진행 중으로 **실제로 바꿨으면** 시작 날짜를 오늘로 적는다.
 2. 상위 이슈가 있고 그 상위 이슈에 레이블이 있으면, 같은 레이블을 이 이슈에도 더한다.
@@ -19,45 +19,36 @@
 
 ## 1. 시작 날짜
 
-- **이번에 진행 중으로 전환했을 때만** 적는다. 이미 진행 중(`indeterminate`)이라 전환하지 않았으면 건드리지 않는다. 처음 착수한 날이 이미 적혀 있을 수 있기 때문이다.
+- **이번에 진행 중으로 전환했을 때만** 적는다. `dobby_jira_start_transition` 이 `changed` 를 돌려준 경우다. 이미 진행 중(`indeterminate`)이라 전환하지 않았으면 건드리지 않는다. 처음 착수한 날이 이미 적혀 있을 수 있기 때문이다.
 - 완료(`done`)라 전환하지 않았으면 역시 건드리지 않는다.
 - 날짜는 한국 시간 기준 오늘이다. `TZ=Asia/Seoul date +%F` 로 구한다.
 - 이미 다른 날짜가 들어 있어도 오늘로 바꾼다. 진행 중으로 바뀐 날이 실제 시작일이기 때문이다.
 
-```
-editJiraIssue  issueIdOrKey={키}  fields={ "customfield_10015": "{오늘}" }
+```bash
+twg jira workitem update --id {키} --field customfield_10015={오늘}
 ```
 
 ## 2. 상위 이슈 레이블
 
 - 진행 중 전환 여부와 상관없이 착수할 때 한 번 본다.
 - 이슈 조회 때 `parent`·`labels` 칸을 함께 받는다. `parent` 가 없으면 건너뛴다.
-- 상위 이슈를 `getJiraIssue`(`fields: ["labels"]`)로 조회한다. 레이블이 비어 있으면 건너뛴다.
+- 상위 이슈를 `twg jira workitem get {상위키} --fields labels` 로 조회한다. 레이블이 비어 있으면 건너뛴다.
 - 상위 이슈 레이블 가운데 **이 이슈에 아직 없는 것만** 더한다. 더할 것이 없으면 수정 요청을 보내지 않는다.
-- `labels` 는 목록을 통째로 바꾸는 칸이다. 반드시 **이 이슈의 기존 레이블 + 더할 레이블** 을 합친 목록을 넣는다. 상위 레이블만 넣으면 기존 레이블이 지워진다.
+- `--add-labels` 는 더하기만 한다. 기존 레이블과 합친 목록을 만들 필요가 없다.
 - 이 이슈에만 있는 레이블은 지우지 않는다.
 
-```
-editJiraIssue  issueIdOrKey={키}  fields={ "labels": ["{기존1}", "{기존2}", "{상위에서 온 것}"] }
+```bash
+twg jira workitem update --id {키} --add-labels {상위에서 온 것1},{상위에서 온 것2}
 ```
 
-시작 날짜와 레이블을 둘 다 바꿔야 하면 한 번의 `editJiraIssue` 에 함께 넣어도 된다.
+시작 날짜와 레이블을 둘 다 바꿔야 하면 한 번의 `update` 에 `--field` 와 `--add-labels` 를 함께 넣어도 된다.
 
 ## 확인과 기록
 
-- 바꾼 뒤 `getJiraIssue`(`fields: ["customfield_10015", "labels"]`)로 다시 읽어 값이 들어갔는지 본다.
+- 바꾼 뒤 `twg jira workitem get {키} --fields customfield_10015,labels` 로 다시 읽어 값이 들어갔는지 본다. `update` 결과 글에는 레이블이 나오지 않는다.
 - 실패해도 착수를 멈추지 않는다. 실패 사실과 이유를 보고에 적고 진행한다. 이 두 칸은 작업 기록일 뿐 개발을 막을 이유가 아니다.
 - 바꿨으면 이벤트 로그에 남긴다.
   ```bash
   dobby_event {키} "Jira 착수 — 시작 날짜 {오늘}, 상위 {상위키} 레이블 추가 {레이블들}"
   ```
   바꾸지 않은 쪽은 문구에서 뺀다.
-
-## 도구 이름
-
-스킬마다 쓰는 Atlassian 도구가 다르다. 같은 일을 하는 도구를 쓴다.
-
-| 할 일 | claude.ai Atlassian | mcp-atlassian |
-|---|---|---|
-| 조회 | `getJiraIssue` | `jira_get_issue` |
-| 칸 수정 | `editJiraIssue` | `jira_update_issue` |

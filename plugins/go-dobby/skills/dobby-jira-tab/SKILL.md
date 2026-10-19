@@ -1,6 +1,6 @@
 ---
 name: dobby-jira-tab
-description: 오더(이슈/작업)의 Jira 관련 문서를 대시보드 "Jira" 탭용으로 만들거나 Jira에 반영하는 스킬. 네 가지 서브커맨드로 동작한다 — clean(저장된 이슈 원문을 읽기 쉽게 정리), comments(이슈 코멘트를 Atlassian MCP로 조회해 핵심만 정리), enrich(구현 산출물을 분석해 "업데이트 내용" 표준 요약을 작성), post(그 업데이트 요약을 Jira 설명 또는 코멘트에 반영). 모두 사용자가 대시보드 버튼으로 트리거하며, 소감·아바타 같은 재미요소와 내부 오케스트레이션 용어(에이전트 슬러그·라운드·단계 코드·토큰량·세션ID)·mermaid는 제외하고 "나중에 이슈를 읽었을 때 내용이 명확한" 사실 위주로 정리한다. clean/comments/enrich는 파일만 만드는 비파괴 동작이고 post만 Jira에 쓴다. 사용법 /dobby-jira-tab {키} <clean|comments|enrich|post> [target=desc|comment].
+description: 오더(이슈/작업)의 Jira 관련 문서를 대시보드 "Jira" 탭용으로 만들거나 Jira에 반영하는 스킬. 네 가지 서브커맨드로 동작한다 — clean(저장된 이슈 원문을 읽기 쉽게 정리), comments(이슈 코멘트를 twg로 조회해 핵심만 정리), enrich(구현 산출물을 분석해 "업데이트 내용" 표준 요약을 작성), post(그 업데이트 요약을 Jira 설명 또는 코멘트에 반영). 모두 사용자가 대시보드 버튼으로 트리거하며, 소감·아바타 같은 재미요소와 내부 오케스트레이션 용어(에이전트 슬러그·라운드·단계 코드·토큰량·세션ID)·mermaid는 제외하고 "나중에 이슈를 읽었을 때 내용이 명확한" 사실 위주로 정리한다. clean/comments/enrich는 파일만 만드는 비파괴 동작이고 post만 Jira에 쓴다. 사용법 /dobby-jira-tab {키} <clean|comments|enrich|post> [target=desc|comment].
 ---
 
 # dobby-jira-tab
@@ -17,13 +17,13 @@ description: 오더(이슈/작업)의 Jira 관련 문서를 대시보드 "Jira" 
 - `{키}`: 이슈 키(예 `FE1-1274`). `TASK-…` 문서 전용 키는 Jira가 없으므로 대상 아님.
 - 서브커맨드 하나만 실행한다(대시보드가 버튼별로 호출).
 
-## Atlassian MCP
-Jira 조회·쓰기는 Atlassian MCP 도구를 쓴다(필요한 도구만 `ToolSearch`로 로드). 헤드리스 실행에서는 **토큰 기반 Atlassian MCP**가 있어야 동작한다. 도구가 없거나 인증이 안 되면 **그 서브커맨드는 실패로 종료**한다(대시보드가 미완성으로 표시). 조회는 `getJiraIssue`/이슈 코멘트 조회, 쓰기는 이슈 편집(설명)·코멘트 추가/수정 계열을 사용한다.
+## Jira 는 twg 로
+Jira 조회·쓰기는 MCP 대신 `twg` 명령으로 한다. 명령은 `${CLAUDE_PLUGIN_ROOT}/reference/jira-twg.md` 의 표를 따른다. `dobby_jira_*` 헬퍼를 쓰려면 먼저 `source "${CLAUDE_PLUGIN_ROOT}/reference/dobby-lib.sh"` 한다. twg 인증(`twg auth status`)이 있어야 동작한다. twg 가 없거나 인증이 안 되면 **그 서브커맨드는 실패로 종료**한다(대시보드가 미완성으로 표시).
 
 ---
 
 ## snapshot — 이슈 원문 가져오기(재활용본이 없을 때)  · [단순 조회: Haiku 가능]
-- `dobby-order`가 저장한 `jira-issue.md`가 **없을 때만** 쓰는 폴백. Atlassian MCP로 **이슈 설명을 조회해 원문 그대로** `$ORCHESTRATION_META/{키}/jira-issue.md`에 저장한다(요약·정리 없이 원문만).
+- `dobby-order`가 저장한 `jira-issue.md`가 **없을 때만** 쓰는 폴백. `dobby_jira_desc {키} $ORCHESTRATION_META/{키}/jira-issue.md` 로 **이슈 설명을 원문 그대로** 저장한다(요약·정리 없이 원문만).
 - 설명이 비어 있으면 저장하지 않고 그 사실만 알린다. 코멘트는 여기서 다루지 않는다(`comments`가 별도).
 - 이미 `jira-issue.md`가 있으면 덮어쓰지 않는다(재활용 우선).
 
@@ -33,7 +33,7 @@ Jira 조회·쓰기는 Atlassian MCP 도구를 쓴다(필요한 도구만 `ToolS
 - 산출: `$ORCHESTRATION_META/{키}/jira-issue-clean.md`. (원문은 그대로 두어 대시보드가 "원문 접기"로 함께 보여준다.)
 
 ## comments — 코멘트 핵심 정리  · [분석: Opus]
-- Atlassian MCP로 **이슈의 전체 코멘트를 조회**한다(일부만 재활용하지 않는다 — 누락 방지).
+- `twg jira workitem comment query --issue-id {키} -o json --output-summary none --output-file {임시 파일}` 로 **이슈의 전체 코멘트를 받고**, 파일에서 작성자·시각·본문만 `jq` 로 뽑아 읽는다(일부만 재활용하지 않는다 — 누락 방지).
 - 대화형 코멘트에서 **결정·요청·합의·미해결 이슈** 같은 핵심만 뽑아 시간 흐름이 드러나게 정리한다. 잡담·인사는 뺀다.
 - 산출: `$ORCHESTRATION_META/{키}/jira-comments.md`. 코멘트가 없으면 "코멘트 없음"만 1줄 기록.
 
@@ -69,9 +69,9 @@ Jira 조회·쓰기는 Atlassian MCP 도구를 쓴다(필요한 도구만 `ToolS
 
 ## post — Jira에 반영  · [단순 반영: Haiku 가능]
 - 입력: `$ORCHESTRATION_META/{키}/jira-enrich.md`(사용자가 편집했을 수 있음 — **파일 내용을 그대로** 반영). 없으면 실패 종료.
-- `target=comment` (기본): 이 이슈에 **`## 구현 요약` 제목으로 시작하는 직전 mentis 코멘트가 있으면 그 코멘트를 수정**, 없으면 **새 코멘트로 추가**.
+- `target=comment` (기본): 이 이슈에 **`## 구현 요약` 제목으로 시작하는 직전 mentis 코멘트가 있으면 그 코멘트를 수정**(`comment update`), 없으면 **새 코멘트로 추가**(`comment create`). 찾을 때는 `comment query … --output-file` 로 받은 파일을 본다.
 - `target=desc`: 이슈 **설명**에 **관리 구획만 결정적으로 병합**한다(사람이 쓴 부분 보존):
-  - 현재 설명을 읽어, `## 구현 요약` 제목이 **이미 있으면 그 제목부터 설명 끝까지를 새 내용으로 교체**, **없으면 설명 맨 아래에 추가**한다. 그 제목 위(사람 작성분)는 **절대 건드리지 않는다**. (판단 없는 find-replace식 병합 — 사람 작성분 훼손 금지.)
+  - 현재 설명을 `dobby_jira_desc {키}` 로 읽어, `## 구현 요약` 제목이 **이미 있으면 그 제목부터 설명 끝까지를 새 내용으로 교체**, **없으면 설명 맨 아래에 추가**한다. 그 제목 위(사람 작성분)는 **절대 건드리지 않는다**. (판단 없는 find-replace식 병합 — 사람 작성분 훼손 금지.)
 - 반영 후 **플래그 기록**: `$ORCHESTRATION_META/{키}/jira-enrich.json`에 `{ "desc": "{YYYY-MM-DD HH:MM}" }` 또는 `{ "comment": "..." }`(반영한 대상만). 대시보드가 "추가됨" 배지로 쓴다. **동기화는 하지 않는다**(반영 여부만).
 
 ---
@@ -79,7 +79,7 @@ Jira 조회·쓰기는 Atlassian MCP 도구를 쓴다(필요한 도구만 `ToolS
 ## 비파괴 / 범위
 - `clean`·`comments`·`enrich`는 **각자의 산출 파일 하나만** 만들고 다른 메타·코드·Jira·워크트리는 건드리지 않는다.
 - `post`만 Jira에 쓴다(설명 관리 구획 또는 코멘트). 코드·워크트리·다른 메타는 안 건드린다.
-- 각 서브커맨드는 **필요한 파일·MCP 도구만** 읽어 잡을 가볍게 유지한다.
+- 각 서브커맨드는 **필요한 파일·twg 명령만** 읽어 잡을 가볍게 유지한다.
 
 ## 실행 주체
 - 전부 **대시보드 버튼**이 백그라운드 잡으로 호출한다(사용자 트리거). 오케스트레이터(`dobby-order`)는 이 스킬을 호출하지 않는다 — `dobby-order`는 이슈 원문을 `jira-issue.md`로 저장만 한다(재활용).

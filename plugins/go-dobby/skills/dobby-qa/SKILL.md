@@ -84,7 +84,7 @@ cloud_live
   AND assignee CHANGED TO currentUser() AFTER "-1d"
   ORDER BY updated DESC
   ```
-  `mcp__mcp-atlassian__jira_search`로 조회한다. `assignee CHANGED TO`로 "**나에게 할당된 시각**" 기준을 쓴다(생성/수정 시각이 아니라). 진행중이어도 제외하지 않는다 — "할당 24h 이내 + 아직 한 번도 확인 안 한" 것을 잡기 위함이다.
+  `twg jira workitem query --jql "…" --fields summary,status,assignee,parent,issuetype --limit 20` 으로 조회한다(Jira 명령은 `${CLAUDE_PLUGIN_ROOT}/reference/jira-twg.md`). `assignee CHANGED TO`로 "**나에게 할당된 시각**" 기준을 쓴다(생성/수정 시각이 아니라). 진행중이어도 제외하지 않는다 — "할당 24h 이내 + 아직 한 번도 확인 안 한" 것을 잡기 위함이다.
 - **중복 제거**: `qa-watch.md`에 이미 있는(=이전 틱에서 트리아지한) 이슈는 건너뛴다. 남은 것만 **신규 후보**로 Q2로 넘긴다.
 
 ### Q2. 트리아지 (이 오케스트레이션 소관인가)
@@ -92,7 +92,7 @@ cloud_live
 
 - **① 부모/하위 관계 → 자동 편입**: 버그가 `parent=`로 받은 부모 QA의 하위 이슈이거나, **루트키의 버그 타입 하위 이슈**(`parent = {루트키} AND issuetype = Bug`)이면 편입.
 - **② 사용자 명시 → 자동 편입**: `bugs=`에 포함되거나 사용자가 같은 컨텍스트 처리로 지정한 버그이면 편입.
-- **③ 내용 기반 판단 → 슬랙 문의**: ①②에 안 걸리면 버그 내용(`jira_get_issue`, `expand: renderedFields`)을 읽고, **이 오케스트레이션 에이전트의 계약 화이트리스트에 속한 파일/기능과 관련되는지**를 코드로 확인한다. 관련된다고 판단되면 **자동 진행하지 말고 슬랙으로 문의**한다(Q3). 관련 없으면 `qa-watch.md`에 `무관`으로 남기고 종료.
+- **③ 내용 기반 판단 → 슬랙 문의**: ①②에 안 걸리면 버그 내용(`twg jira workitem get {버그키} --fields summary,status,parent,labels` 와 `dobby_jira_desc {버그키}`)을 읽고, **이 오케스트레이션 에이전트의 계약 화이트리스트에 속한 파일/기능과 관련되는지**를 코드로 확인한다. 관련된다고 판단되면 **자동 진행하지 말고 슬랙으로 문의**한다(Q3). 관련 없으면 `qa-watch.md`에 `무관`으로 남기고 종료.
 
 **③ 슬랙 문의** — 본인 DM(Slack User ID `U03SRUFP97W`)으로 `mcp__claude_ai_Slack__slack_send_message` 발송, 반환된 메시지 `ts`를 `qa-watch.md`에 저장한다.
 ```
@@ -115,7 +115,7 @@ cloud_live
 편입된 버그마다:
 
 1. **담당 에이전트 특정**: 버그를 분석해 고쳐야 할 파일을 `파일:라인`으로 잡고, 그 파일이 어느 에이전트의 **계약(`agents/{슬러그}.md`) 화이트리스트**에 속하는지로 담당을 정한다. 여러 계약에 걸치거나 못 정하면 **확인 게이트**로 사용자에게 확인. 에이전트가 하나뿐이면 그 에이전트가 담당이다.
-2. **버그 이슈 진행중 전환**: `jira_get_transitions`에서 도착 상태 `indeterminate`인 전이로 `jira_transition_issue`. 이어서 `${CLAUDE_PLUGIN_ROOT}/reference/jira-start.md` 를 따라 시작 날짜를 적고 상위 이슈 레이블을 더한다.
+2. **버그 이슈 진행중 전환**: `dobby_jira_start_transition {버그키}`. 이어서 `${CLAUDE_PLUGIN_ROOT}/reference/jira-start.md` 를 따라 시작 날짜를 적고 상위 이슈 레이블을 더한다.
 3. **브랜치·워크트리 — 루트 브랜치에서 가지를 친다**:
    ```bash
    WT="$(dobby_setup_worktree {repo} {버그키} bugfix {루트브랜치} {루트키})"
@@ -178,7 +178,7 @@ Q6에서 루트에 모인 것이 있을 때만 돈다. `env` 가 정해지지 �
 
 실패인데 "수정 완료" 코멘트가 남으면 QA 를 오히려 방해한다. 그래서 실패는 조용히 되돌린다.
 
-**Jira 코멘트** — `jira_add_comment`. ⛔ 내부 용어(에이전트 슬러그·라운드·단계 코드·메타 경로·세션 ID)와 소감·아바타는 **적지 않는다**. 나중에 이슈만 읽어도 뜻이 통해야 한다.
+**Jira 코멘트** — `twg jira workitem comment create --issue-id {버그키} --body-format markdown --body "…" -o json --output-summary none --select data.id`. ⛔ 내부 용어(에이전트 슬러그·라운드·단계 코드·메타 경로·세션 ID)와 소감·아바타는 **적지 않는다**. 나중에 이슈만 읽어도 뜻이 통해야 한다.
 
 통과:
 ```markdown
@@ -201,8 +201,8 @@ Q6에서 루트에 모인 것이 있을 때만 돈다. `env` 가 정해지지 �
   → 배포는 끝났으니 QA 환경에서 확인 부탁드립니다.
 ```
 
-- 같은 이슈에 이 스킬이 남긴 `## 수정 완료` 코멘트가 이미 있으면 **새로 달지 말고 그것을 수정**한다.
-- **이슈 상태 전환은 코멘트가 성공한 뒤에** 한다(`jira_get_transitions` → 도착 상태 `done` 인 전이로 `jira_transition_issue`). 순서가 바뀌면 "왜 닫혔는지" 모르는 이슈가 남는다.
+- 같은 이슈에 이 스킬이 남긴 `## 수정 완료` 코멘트가 이미 있으면 **새로 달지 말고 그것을 수정**한다. `comment query … --output-file {파일}` 로 받아 찾고, `comment update --id {코멘트 번호} --issue-id {버그키}` 로 고친다.
+- **이슈 상태 전환은 코멘트가 성공한 뒤에** 한다(`twg jira workitem transitions query --id {버그키}` 의 `완료` 묶음에서 도착 상태 `해결됨` 의 번호를 골라 `twg jira workitem transition --id {버그키} --transition-id {번호}`). 순서가 바뀌면 "왜 닫혔는지" 모르는 이슈가 남는다.
 - ⛔ `dobby-resolve` 를 쓰지 않는다 — 그 스킬은 **Jira 를 건드리지 않고** 메타만 바꾸며, 버그 이슈는 메타 폴더가 없어 애초에 거부된다.
 
 ### Q9. 다음 폴 예약 (또는 종료)
