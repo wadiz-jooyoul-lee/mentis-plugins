@@ -33,6 +33,7 @@ description: dobby-order가 각 에이전트(단일 이슈든 하위이슈든)�
 ### 1. 이슈 조회 + 진행중 전환 (작업 키면 건너뜀)
 - 이슈 키면 `mcp__mcp-atlassian__jira_get_issue`로 제목·설명·타입·**현재 상태**를 조회(`expand: renderedFields`, 이미지 있으면 `jira_get_issue_images`).
 - 상태를 **`statusCategory.key`로 판정**해 "진행 중"으로 전환한다(`indeterminate`면 그대로, `done`이면 전환 말고 사용자 확인, `new`면 `jira_get_transitions`에서 도착 상태 `indeterminate`인 전이를 골라 `jira_transition_issue`). 애매하면 확인.
+- 전환 판정 직후 `${CLAUDE_PLUGIN_ROOT}/reference/jira-start.md` 를 따른다 — 이번에 진행 중으로 바꿨으면 시작 날짜를 오늘로 적고, 상위 이슈에 레이블이 있으면 같은 레이블을 더한다. dobby-order 가 이미 이 키를 처리했으면 다시 하지 않는다.
 - **문서 전용 작업 키(`TASK-...`)면 Jira 조회·전환을 건너뛴다.** 대상 문서를 읽어 요구사항을 파악한다.
 
 ### 2. 베이스 결정 (로컬/원격 모두 처리)
