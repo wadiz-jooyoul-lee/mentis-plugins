@@ -94,7 +94,8 @@ mkdir -p ~/.config/go-dobby
        { "type": "command", "if": "Bash(tee *)",   "command": "bash", "args": ["/Users/{사용자}/.config/go-dobby/hooks/pre-bash.sh"], "timeout": 5, "statusMessage": "go-dobby 안전 검사" },
        { "type": "command", "if": "Bash(sed *)",   "command": "bash", "args": ["/Users/{사용자}/.config/go-dobby/hooks/pre-bash.sh"], "timeout": 5, "statusMessage": "go-dobby 안전 검사" },
        { "type": "command", "if": "Bash(perl *)",  "command": "bash", "args": ["/Users/{사용자}/.config/go-dobby/hooks/pre-bash.sh"], "timeout": 5, "statusMessage": "go-dobby 안전 검사" },
-       { "type": "command", "if": "Bash(python3 *)", "command": "bash", "args": ["/Users/{사용자}/.config/go-dobby/hooks/pre-bash.sh"], "timeout": 5, "statusMessage": "go-dobby 안전 검사" }
+       { "type": "command", "if": "Bash(python3 *)", "command": "bash", "args": ["/Users/{사용자}/.config/go-dobby/hooks/pre-bash.sh"], "timeout": 5, "statusMessage": "go-dobby 안전 검사" },
+       { "type": "command", "if": "Bash(twg *)",   "command": "bash", "args": ["/Users/{사용자}/.config/go-dobby/hooks/pre-bash.sh"], "timeout": 5, "statusMessage": "go-dobby 안전 검사" }
      ]
    }
    ```

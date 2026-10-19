@@ -43,6 +43,16 @@
             ],
             "timeout": 5,
             "statusMessage": "go-dobby 안전 검사"
+          },
+          {
+            "type": "command",
+            "if": "Bash(twg *)",
+            "command": "bash",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/pre-bash.sh"
+            ],
+            "timeout": 5,
+            "statusMessage": "go-dobby 안전 검사"
           }
         ]
       },
