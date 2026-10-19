@@ -8,16 +8,21 @@
 # 사용법:
 #   run.sh {키} [--mode {권한모드}] [--max {최대 세션 수}] [--with-test] [--approve-commit]
 #     --mode       claude 의 --permission-mode 값. 기본 auto.
-#     --max        이번 실행에서 띄울 세션 수 상한. 기본 10.
+#     --max        이번 실행에서 띄울 세션 수 상한. 기본 10, auto 배포 오더는 20.
 #     --with-test  통합 뒤 검증까지 돈다. 기본은 통합에서 멈춘다(검증은 배포가 끝난 뒤에야 의미가 있다).
 #     --approve-commit  사람이 커밋·푸시를 미리 승인한 실행. 세션마다 그 승인을 지시로 덧붙여 통합 세션이 묻고 멈추지 않게 한다.
+#
+# auto 배포 오더: 상태 문서에 `- **자동 배포 환경**: {env}` 줄이 있으면(설계 세션이 `/do {키} auto env=` 로 적는다)
+# 통합에서 멈추지 않고 배포 세션 → 검증 세션까지 간다. 리뷰봇·빌드는 세션이 아니라 이 셸이 기다리고,
+# 배포 승인 지시를 세션마다 덧붙이며, 멈출 때는 슬랙·메일로 알린다(설계: auto-mode.md).
 #
 # 세션 이어 쓰기: 기본은 단계마다 새 세션이다. 다음 일이 '수정'이고, 직전 세션의 마지막 문맥이
 # DOBBY_REUSE_MAX_CTX 이하이며(dobby-lib.sh), 직전 호출 뒤 DOBBY_REUSE_MAX_GAP 초가 지나지 않았을 때만 직전 세션을
 # `claude -p --resume` 으로 이어 쓴다(근거: session-reuse.md).
 #
 # 멈추는 경우:
-#   dobby-order 가 만든 메타 · 설계 미확정 · 통합 완료(--with-test 없을 때) · 검증 전부 통과
+#   dobby-order 가 만든 메타 · 설계 미확정 · 통합 완료(--with-test 없고 auto 배포 오더도 아닐 때) · 검증 전부 통과
+#   · 배포 표의 막힘(⚠) · 리뷰봇 30분 · 빌드 30분
 #   · 해결/종료/완료/보류 단계 · 모르는 단계값
 #   · 세션이 끝났는데 아무것도 바뀌지 않음(사람 판단이 필요해 스킬이 멈춘 것) · 세션 오류 · 상한 도달
 set -uo pipefail
@@ -25,7 +30,7 @@ set -uo pipefail
 die() { printf '자동 실행 중단: %s\n' "$1" >&2; exit "${2:-1}"; }
 
 KEY="${1:-}"; [ -n "$KEY" ] && shift || die "오더 키를 주세요. 예: run.sh FE1-1234"
-MODE=auto; MAX=10; WITH_TEST=0; APPROVE=0
+MODE=auto; MAX=""; WITH_TEST=0; APPROVE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --mode) MODE="$2"; shift 2 ;;
@@ -63,10 +68,19 @@ design_approved() {
 
 test_passed() { _v2_test_passed "$KEY"; }
 
-# 세션 한 번이 무엇이든 남겼는지 보는 지문 — 단계, 리뷰·검증 폴더 목록, 주요 문서의 수정 시각.
+AUTO_ENV="$(dobby_v2_env "$KEY")"
+[ -n "$MAX" ] || { [ -n "$AUTO_ENV" ] && MAX=20 || MAX=10; }
+# auto 배포 오더는 멈출 때 사람에게 알린다. 사람이 지켜보지 않는 실행이기 때문이다.
+stop() {
+  [ -n "$AUTO_ENV" ] && dobby_v2_notify "$KEY" "자동 실행 멈춤 — $1" >/dev/null
+  die "$1"
+}
+
+# 세션 한 번이 무엇이든 남겼는지 보는 지문 — 단계, 리뷰·검증 폴더 목록, 주요 문서의 수정 시각, 배포 표.
 fingerprint() {
   {
     phase
+    sed -n '/^## 배포[[:space:]]*$/,/^## /p' "$D/status.md"
     find "$D/reviews" "$D/test-runs" 2>/dev/null | sort
     for f in design.md design-ack.json implementation.md outcome.md; do
       [ -f "$D/$f" ] && stat -f '%m %N' "$D/$f" 2>/dev/null
@@ -80,22 +94,55 @@ WT="$(_order_worktree "$KEY")"
 CONSENT="이 실행은 사용자가 커밋과 푸시를 미리 승인한 자동 실행이다(대시보드 '자동 실행' 확인 창 또는 --approve-commit). \
 /do 통합 단계에서 오더 작업 브랜치에 커밋하고 푸시하는 것은 이미 동의를 받았으니 다시 묻지 말고 진행한다. \
 정식 배포 브랜치로의 PR·머지·배포는 이 승인에 들어가지 않는다."
-extra=(); [ "$APPROVE" = 1 ] && extra=(--append-system-prompt "$CONSENT")
+SHIP_CONSENT="이 실행은 사용자가 $AUTO_ENV 배포를 미리 승인한 자동 실행이다. dev·rc1·rc4 의 머지·빌드·argocd sync 는 \
+이미 동의를 받았으니 다시 묻지 말고 진행한다. stage·cloud_live 는 이 승인에 들어가지 않는다. \
+리뷰봇이나 빌드를 세션 안에서 기다리지 않는다. \`## 배포\` 표에 \`리뷰 대기\`·\`배포 대기\` 를 적고 세션을 끝낸다."
+sys=""
+[ "$APPROVE" = 1 ] && sys="$CONSENT"
+[ -n "$AUTO_ENV" ] && sys="${sys:+$sys
+}$SHIP_CONSENT"
+extra=(); [ -n "$sys" ] && extra=(--append-system-prompt "$sys")
 
-n=0; sid=""
+n=0; sid=""; noted=""
 while :; do
   ph="$(phase)"
   case "$ph" in
     해결|종료|완료) echo "$KEY 는 이미 $ph 단계입니다."; exit 0 ;;
     보류)     die "$KEY 는 보류 중입니다. 다시 진행하려면 상태 문서의 단계를 되돌린 뒤 실행하세요" ;;
-    착수|"")  die "설계가 끝나지 않았습니다. 터미널에서 /do $KEY 로 설계를 확정하세요" ;;
-    분석)     design_approved || die "설계가 확정되지 않았습니다. 터미널에서 /do $KEY 로 설계를 보고 \"확정\"해 주세요" ;;
+    착수|"")  stop "설계가 끝나지 않았습니다. 터미널에서 /do $KEY 로 설계를 확정하세요" ;;
+    분석)     design_approved || stop "설계가 확정되지 않았습니다. 터미널에서 /do $KEY 로 설계를 보고 \"확정\"해 주세요" ;;
     구현|리뷰) ;;
-    통합)     [ "$WITH_TEST" = 1 ] || { echo "통합까지 끝났습니다. 배포한 뒤 run.sh $KEY --with-test 또는 /do $KEY 로 검증하세요."; exit 0; } ;;
+    통합)
+      if [ -n "$AUTO_ENV" ]; then
+        dobby_ship_reopen "$KEY" >/dev/null
+        # 결과를 먼저 받고 나눈다. `IFS=… read <<<"$(…)"` 로 쓰면 괄호 안 함수까지 탭 구분자를 물려받는다.
+        nx="$(dobby_v2_ship_next "$KEY")"
+        IFS=$'\t' read -r what repo tgt since <<<"$nx"
+        el=$(( $(date +%s) - $(_v2_epoch "${since:-}" || date +%s) ))
+        case "$what" in
+          blocked) stop "배포가 막혔습니다($repo $AUTO_ENV): $tgt. 상태 문서 '## 배포' 표의 비고를 보고 처리한 뒤 /do $KEY 로 이어 가세요" ;;
+          wait-review)
+            [ "$el" -lt 1800 ] || stop "리뷰봇 리뷰가 30분 동안 오지 않았습니다($repo $AUTO_ENV PR $tgt). 리뷰어가 붙었는지 확인하고 /do $KEY 로 이어 가세요"
+            if [ "$el" -ge 600 ] && [ "$noted" != "$tgt" ]; then
+              dobby_v2_notify "$KEY" "리뷰 지연 — $repo $AUTO_ENV PR $tgt 에 리뷰봇 리뷰가 10분째 없습니다. 30분까지 기다립니다." >/dev/null
+              noted="$tgt"
+            fi
+            printf '리뷰봇 리뷰를 기다립니다(%s PR %s, %d분째) · %s\n' "$repo" "$tgt" $((el / 60)) "$(date '+%H:%M')"
+            sleep 120; continue ;;
+          wait-build)
+            [ "$el" -lt 1800 ] || stop "빌드가 30분 동안 끝나지 않았습니다($repo $AUTO_ENV run $tgt). gh run view $tgt 로 확인하고 /do $KEY 로 이어 가세요"
+            printf '빌드를 기다립니다(%s run %s, %d분째) · %s\n' "$repo" "$tgt" $((el / 60)) "$(date '+%H:%M')"
+            sleep 60; continue ;;
+          ship|verify) ;;
+          *) stop "배포 다음 일을 정하지 못했습니다: ${what:-빈 값}" ;;
+        esac
+      else
+        [ "$WITH_TEST" = 1 ] || { echo "통합까지 끝났습니다. 배포한 뒤 run.sh $KEY --with-test 또는 /do $KEY 로 검증하세요."; exit 0; }
+      fi ;;
     검증)     test_passed && { echo "검증을 전부 통과했습니다. /dobby-resolve $KEY 로 해결 처리하세요."; exit 0; } ;;
-    *)        die "모르는 단계값입니다: $ph. 상태 문서를 확인하세요" ;;
+    *)        stop "모르는 단계값입니다: $ph. 상태 문서를 확인하세요" ;;
   esac
-  [ "$n" -lt "$MAX" ] || die "세션 상한(${MAX}개)에 닿았습니다. 상태 문서를 확인하세요"
+  [ "$n" -lt "$MAX" ] || stop "세션 상한(${MAX}개)에 닿았습니다. 상태 문서를 확인하세요"
 
   n=$((n + 1))
   before="$(fingerprint)"
@@ -119,6 +166,6 @@ while :; do
   dobby_event "$KEY" "자동 실행 세션 $n 종료 — 시작 단계 $ph → 지금 $(phase), ${how}, 세션 ${sid:-알 수 없음}" 2>/dev/null
   printf '━━ 세션 %d 끝 · 세션 아이디 %s · 지금 단계 %s\n' "$n" "${sid:-알 수 없음}" "$(phase)"
 
-  [ "$code" -eq 0 ] && [ "$err" != "true" ] || die "세션이 오류로 끝났습니다(종료 코드 $code). 복기: claude --resume ${sid:-?}"
-  [ "$(fingerprint)" != "$before" ] || die "세션이 아무것도 바꾸지 못했습니다. 사람 판단이 필요해 멈췄을 수 있습니다. 복기: cd $WT && claude --resume ${sid:-?}"
+  [ "$code" -eq 0 ] && [ "$err" != "true" ] || stop "세션이 오류로 끝났습니다(종료 코드 $code). 복기: claude --resume ${sid:-?}"
+  [ "$(fingerprint)" != "$before" ] || stop "세션이 아무것도 바꾸지 못했습니다. 사람 판단이 필요해 멈췄을 수 있습니다. 복기: cd $WT && claude --resume ${sid:-?}"
 done
