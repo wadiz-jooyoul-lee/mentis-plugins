@@ -2620,6 +2620,157 @@ dobby_v2_change_open() {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
+# /do auto 모드 — 통합 뒤 배포·검증까지 사람 없이 간다. 설계와 근거: skills/do/auto-mode.md
+# 상태 문서 '## 현재 단계' 의 `- **자동 배포 환경**: {env}` 줄이 있는 오더만 해당한다.
+# ─────────────────────────────────────────────────────────────────────────────
+DOBBY_NOTIFY_SLACK="U03SRUFP97W"
+DOBBY_NOTIFY_EMAIL="jooyoul.lee@wadiz.kr"
+
+# dobby_v2_env KEY — 자동 배포 환경 값. 줄이 없으면 빈 출력(통합에서 멈추는 오더).
+dobby_v2_env() {
+  sed -nE 's/^[ \t]*-[ \t]*\*\*자동 배포 환경\*\*:[ \t]*([a-z0-9]+).*$/\1/p' "$(_order_dir "$1")/status.md" 2>/dev/null | head -1
+}
+
+# dobby_v2_set_env KEY ENV — 그 줄을 '- **단계**:' 바로 아래에 적는다(있으면 값만 바꾼다). dev·rc1·rc4 만 받는다.
+dobby_v2_set_env() {
+  local key="$1" env="$2" f
+  _ship_has "$env" "$DOBBY_SHIP_MERGE_ENVS" || { _die "자동 배포 환경은 dev·rc1·rc4 중 하나다: '$env'"; return 1; }
+  f="$(_order_dir "$key")/status.md"
+  [ -f "$f" ] || { _die "$key 의 상태 문서가 없습니다"; return 1; }
+  awk -v env="$env" '
+    /^[ \t]*-[ \t]*\*\*자동 배포 환경\*\*/ { next }
+    { print }
+    /^[ \t]*-[ \t]*\*\*단계\*\*/ && !done { print "- **자동 배포 환경**: " env; done = 1 }
+  ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  dobby_event "$key" "자동 배포 환경 → $env" 2>/dev/null
+}
+
+# _v2_ship_repos KEY — 워크트리 표에서 배포를 맡는 저장소마다 "저장소<TAB>브랜치<TAB>경로".
+_v2_ship_repos() {
+  local f r row; f="$(_order_dir "$1")/status.md"
+  for r in $DOBBY_SHIP_REPOS; do
+    row="$(_wt_row "$f" "$r")"; [ -n "$row" ] && printf '%s\t%s\n' "$r" "$row"
+  done
+}
+
+# _v2_ship_row KEY 저장소 환경 — '## 배포' 표의 그 행을 "단계 PR 빌드 갱신 비고" 로 준다(구분자 \037).
+# 탭으로 나누면 빈 칸이 앞뒤 칸과 붙어 버려서(read 가 탭을 공백으로 다룬다) 다른 구분자를 쓴다.
+_v2_ship_row() {
+  awk -F'|' -v rp="$2" -v env="$3" '
+    function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
+    /^## /{ins=($0 ~ /^##[ \t]*배포[ \t]*$/); next}
+    ins && /^\|/ && NF>=9 && t($2)==rp && t($3)==env {printf "%s\037%s\037%s\037%s\037%s\n", t($4),t($5),t($6),t($7),t($8); exit}
+  ' "$(_order_dir "$1")/status.md"
+}
+
+# _v2_in_env 경로 브랜치 저장소 환경 — 작업 브랜치의 마지막 커밋이 그 환경의 실제 브랜치에 들어갔으면 0.
+# 수정 커밋이 새로 생기면 다시 거짓이 되므로 재배포가 필요하다는 표시를 따로 두지 않는다. fetch 는 부르는 쪽이 한다.
+_v2_in_env() {
+  local eb; eb="$(_ship_branch "$3" "$4")"; [ -n "$eb" ] || return 1
+  git -C "$1" merge-base --is-ancestor "origin/$2" "origin/$eb" 2>/dev/null
+}
+
+# _v2_epoch "YYYY-MM-DD HH:MM" — 배포 표 갱신 칸을 초로.
+_v2_epoch() { date -j -f '%Y-%m-%d %H:%M' "$1" +%s 2>/dev/null || date -d "$1" +%s 2>/dev/null; }
+
+# dobby_ship_reopen KEY — 자동 배포 환경의 '배포 확인'·'검증 중'·'검증 완료' 행 가운데 작업 브랜치가
+# 환경 브랜치에 아직 없는 행(수정 커밋 전의 옛 배포 기록)을 지운다. 지운 저장소를 한 줄씩 낸다.
+# 행을 지우는 이유: dobby-ship 0단계가 그 행을 "이미 끝난 배포"로 읽는다. 지우면 PR 생성부터 다시 하고,
+# dobby_ship_pr 이 열린 PR 이 없으면 새로 만든다.
+dobby_ship_reopen() {
+  local key="$1" env f r b p st
+  env="$(dobby_v2_env "$key")"; [ -n "$env" ] || return 0
+  f="$(_order_dir "$key")/status.md"
+  while IFS=$'\t' read -r r b p; do
+    st="$(_v2_ship_row "$key" "$r" "$env" | cut -d$'\037' -f1)"
+    case "$st" in 배포\ 확인|검증\ 중|검증\ 완료) ;; *) continue ;; esac
+    git -C "$p" fetch -q origin 2>/dev/null
+    _v2_in_env "$p" "$b" "$r" "$env" && continue
+    awk -F'|' -v rp="$r" -v env="$env" '
+      function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
+      /^## /{ins=($0 ~ /^##[ \t]*배포[ \t]*$/)}
+      ins && /^\|/ && NF>=9 && t($2)==rp && t($3)==env {next}
+      {print}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+    dobby_event "$key" "옛 배포 기록 지움 — $r $env ($st), 수정 커밋을 다시 배포한다" 2>/dev/null
+    printf '%s\n' "$r"
+  done < <(_v2_ship_repos "$key")
+}
+
+# dobby_v2_ship_next KEY — 통합 단계 auto 오더의 다음 일을 한 줄로 낸다: "일<TAB>저장소<TAB>설명".
+# 기다림 두 가지만 넷째 칸이 있다: "일<TAB>저장소<TAB>PR 또는 run id<TAB>기다리기 시작한 시각".
+#   blocked     표 단계에 ⚠(막힘)가 있다 — 멈춘다. 설명은 비고
+#   wait-review 리뷰봇 리뷰를 기다린다(wadiz-frontend rc1·rc4 의 '리뷰 대기' 이후 새 리뷰가 아직 없다)
+#   wait-build  빌드 칸의 run 이 아직 돌고 있다
+#   ship        배포 세션이 할 일이 있다
+#   verify      모든 저장소가 환경에 들어갔고 '배포 확인' 이후다 — 검증 세션
+# 기다림이 있으면 배포 세션을 띄우지 않는다(com.wadiz.web 은 wadiz-frontend 머지·배포 뒤에야 나아갈 수 있다).
+# 기다리기 시작한 시각은 그 행의 갱신 칸이다(셸이 10분 알림·30분 멈춤을 이것으로 잰다).
+dobby_v2_ship_next() {
+  local key="$1" env r b p st pr bd ts nt gr id s wait="" ship="" any=""
+  env="$(dobby_v2_env "$key")"; [ -n "$env" ] || { _die "$key 에 자동 배포 환경 줄이 없습니다"; return 1; }
+  while IFS=$'\t' read -r r b p; do
+    any=1
+    IFS=$'\037' read -r st pr bd ts nt <<<"$(_v2_ship_row "$key" "$r" "$env")"
+    case "$st" in *⚠*) printf 'blocked\t%s\t%s\n' "$r" "${nt:-비고 없음}"; return 0 ;; esac
+    gr="$(_ship_repo "$p")"
+    case "$st" in
+      "리뷰 대기")
+        if _ship_reviewbot "$r" && [ "$env" != dev ] && [ -n "$pr" ] && [ "$pr" != - ]; then
+          s="$(gh pr view "${pr#\#}" --repo "$gr" --json reviews \
+               --jq '[.reviews[].submittedAt | fromdateiso8601] | max // 0' 2>/dev/null)"
+          if [ "${s:-0}" -lt "$(_v2_epoch "$ts")" ]; then
+            [ -n "$wait" ] || wait="$(printf 'wait-review\t%s\t%s\t%s' "$r" "$pr" "$ts")"
+            continue
+          fi
+        fi ;;
+      "빌드 대기"|"배포 대기")
+        for id in $(printf '%s' "$bd" | grep -oE '(static|global|web)#[0-9]+' | cut -d'#' -f2); do
+          s="$(gh run view "$id" --repo "$gr" --json status --jq .status 2>/dev/null)"
+          if [ -n "$s" ] && [ "$s" != completed ]; then
+            [ -n "$wait" ] || wait="$(printf 'wait-build\t%s\t%s\t%s' "$r" "$id" "$ts")"
+            continue 2
+          fi
+        done ;;
+    esac
+    git -C "$p" fetch -q origin 2>/dev/null
+    case "$st" in 배포\ 확인|검증\ 중|검증\ 완료) _v2_in_env "$p" "$b" "$r" "$env" && continue ;; esac
+    [ -n "$ship" ] || ship="$(printf 'ship\t%s\t%s' "$r" "${st:-배포 기록 없음}")"
+  done < <(_v2_ship_repos "$key")
+  [ -n "$any" ] || { printf 'blocked\t-\t워크트리 표에 배포를 맡는 저장소(%s)가 없습니다\n' "$DOBBY_SHIP_REPOS"; return 0; }
+  if [ -n "$wait" ]; then printf '%s\n' "$wait"
+  elif [ -n "$ship" ]; then printf '%s\n' "$ship"
+  else printf 'verify\t-\t모든 저장소가 %s 에 배포됨\n' "$env"
+  fi
+}
+
+# dobby_v2_test_fixes KEY — 검증 실패를 고친 횟수(agent-logs.json 의 fix-test-* 하위 키 수, 모든 담당 합계).
+# 상한은 2번이다(auto-mode.md "수정 상한"). 리뷰 지적 수정(fix-N)은 세지 않는다.
+dobby_v2_test_fixes() {
+  local f; f="$(_order_dir "$1")/agent-logs.json"
+  [ -f "$f" ] || { printf '0'; return 0; }
+  jq -r '[.[] | objects | keys[] | select(startswith("fix-test-"))] | length' "$f" 2>/dev/null || printf '0'
+}
+
+# dobby_v2_notify KEY 본문 — 셸(run.sh)이 사람에게 알린다. 슬랙 DM 과 Gmail 로 같은 본문을 보낸다.
+# 셸에서 바로 보낼 길이 없어 짧은 헤드리스 세션 하나를 띄우고, 그 세션에는 보내기 도구 둘만 허용한다.
+# 보내지 못해도 이벤트 로그에는 남는다. 반환은 언제나 0 — 알림 실패로 실행 판단이 바뀌지 않게.
+dobby_v2_notify() {
+  local key="$1" body="$2" prompt
+  dobby_event "$key" "알림 — ${body%%$'\n'*}" 2>/dev/null
+  prompt="아래 알림을 두 곳에 그대로 보내라. 다른 일은 하지 않는다.
+1) 슬랙 DM: mcp__claude_ai_Slack__slack_send_message 로 channel_id $DOBBY_NOTIFY_SLACK 에 보낸다.
+2) 메일: mcp__claude_ai_Gmail__send_message 로 $DOBBY_NOTIFY_EMAIL 에게 보낸다. 제목은 [dobby] $key 와 본문 첫 줄.
+도구가 아직 안 보이면 연결이 늦은 것이니 ToolSearch 로 다시 찾아 본다.
+끝나면 각각 보냈는지 한 줄씩 답한다.
+
+--- 알림 본문 ---
+[$key] $body"
+  claude -p "$prompt" --allowedTools mcp__claude_ai_Slack__slack_send_message mcp__claude_ai_Gmail__send_message ToolSearch \
+    --output-format json 2>/dev/null | jq -r '.result // empty' 2>/dev/null
+  return 0
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 릴리즈 노트 등록 기록 — dobby-release 가 update-release-note 결과를 확인한 뒤 남긴다.
 # ─────────────────────────────────────────────────────────────────────────────
 
