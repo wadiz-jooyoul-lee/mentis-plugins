@@ -230,6 +230,9 @@ dobby-auto 의 충돌 처리(근거로 풀고, 확정 안 되면 해결안을 �
 | `skills/dobby-ship/auto-conflict.md` | dobby-auto 에서 옮긴 충돌 처리 규칙. 확정이 안 될 때는 해결안을 알리고 행에 비고를 적어 멈춘다 |
 | `skills/dobby-auto/SKILL.md` | `/do {키} auto env=` 로 들어가는 문만 남겼다 |
 | 대시보드 `src/lib/jobs.ts` | `v2RunCheck` 가 `자동 배포 환경` 줄이 있는 오더는 통합·검증 단계에서도 자동 실행을 허용한다 |
+| 대시보드 `src/lib/jobs.ts` | dobby-order 를 띄우던 `startOrder` 를 지우고 `startDo` 를 만들었다. 오더 실행 탭의 잡 하나가 `DOBBY_V2_CHAINED=1 claude -p "/do {키} auto [env=]"` 설계 세션을 돌린 뒤 같은 잡에서 `run.sh` 를 이어 띄운다. 설계 세션이 잡으로 도는 동안 `dobby_v2_autorun` 을 부르면 같은 잡 이름이 이미 돌고 있어 거부되기 때문이다. 설계가 확정되지 않고 끝나면 `run.sh` 가 곧바로 멈추고 이유가 콘솔에 남는다 |
+| `reference/dobby-lib.sh` `dobby_v2_autorun` | `DOBBY_V2_CHAINED` 가 있으면 자동 실행을 띄우지 않고 0을 돌려준다. 대시보드 잡이 이어서 띄운다 |
+| 대시보드 `src/components/OrderLauncher.tsx`·`src/app/api/orders/route.ts` | 오더 실행 탭은 이슈 키나 이슈 주소만 받고, 배포 환경(통합까지·dev·rc1·rc4)을 고른다 |
 
 ## 셸 시험 (2026-10-19, 구현 뒤)
 
