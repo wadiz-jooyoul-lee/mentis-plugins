@@ -22,7 +22,7 @@ description: dobby-order 로 진행하던 오더를 /do(단계마다 새 세션�
 
 작업 전에 **`${CLAUDE_PLUGIN_ROOT}/reference/config.md` 의 "설정 절차"를 그대로 따른다**(config.env 는 읽기만). 이하 메타 경로는 `$ORCHESTRATION_META` 기준이고, 헬퍼는 `${CLAUDE_PLUGIN_ROOT}/reference/dobby-lib.sh` 의 `dobby_*` 를 쓴다.
 
-v2 의 규칙은 `${CLAUDE_PLUGIN_ROOT}/skills/do/SKILL.md` 가 정본이다. 아래에서 "v2 의 1-4" 처럼 가리키면 그 문서의 그 절을 읽고 따른다.
+v2 의 규칙은 `${CLAUDE_PLUGIN_ROOT}/skills/do/SKILL.md` 와 단계별 본문 `${CLAUDE_PLUGIN_ROOT}/skills/do/steps/` 가 정본이다. 아래에서 "v2 의 1-4" 처럼 설계 단계의 절을 가리키면 `steps/design.md` 의 그 절을 읽고 따른다.
 
 ## 1. 떠 있는 세션 확인
 
