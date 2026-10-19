@@ -105,6 +105,21 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/prompt-guard.sh"
+            ],
+            "timeout": 5,
+            "statusMessage": "go-dobby 입력 검사"
+          }
+        ]
+      }
     ]
   }
 }
