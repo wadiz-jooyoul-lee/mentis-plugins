@@ -524,6 +524,71 @@ dobby_testrun_update() {
   ' "$sf" > "$sf.tmp" && mv "$sf.tmp" "$sf"
 }
 
+# ── 검증 묶음 — 한 회차를 묶음으로 나눠 세션마다 묶음 하나씩 돈다 ──────────
+# _testrun_open KEY — 이력 표의 마지막 회차가 '테스트중'이면 그 폴더를 낸다. 아니면 출력 없이 1.
+_testrun_open() {
+  local dir
+  dir="$(awk -F'|' '
+    function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
+    /^## /{ins=(index($0,"테스트 실행 이력")>0)?1:0; next}
+    ins && /^\|/ && $2 !~ /회차|---/ {st=t($4); d=t($6)}
+    END{if(st=="테스트중") print d}' "$(_order_dir "$1")/status.md" 2>/dev/null)"
+  [ -n "$dir" ] && [ -d "$dir" ] && printf '%s' "$dir"
+}
+
+# dobby_testrun_current KEY [총시나리오수] [환경] — 열린 회차('테스트중')가 있으면 그 폴더를, 없으면 새 회차를 연다.
+dobby_testrun_current() {
+  _testrun_open "$1" || dobby_testrun_new "$@"
+}
+
+# _testplan_batches KEY — "묶음<TAB>S1,S2,…" 줄들. `## 검증 묶음` 표를 따르고, 표에 없는 시나리오는 4개씩 덧붙인다.
+_testplan_batches() {
+  local p n=0 rest="" i=0 s
+  p="$(_order_dir "$1")/test-plan.md"
+  [ -f "$p" ] || return 1
+  local tbl; tbl="$(awk -F'|' '
+    function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
+    /^## /{ins=(t(substr($0,4))=="검증 묶음"); next}
+    ins && /^\|/ && t($2) !~ /^(묶음|-+)$/ {s=t($3); gsub(/[ \t]/,"",s); print t($2) "\t" s}' "$p")"
+  [ -n "$tbl" ] && { printf '%s\n' "$tbl"; n="$(printf '%s\n' "$tbl" | wc -l | tr -d ' ')"; }
+  for s in $(sed -nE 's/^## (S[0-9]+)\..*/\1/p' "$p"); do
+    printf '%s\n' "$tbl" | cut -f2 | tr ',' '\n' | grep -qx "$s" && continue
+    rest="${rest:+$rest,}$s"; i=$((i + 1))
+    [ "$i" -eq 4 ] && { n=$((n + 1)); printf 'V%s\t%s\n' "$n" "$rest"; rest=""; i=0; }
+  done
+  [ -n "$rest" ] && printf 'V%s\t%s\n' "$((n + 1))" "$rest"
+  return 0
+}
+
+# dobby_verify_next KEY — 판정이 빈 시나리오가 든 첫 묶음 "묶음<TAB>S1,S2"(빈 것만). 다 찼으면 done.
+# 열린 회차가 없으면 전부 빈 것으로 보고 첫 묶음을 낸다.
+dobby_verify_next() {
+  local key="$1" run judged="" name list s left
+  run="$(_testrun_open "$key")"
+  [ -n "$run" ] && judged=" $(awk -F'|' '
+    function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
+    /dobby:scenarios/{m=1; next}
+    m && /^\|/ { if(!h){for(i=2;i<NF;i++) if(t($i)=="판정") j=i; h=1; next}
+      id=t($2); if(id ~ /^S[0-9]+$/ && j && t($j)!="") print id; next }
+    m && h {m=0}' "$run/result.md" | tr '\n' ' ')"
+  while IFS=$'\t' read -r name list; do
+    left=""
+    for s in ${list//,/ }; do
+      case "$judged" in *" $s "*) ;; *) left="${left:+$left,}$s" ;; esac
+    done
+    [ -n "$left" ] && { printf '%s\t%s\n' "$name" "$left"; return 0; }
+  done <<<"$(_testplan_batches "$key")"
+  printf 'done\n'
+}
+
+# dobby_testplan_slice KEY S1,S2 — 테스트 계획에서 제목·사전 준비·영향 번들과 그 시나리오 절만 낸다.
+dobby_testplan_slice() {
+  awk -v want=",${2// /}," '
+    /^## /{ h=substr($0,4); id=h; sub(/\..*/,"",id)
+      keep = (h ~ /^(사전 준비|영향 번들)/) || (id ~ /^S[0-9]+$/ && index(want, "," id ",") > 0) }
+    NR==1 || keep' "$(_order_dir "$1")/test-plan.md"
+}
+
 # ── 워크트리/커밋/통합 ───────────────────────────────────────────────
 # dobby_setup_worktree REPO KEY PREFIX BASE — 워크트리 생성(재사용 시 그대로) + origin push. 경로 stdout.
 # _table_row_append FILE 섹션제목 헤더행 구분행 ROW — 그 `## 섹션`의 표 마지막 행 뒤에 ROW를 붙인다.
@@ -2551,7 +2616,7 @@ _v2_test_passed() {
 _v2_next_is_fix() {
   local key="$1" d ph rd
   d="$(_order_dir "$key")"; ph="$(_order_phase "$key")"
-  if [ "$ph" = 검증 ]; then ! _v2_test_passed "$key"; return; fi
+  if [ "$ph" = 검증 ]; then _testrun_open "$key" >/dev/null && return 1; ! _v2_test_passed "$key"; return; fi
   [ "$ph" = 리뷰 ] || return 1
   rd="$(find "$d/reviews" -maxdepth 1 -type d -name 'round-*' 2>/dev/null | sed 's/.*round-//' | sort -n | tail -1)"
   [ -n "$rd" ] && ls "$d/reviews/round-$rd"/*.md >/dev/null 2>&1 \

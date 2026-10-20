@@ -8,7 +8,7 @@
 # 사용법:
 #   run.sh {키} [--mode {권한모드}] [--max {최대 세션 수}] [--with-test] [--approve-commit]
 #     --mode       claude 의 --permission-mode 값. 기본 auto.
-#     --max        이번 실행에서 띄울 세션 수 상한. 기본 10, auto 배포 오더는 20.
+#     --max        이번 실행에서 띄울 세션 수 상한. 기본 10, auto 배포 오더는 20. 열린 회차를 잇는 검증 묶음 세션은 하나씩 더한다.
 #     --with-test  통합 뒤 검증까지 돈다. 기본은 통합에서 멈춘다(검증은 배포가 끝난 뒤에야 의미가 있다).
 #     --approve-commit  사람이 커밋·푸시를 미리 승인한 실행. 세션마다 그 승인을 지시로 덧붙여 통합 세션이 묻고 멈추지 않게 한다.
 #
@@ -87,6 +87,9 @@ fingerprint() {
     for f in design.md design-ack.json implementation.md outcome.md; do
       [ -f "$D/$f" ] && stat -f '%m %N' "$D/$f" 2>/dev/null
     done
+    for f in "$D"/test-runs/*/result.md; do
+      [ -f "$f" ] && stat -f '%m %N' "$f" 2>/dev/null
+    done
   } | shasum | cut -c1-12
 }
 
@@ -97,10 +100,14 @@ WT="$(_order_worktree "$KEY")"
 # 연결 도구까지 다 붙으면 첫 호출 문맥이 42,648, 크롬 도구만이면 35,454 다(2026-10-19 실측). 근거: token-diet.md 작업 C.
 # --strict-mcp-config 는 claude.ai 연결 도구(슬랙·메일)도 뺀다. 그래서 세션 안의 알림은 dobby_v2_notify 로 보낸다.
 # 크롬 도구 설정은 사람마다 경로가 달라 ~/.claude.json 에서 그대로 옮겨 온다. 없으면 제한 없이 실행한다.
+# 브라우저 프로필은 오더마다 하나다. 검증 묶음 세션끼리 로그인이 이어지고, 동시에 도는 다른 오더와는 부딪히지 않는다.
 mcp=()
 MCP_CFG="${TMPDIR:-/tmp}/dobby-mcp-$KEY.json"
+PROFILE="$HOME/.cache/dobby-chrome/$KEY"
+trap 'rm -rf "$PROFILE"' EXIT
 if jq -e '.mcpServers["chrome-devtools"]' ~/.claude.json >/dev/null 2>&1 \
-   && jq '{mcpServers: {"chrome-devtools": .mcpServers["chrome-devtools"]}}' ~/.claude.json >"$MCP_CFG" 2>/dev/null; then
+   && jq --arg p "$PROFILE" '{mcpServers: {"chrome-devtools": (.mcpServers["chrome-devtools"]
+        | .args = ([(.args // [])[] | select(. != "--isolated")] + ["--userDataDir", $p]))}}' ~/.claude.json >"$MCP_CFG" 2>/dev/null; then
   mcp=(--strict-mcp-config --mcp-config "$MCP_CFG")
 else
   dobby_event "$KEY" "자동 실행 MCP 제한 못 함 — ~/.claude.json 에 chrome-devtools 설정이 없어 모든 MCP 를 붙인 채 실행" 2>/dev/null
@@ -154,7 +161,9 @@ while :; do
       else
         [ "$WITH_TEST" = 1 ] || { echo "통합까지 끝났습니다. 배포한 뒤 run.sh $KEY --with-test 또는 /do $KEY 로 검증하세요."; exit 0; }
       fi ;;
-    검증)     test_passed && { echo "검증을 전부 통과했습니다. /dobby-resolve $KEY 로 해결 처리하세요."; exit 0; } ;;
+    검증)     test_passed && { echo "검증을 전부 통과했습니다. /dobby-resolve $KEY 로 해결 처리하세요."; exit 0; }
+              # 열린 회차를 잇는 세션은 다음 검증 묶음이다. 묶음마다 세션 하나라 상한에 하나씩 더해 센다.
+              _testrun_open "$KEY" >/dev/null && MAX=$((MAX + 1)) ;;
     *)        stop "모르는 단계값입니다: $ph. 상태 문서를 확인하세요" ;;
   esac
   [ "$n" -lt "$MAX" ] || stop "세션 상한(${MAX}개)에 닿았습니다. 상태 문서를 확인하세요"
