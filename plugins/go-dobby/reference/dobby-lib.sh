@@ -720,12 +720,23 @@ dobby_setup_worktree() {
     _die "docs 게이트 미통과 — 워크트리 생성 차단: $(_order_dir "$gate_key")/docs-refs.md 없음. 먼저 'dobby_docs_gate $gate_key \"키워드1|키워드2\"'(또는 dobby_scaffold_meta에 키워드 인자)를 실행해 문서를 확인하세요."
     return 1
   fi
-  if git -C "$src" show-ref --verify --quiet "refs/heads/$base"; then
-    git -C "$src" worktree add -b "$branch" "$wt" "$base" >&2 || { _die "worktree add 실패($base)"; return 1; }
+  # 로컬 base 는 낡았을 수 있어 항상 원격을 받아 origin/base 에서 딴다. 로컬에만 있는 커밋이 있을 때만 로컬을 쓴다.
+  local start
+  git -C "$src" fetch -q origin "$base" >&2 2>/dev/null \
+    || printf 'dobby-lib: ⚠️ origin/%s 를 받아 오지 못했다 — 마지막으로 받은 원격 기준으로 만든다.\n' "$base" >&2
+  if git -C "$src" show-ref --verify --quiet "refs/remotes/origin/$base"; then
+    start="origin/$base"
+    if git -C "$src" show-ref --verify --quiet "refs/heads/$base" \
+       && [ "$(git -C "$src" rev-list --count "origin/$base..$base" 2>/dev/null)" != "0" ]; then
+      start="$base"
+      printf 'dobby-lib: ⚠️ 로컬 %s 에 원격에 없는 커밋이 있어 로컬 %s 에서 딴다.\n' "$base" "$base" >&2
+    fi
+  elif git -C "$src" show-ref --verify --quiet "refs/heads/$base"; then
+    start="$base"
   else
-    git -C "$src" fetch origin "$base" >&2 2>/dev/null || true
-    git -C "$src" worktree add -b "$branch" "$wt" "origin/$base" >&2 || { _die "worktree add 실패(origin/$base)"; return 1; }
+    _die "기준 브랜치 $base 가 로컬에도 origin 에도 없다"; return 1
   fi
+  git -C "$src" worktree add -b "$branch" "$wt" "$start" >&2 || { _die "worktree add 실패($start)"; return 1; }
   git -C "$wt" push -u origin "$branch" >&2 2>/dev/null || true
   dobby_record_branch "$key" "$repo" "$branch" "$wt"
   _docs_refs_worktree "$gate_key" "$repo" "$wt"

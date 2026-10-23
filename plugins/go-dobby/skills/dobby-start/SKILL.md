@@ -49,8 +49,8 @@ description: dobby-order가 각 에이전트(단일 이슈든 하위이슈든)�
 - 워크트리는 `$ORCHESTRATION_WORKSPACE/subtree/{repo}-{키}`(없으면 `mkdir -p $ORCHESTRATION_WORKSPACE/subtree`). 한 이슈가 여러 repo면 repo별로 각각 생성한다.
 - **중복 확인**: `git worktree list`·`git branch --list {prefix}`. 이미 있으면 메타(`$ORCHESTRATION_META/{키}/status.md`) 존재로 갈라 처리 — 있으면 중단하고 사용자 확인, 없으면 기존 워크트리 재사용 + 분석/메타만 채움(fetch/worktree add 건너뜀).
 - **베이스 형태로 갈라 생성**:
-  - `{base}`가 **로컬 브랜치로 존재**하면: `git worktree add -b {prefix} $ORCHESTRATION_WORKSPACE/subtree/{repo}-{키} {base}`
-  - `{base}`가 **원격 기준**이면: `git fetch origin {base}` 후 `git worktree add -b {prefix} $ORCHESTRATION_WORKSPACE/subtree/{repo}-{키} origin/{base}`
+  - 항상 `git fetch origin {base}` 로 원격을 먼저 받고 `git worktree add -b {prefix} $ORCHESTRATION_WORKSPACE/subtree/{repo}-{키} origin/{base}` 로 만든다. 로컬 `{base}` 는 낡았을 수 있어 그대로 쓰지 않는다.
+  - 예외: 로컬 `{base}` 에 원격에 없는 커밋이 있으면(아직 안 올린 통합 브랜치 등) 로컬 `{base}` 에서 딴다.
   - 로컬·원격 어디에도 없으면 **중단하고 사용자에게 알린다**(베이스가 아직 안 만들어졌을 수 있음).
 - **의존성 안내**(JS repo 한정): 새 워크트리는 `node_modules`가 비어 있을 수 있다. 필요 시 `yarn install`을 **안내만** 하고 자동 실행하지 않는다.
 - 커밋·푸시는 하지 않는다.
