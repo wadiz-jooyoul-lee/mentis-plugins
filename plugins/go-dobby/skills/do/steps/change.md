@@ -16,7 +16,9 @@
 
 ```
 dobby_v2_change_open {키} check
-dobby_session_log {키} {슬러그} change-{M} "변경 {M} 접수" {워크트리경로}
+dobby_agent_add {키} analysis-agent "분석" "변경 {M} 접수" 분석 0
+dobby_session_log {키} analysis-agent change-{M} "변경 {M} 접수" {워크트리경로}
+dobby_agent_state {키} analysis-agent 분석 "" "변경 {M} 접수"
 ```
 
 첫 줄이 거부하면(자동 실행이 돌고 있음) 아무것도 쓰지 않고 그 사실을 알린 뒤 끝낸다. 자동 실행이 상태 문서와 설계 문서를 읽고 있는 중이라, 변경 절을 먼저 쓰면 돌고 있는 리뷰 세션이 구현도 안 된 변경을 리뷰하게 된다.
@@ -69,6 +71,7 @@ M 은 설계 문서에 있는 `## 변경 N` 절의 가장 큰 N 에 1 을 더한
 dobby_v2_change_open {키}          # 출력값 = 리뷰 시작 차수. 설계 문서 변경 절에 적는다
 dobby_design_ack {키} 사용자         # 변경 절을 적은 뒤에 불러야 한다(설계 지문이 바뀌므로)
 dobby_agent_state {키} {슬러그} 대기
+dobby_agent_state {키} analysis-agent 완료
 dobby_event {키} "변경 {M} 확정 — 구현 세션으로 넘김"
 ```
 

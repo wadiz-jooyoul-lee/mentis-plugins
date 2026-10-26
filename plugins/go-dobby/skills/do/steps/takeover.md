@@ -10,11 +10,12 @@
 
 ```
 dobby_v2_change_open {키} check
-dobby_session_log {키} {슬러그} takeover "이어받기 설계" {워크트리경로}
-dobby_agent_state {키} {슬러그} 분석
+dobby_agent_add {키} analysis-agent "분석" "이어받기 설계" 분석 0
+dobby_session_log {키} analysis-agent takeover "이어받기 설계" {워크트리경로}
+dobby_agent_state {키} analysis-agent 분석
 ```
 
-슬러그는 상태표에서 이름이 "분석/개발자" 인 행의 것이다(전환 헬퍼가 없으면 `v2-dev` 로 만들어 둔다). 첫 줄이 거부하면 그 사실을 알리고 끝낸다.
+이어받기 설계는 분석 담당으로 기록한다. 뒤 세션이 쓸 개발 담당 행은 전환 헬퍼가 이미 정해 두었다(이름 "분석/개발자" 인 행, 없으면 `v2-dev`). 첫 줄이 거부하면 그 사실을 알리고 끝낸다.
 
 ## 2. 지난 설계와 경과를 읽는다
 

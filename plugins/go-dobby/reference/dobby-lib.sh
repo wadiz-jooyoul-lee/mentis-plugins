@@ -273,7 +273,7 @@ dobby_agent_state() {
       if(issep){print;next}
       if(t($(ci_slug))==slug){
         old=t($(ci_st)); ost=(ci_start>0)?t($(ci_start)):"x"
-        active=(st=="분석"||st=="구현"||st=="리뷰")
+        active=(st=="분석"||st=="구현"||st=="리뷰"||st=="검증")
         if(ci_start>0 && active && (old=="대기"||old=="완료"||old==""||ost=="")) $(ci_start)=" " now " "
         $(ci_st)=" " st " "
         if(ci_rd>0 && rd!="") $(ci_rd)=" " rd " "
@@ -493,7 +493,25 @@ dobby_testrun_new() {
       "| 회차 | 시작 | 상태 | 성공/실패/skip | 폴더 |" "|------|------|------|----------------|------|" \
       "| $n | $now | 테스트중 | 0/0/0${total:+ (전체 $total)} | $dir |"
   fi
+  _testrun_board "$key" 테스트중
   printf '%s' "$dir"
+}
+
+# _testrun_board KEY 회차상태 — 검증 동안 개발자 카드를 테스터(`검증`)로 보이게 한다. 개발자 행이 없으면 아무것도 안 한다.
+# 테스트중은 갱신 시각만 새로 고친다(시나리오마다 불려 이벤트를 남기지 않는다). 실패·중단은 다음이 수정이라 대기.
+_testrun_board() {
+  local o dev; o="$(_order_dir "$1")/orchestration.md"
+  dev="$(_board_dev_slug "$o")"; [ -n "$dev" ] || return 0
+  case "$2" in
+    테스트중)
+      if [ "$(_board_rows "$o" | awk -F'\t' -v s="$dev" '$1==s{print $2; exit}')" = 검증 ]; then
+        DOBBY_AUTO_EVENT=0 dobby_agent_state "$1" "$dev" 검증
+      else
+        dobby_agent_state "$1" "$dev" 검증
+      fi ;;
+    완료) dobby_agent_state "$1" "$dev" 완료 ;;
+    *)    dobby_agent_state "$1" "$dev" 대기 ;;
+  esac >/dev/null
 }
 
 # dobby_testrun_update KEY 폴더시각 상태 [성공/실패/skip] — 이력 표에서 폴더 칸에 그 시각이 포함된
@@ -522,6 +540,7 @@ dobby_testrun_update() {
     }
     {print}
   ' "$sf" > "$sf.tmp" && mv "$sf.tmp" "$sf"
+  _testrun_board "$key" "$st"
 }
 
 # ── 검증 묶음 — 한 회차를 묶음으로 나눠 세션마다 묶음 하나씩 돈다 ──────────
@@ -1832,13 +1851,58 @@ _past_session_add() {
 }
 
 # ── dobby-order → /do 전환 (dobby-migrate-v2 스킬이 쓴다) ──────────────
-# _board_dev_slug OFILE — 상태표에서 이름이 "분석/개발자" 인 첫 행의 슬러그. 없으면 빈 값.
+# _board_dev_slug OFILE — 상태표에서 이름이 "개발자" 인 첫 행의 슬러그. 없으면 "분석/개발자"(나누기 전 오더), 그것도 없으면 빈 값.
 _board_dev_slug() {
-  local s st r
+  local s st r want
   [ -f "$1" ] || return 0
+  for want in "개발자" "분석/개발자"; do
+    while IFS=$'\t' read -r s st r; do
+      [ "$(_board_role "$1" "$s")" = "$want" ] && { printf '%s' "$s"; return 0; }
+    done < <(_board_rows "$1")
+  done
+}
+
+# dobby_split_dev KEY [check] — /do 오더의 "분석/개발자" 카드를 분석(analysis-agent)과 개발자 두 장으로 나눈다.
+# 설계 쪽 세션 기록(design·takeover·change-*·answer-*)은 분석 카드로 옮긴다. check 면 바꾸지 않고 할 일만 낸다.
+dobby_split_dev() {
+  local key="$1" mode="${2:-}" d o f lg dev="" st ph ast dst moved desc s r
+  d="$(_order_dir "$key")"; o="$d/orchestration.md"; f="$d/status.md"; lg="$d/agent-logs.json"
+  [ -f "$o" ] || { printf '건너뜀\t보드 없음\n'; return 1; }
+  grep -q '^## 지난 세션' "$f" 2>/dev/null || { printf '건너뜀\t/do 오더가 아님\n'; return 1; }
   while IFS=$'\t' read -r s st r; do
-    [ "$(_board_role "$1" "$s")" = "분석/개발자" ] && { printf '%s' "$s"; return 0; }
-  done < <(_board_rows "$1")
+    [ "$(_board_role "$o" "$s")" = "분석/개발자" ] && { dev="$s"; break; }
+  done < <(_board_rows "$o")
+  [ -n "$dev" ] || { printf '건너뜀\t분석/개발자 카드 없음\n'; return 1; }
+  pgrep -f "run\.sh'? '?$key'?( |\$)" >/dev/null && { printf '건너뜀\t자동 실행 중\n'; return 1; }
+  st="$(_board_rows "$o" | awk -F'\t' -v s="$dev" '$1==s{print $2; exit}')"
+  ph="$(_order_phase "$key")"
+  case "$ph" in 착수|분석) ast="$st"; dst=대기 ;; *) ast=완료; dst="$st" ;; esac
+  moved="$(jq -r --arg s "$dev" '(.[$s] // {}) | if type == "object" then [keys[] | select(test("^(design|takeover|change-|answer-)"))] | join(",") else "" end' "$lg" 2>/dev/null)"
+  if [ "$mode" = check ]; then
+    printf '대상\t단계=%s 분석=%s 개발자(%s)=%s→%s 옮길기록=%s\n' "$ph" "$ast" "$dev" "$st" "$dst" "${moved:-없음}"
+    return 0
+  fi
+  cp "$o" "$o.before-split"; [ -f "$lg" ] && cp "$lg" "$lg.before-split"
+  desc="$(awk -F'|' -v want="$dev" '
+    function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
+    /^## /{ins=($0~/에이전트 상태표/)?1:0;hdr=0;next}
+    ins==1 && /^\|/{ if(hdr==0){for(i=1;i<=NF;i++){c=t($i);if(c=="슬러그")cs=i;else if(c=="설명")cd=i}; hdr=1; next}
+      if(cs && cd && t($cs)==want){print t($cd);exit} }' "$o")"
+  dobby_agent_add "$key" analysis-agent "분석" "${desc:-설계}" "$ast" 0
+  awk -F'|' -v OFS='|' -v want="$dev" '
+    function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
+    /^## /{ins=($0~/에이전트 상태표/)?1:0;hdr=0;print;next}
+    ins==1 && /^\|/{ if(hdr==0){for(i=1;i<=NF;i++){c=t($i);if(c=="슬러그")cs=i;else if(c=="이름")cn=i}; hdr=1; print; next}
+      if(cs && cn && t($cs)==want) $(cn)=" 개발자 " }
+    {print}' "$o" > "$o.tmp" && mv "$o.tmp" "$o"
+  [ "$dst" = "$st" ] || DOBBY_AUTO_EVENT=0 dobby_agent_state "$key" "$dev" "$dst"
+  if [ -n "$moved" ]; then
+    jq --arg s "$dev" '
+      (.[$s] | with_entries(select(.key | test("^(design|takeover|change-|answer-)")))) as $m
+      | .["analysis-agent"] = ((.["analysis-agent"] // {}) + $m)
+      | .[$s] |= with_entries(select(.key | test("^(design|takeover|change-|answer-)") | not))' "$lg" > "$lg.tmp" && mv "$lg.tmp" "$lg"
+  fi
+  dobby_event "$key" "분석/개발자 카드를 분석과 개발자로 나눔 — 설계 쪽 세션 기록을 분석 카드로 옮김"
 }
 
 # _review_last_round KEY — reviews/round-N 중 가장 큰 N. 없으면 0.
@@ -1944,7 +2008,7 @@ dobby_migrate_v2_apply() {
     [ -n "$wt" ] || wt="$p"
   done
   dev="$(_board_dev_slug "$o")"
-  [ -n "$dev" ] || { dev=v2-dev; dobby_agent_add "$key" "$dev" "분석/개발자" "v2 전환으로 만든 개발 담당 행" 대기; }
+  [ -n "$dev" ] || { dev=v2-dev; dobby_agent_add "$key" "$dev" "개발자" "v2 전환으로 만든 개발 담당 행" 대기; }
   dobby_session_log "$key" "$dev" migrate "v2 전환" "${wt:-$PWD}"
   if [ -f "$o" ]; then
     while IFS=$'\t' read -r s st r; do
