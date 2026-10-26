@@ -1,0 +1,181 @@
+<title>__TITLE__</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* 레이아웃: 위에 붙여넣기 순서와 복사 버튼, 아래에 시트 열 그대로의 미리보기 표 */
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --fg: #1d2330; --muted: #5b6475; --line: #dde1e8;
+  --accent: #00a2a8; --accent-soft: #e2f5f5; --warn: #b45309; --warn-soft: #fdf1e3; --formula: #6d4bd1;
+  --font-body: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #12161d; --surface: #1a2029; --fg: #e6e9ef; --muted: #9aa3b2; --line: #2c3440;
+  --accent: #3cc8cd; --accent-soft: #163236; --warn: #f0a85a; --warn-soft: #3a2a17; --formula: #b39cff; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #12161d; --surface: #1a2029; --fg: #e6e9ef; --muted: #9aa3b2; --line: #2c3440;
+  --accent: #3cc8cd; --accent-soft: #163236; --warn: #f0a85a; --warn-soft: #3a2a17; --formula: #b39cff; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 14px; line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 32px 56px; }
+.wrap { max-width: 1500px; margin: 0 auto; display: grid; gap: 24px; }
+h1 { font-size: 24px; margin: 0; text-wrap: balance; }
+h2 { font-size: 16px; margin: 0 0 8px; }
+.lead { color: var(--muted); max-width: 75ch; margin: 6px 0 0; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 16px 18px; min-width: 0; }
+.panel ol, .panel ul { margin: 0; padding-left: 20px; display: grid; gap: 4px; }
+.cols { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+.bar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+label { font-weight: 600; }
+input[type=number] { font: inherit; width: 90px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
+button { font: inherit; font-weight: 600; border: 1px solid var(--accent); background: var(--accent); color: var(--surface); border-radius: 6px; padding: 8px 16px; cursor: pointer; }
+button.ghost { background: transparent; color: var(--accent); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+#status { color: var(--muted); font-size: 13px; }
+.table-box { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+table { border-collapse: collapse; width: 100%; min-width: 1900px; }
+th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); }
+th { font-size: 12px; color: var(--muted); background: var(--bg); white-space: nowrap; }
+th b { color: var(--fg); margin-right: 4px; }
+td { font-size: 13px; }
+td.row { font-variant-numeric: tabular-nums; color: var(--muted); }
+td.mono { font-family: var(--font-mono); font-size: 12px; word-break: break-all; }
+td.f { font-family: var(--font-mono); font-size: 11px; color: var(--formula); word-break: break-all; min-width: 180px; }
+td.txt { white-space: pre-line; min-width: 180px; }
+.pill { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+.pill.kr { background: var(--accent-soft); color: var(--accent); }
+.pill.all { background: var(--warn-soft); color: var(--warn); }
+code { font-family: var(--font-mono); font-size: 12px; }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1 id="title"></h1>
+    <p class="lead" id="lead"></p>
+  </header>
+
+  <section class="panel">
+    <h2>붙여 넣는 순서</h2>
+    <ol>
+      <li>시트의 <b class="tab"></b> 탭에서 첫 빈 줄 번호를 확인합니다. 이 페이지를 만들 때는 <b id="firstRow"></b>행이 첫 빈 줄이었습니다.</li>
+      <li>아래 칸에 그 줄 번호를 넣습니다. A열과 D열 수식의 행 번호가 그 줄에 맞게 바뀝니다.</li>
+      <li><b class="copyLabel"></b>를 누르고, 시트에서 그 줄의 <b>A열 칸</b>을 고른 뒤 붙여 넣습니다.</li>
+      <li>A열(id)과 D열(level3Key)에 수식 결과로 키가 보이는지 확인합니다. 아래 표의 "완성 키"와 같아야 합니다.</li>
+    </ol>
+  </section>
+
+  <div class="bar">
+    <label for="startRow">첫 빈 줄 번호</label>
+    <input id="startRow" type="number" min="2">
+    <button id="copyAll" type="button" class="copyLabel"></button>
+    <button id="copyKeys" type="button" class="ghost">완성 키만 복사</button>
+    <span id="status" role="status"></span>
+  </div>
+
+  <div class="table-box">
+    <table id="t">
+      <thead><tr>
+        <th>행</th><th><b>A</b>id</th><th><b>B</b>level1Key</th><th><b>C</b>level2Key</th><th><b>D</b>level3Key</th>
+        <th><b>E</b>keyProperty</th><th><b>F</b>keyElementOrContext</th><th><b>G</b>keyStatus</th><th><b>H</b>status</th><th><b>I</b>(마크다운)</th>
+        <th><b>J</b>ko</th><th><b>K</b>en</th><th><b>L</b>ja</th><th><b>M</b>zh</th><th><b>N</b>args</th><th>완성 키</th><th>보이는 곳</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <section class="cols">
+    <div class="panel"><h2>시트 규칙 (<span class="tab"></span> 탭에서 확인)</h2><ul id="rules"></ul></div>
+    <div class="panel" id="reusePanel"><h2>새로 만들지 않고 기존 키를 쓰는 문구</h2><ul id="reuse"></ul></div>
+  </section>
+</div>
+
+<script>
+// 스킬이 채우는 자리. 형식은 SKILL.md 의 "아티팩트 데이터" 절을 따른다.
+const DATA = /*__DATA__*/null;
+
+const $ = (s) => document.querySelector(s);
+const setText = (sel, v) => document.querySelectorAll(sel).forEach((el) => { el.textContent = v; });
+const rows = DATA.rows;
+const copyLabel = `A~N열 ${rows.length}줄 복사`;
+
+$('#title').textContent = DATA.title;
+$('#lead').textContent = DATA.lead;
+setText('.tab', DATA.tab);
+setText('.copyLabel', copyLabel);
+$('#firstRow').textContent = DATA.startRow;
+
+const fillList = (ul, items, render) => items.forEach((it) => { const li = document.createElement('li'); render(li, it); ul.appendChild(li); });
+const addCode = (el, text) => { const c = document.createElement('code'); c.textContent = text; el.appendChild(c); };
+fillList($('#rules'), [
+  ['A열 id 수식: ', DATA.formulas.A.replaceAll('{n}', '')],
+  ['D열 level3Key 수식: ', DATA.formulas.D.replaceAll('{n}', '')],
+  ...DATA.rules.map((t) => [t, '']),
+], (li, [t, code]) => { li.append(t); if (code) addCode(li, code); });
+if (DATA.reuse.length) {
+  fillList($('#reuse'), DATA.reuse, (li, r) => { addCode(li, r.key); li.append(' ' + r.text); });
+} else {
+  $('#reusePanel').hidden = true;
+}
+
+const level3 = (r) => [r.F, r.G, r.E, r.markdown ? 'markdown' : ''].filter(Boolean).join('_');
+const fullKey = (r) => `${DATA.level1}.${r.level2}.${level3(r)}`;
+const formula = (f, n) => f.replaceAll('{n}', n);
+// A..N 14칸
+const cellsOf = (r, n) => [formula(DATA.formulas.A, n), DATA.level1, r.level2, formula(DATA.formulas.D, n), r.E, r.F, r.G,
+  DATA.newStatus, r.markdown ? 'TRUE' : 'FALSE', r.ko, r.en, r.ja, r.zh, r.args];
+
+const startInput = $('#startRow');
+startInput.value = DATA.startRow;
+const start = () => Math.max(2, parseInt(startInput.value, 10) || DATA.startRow);
+const tb = $('#t tbody');
+
+function render() {
+  tb.textContent = '';
+  rows.forEach((r, i) => {
+    const n = start() + i;
+    const tr = document.createElement('tr');
+    const td = (cls, text) => { const c = document.createElement('td'); if (cls) c.className = cls; c.textContent = text; tr.appendChild(c); return c; };
+    td('row', n);
+    const c = cellsOf(r, n);
+    td('f', c[0]); td('mono', c[1]); td('mono', c[2]); td('f', c[3]);
+    td('mono', c[4]); td('mono', c[5]); td('mono', c[6]); td('', c[7]); td('mono', c[8]);
+    td('txt', c[9]); td('txt', c[10]); td('txt', c[11]); td('txt', c[12]); td('txt', c[13]);
+    td('mono', fullKey(r));
+    const w = td('', '');
+    const pill = document.createElement('span');
+    pill.className = 'pill ' + r.scope;
+    pill.textContent = r.scope === 'all' ? '해외도 보임' : '국내만';
+    w.appendChild(pill);
+    tb.appendChild(tr);
+  });
+}
+startInput.addEventListener('input', render);
+render();
+
+const status = $('#status');
+const tsvCell = (v) => /[\t\n"]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+const esc = (v) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+
+// 표 형식(text/html)을 함께 넣어야 시트가 칸 안의 줄바꿈을 지킨다
+async function copyGrid(grid, label) {
+  const tsv = grid.map((row) => row.map(tsvCell).join('\t')).join('\n');
+  const html = '<table>' + grid.map((row) => '<tr>' + row.map((v) => `<td>${esc(v)}</td>`).join('') + '</tr>').join('') + '</table>';
+  try {
+    if (window.ClipboardItem) {
+      await navigator.clipboard.write([new ClipboardItem({
+        'text/plain': new Blob([tsv], { type: 'text/plain' }),
+        'text/html': new Blob([html], { type: 'text/html' }),
+      })]);
+    } else {
+      await navigator.clipboard.writeText(tsv);
+    }
+    status.textContent = label + ' 복사했습니다.';
+  } catch {
+    try { await navigator.clipboard.writeText(tsv); status.textContent = label + ' 복사했습니다.'; }
+    catch { status.textContent = '복사하지 못했습니다. 표를 직접 드래그해 복사해 주세요.'; }
+  }
+}
+$('#copyAll').addEventListener('click', () =>
+  copyGrid(rows.map((r, i) => cellsOf(r, start() + i)), `${start()}~${start() + rows.length - 1}행에 붙일 ${rows.length}줄을`));
+$('#copyKeys').addEventListener('click', () =>
+  copyGrid(rows.map((r) => [fullKey(r)]), `완성 키 ${rows.length}개를`));
+</script>
