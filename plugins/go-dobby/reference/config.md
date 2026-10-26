@@ -57,7 +57,8 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 | `dobby_track_scan KEY [환경]` | dobby-ship 1단계 · dobby-test 2-1단계 | 변경 diff 로 **광고·데이터 수집 접촉**을 기계 판정해 `track-scan.md` 에 남긴다(보고 — 막지 않는다). ① 수집·광고 코드 자체(`packages/core/src/metrics/`·`packages/event-tracker/`·`react-ad-boundary`·`banner`·`winclude/tracking*.jsp`) ② 바뀐 줄의 심볼(`trackingEvent`·`trackingCustomTag`·`@wadiz/metrics`·`dataLayer`·`AdBoundary`·`_refer_section_st` 등) — **지워진 줄도 본다**(추적을 지운 것이 가장 조용한 사고다). 머지된 뒤에는 3점 diff 가 비므로 **그 환경 베이스의 PR diff** 로 떨어진다. 못 읽으면 `접촉 없음` 이 아니라 **`⚠ 확인 불가`** 로 적는다 |
 | `dobby_testrun_lint 결과폴더` | dobby-test 마감(정리 직전) | 근거 칸에 **파일 이름만** 적힌 행이 있으면 거부(관측한 사실을 적게 한다). **`track-scan` 이 보고한 `[수집]`·[광고]` 갈래가 result.md 에 없어도 거부** — 광고·수집은 화면에 안 보이게 깨져 다른 시나리오가 통과해도 따로 봐야 한다. 확인 불가면 시나리오를 넣고 `SKIP(…)` 으로 사유를 적는다(빼지 말 것) |
 | `dobby_testrun_prune 결과폴더` | dobby-test 8단계(요약을 쓴 **뒤**) | 그 회차에서 `result.md`·`summary.html` 이 이름으로 가리키지 않는 그림만 지운다. 테스트 중 화면 확인하려고 찍은 것이 남는 문제. test-runs 폴더 안·그림 확장자만 |
-| `dobby_testrun_update KEY 폴더시각 상태 [성공/실패/skip]` | 시나리오마다·마감 | 이력 표의 그 회차 행만 상태·집계 수정(통독 없음) |
+| `dobby_testrun_update KEY 폴더시각 상태 [성공/실패/skip]` | 시나리오마다·마감 | 이력 표의 그 회차 행만 상태·집계 수정(통독 없음). 개발 담당 행 상태도 함께 바꾼다 — 테스트중이면 `검증`, `완료` 면 `완료`, 그 밖이면 `대기` (`dobby_testrun_new` 도 회차를 열 때 `검증` 으로) |
+| `dobby_split_dev KEY [check]` | 기존 /do 오더 정리(사람이 승인한 뒤) | "분석/개발자" 한 행을 분석(`analysis-agent`)과 개발자로 나누고, 설계 쪽 세션 기록(`design`·`takeover`·`change-*`·`answer-*`)을 분석 행으로 옮긴다. 자동 실행 중이면 건너뜀. `check` 는 바꾸지 않고 할 일만 출력 |
 | `dobby_testrun_current KEY [전체시나리오수] [환경]` | dobby-test 묶음 모드 시작 | 이력 표의 마지막 회차가 `테스트중` 이면 그 폴더, 아니면 `dobby_testrun_new` 로 새 회차(경로 stdout) |
 | `dobby_verify_next KEY` | /do 검증 세션 시작·끝 | 판정이 빈 시나리오가 든 첫 검증 묶음 `묶음<TAB>S1,S2`(빈 것만). 다 찼으면 `done`. 묶음은 테스트 계획의 `## 검증 묶음` 표를 따르고, 표에 없는 시나리오는 번호 순서로 4개씩 붙인다 |
 | `dobby_testplan_slice KEY S1,S2` | /do 검증 세션 | 테스트 계획에서 제목·`## 사전 준비`·`## 영향 번들` 과 그 시나리오 절만 출력 |

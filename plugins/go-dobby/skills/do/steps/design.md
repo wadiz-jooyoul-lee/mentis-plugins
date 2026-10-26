@@ -13,8 +13,12 @@
    - `dobby_set_title {키} "{실제 이슈 요약}"` — 임시 제목을 실제 요약으로 바꾼다.
    - `dobby_jira_start_transition {키}` 로 진행 중으로 전환한다. 이어서 `${CLAUDE_PLUGIN_ROOT}/reference/jira-start.md` 를 따라 시작 날짜를 적고 상위 이슈 레이블을 더한다.
 3. 워크트리를 준비한다 — `dobby_ensure_worktree {저장소} {키} {prefix} {base}`. `prefix` 는 버그면 `bugfix`, 그 밖은 `feature` 다(빗금은 헬퍼가 붙인다). 이 헬퍼는 상태 문서에 이미 적힌 워크트리가 있으면 그것을 쓰고, 폴더가 지워졌으면 남은 브랜치로 되살리고, 아무것도 없을 때만 새로 만든다. git 에 등록되지 않은 폴더가 같은 자리에 있으면 지우지 않고 멈춘다. 그때는 사람에게 그 폴더를 확인해 달라고 알린다.
-4. `dobby_agent_add {키} {슬러그} "분석/개발자" "{작업 한 줄}" 분석 0` — 상태표에 담당 한 행을 넣는다. 마지막 0 은 수정 횟수다(아래 "보드의 상태표"). 슬러그는 `dobby_slug` 로 만든다.
-5. `dobby_session_log {키} {슬러그} design 설계 {워크트리경로}` — 이 세션의 아이디를 기록한다(공통 규칙 "세션 기록").
+4. 상태표에 두 행을 넣는다(공통 규칙 "보드의 상태표"). 개발 담당 슬러그는 `dobby_slug` 로 만들고, 마지막 0 은 수정 횟수다.
+   ```
+   dobby_agent_add {키} analysis-agent "분석" "{작업 한 줄}" 분석 0
+   dobby_agent_add {키} {슬러그} "개발자" "{작업 한 줄}" 대기 0
+   ```
+5. `dobby_session_log {키} analysis-agent design 설계 {워크트리경로}` — 이 세션의 아이디를 기록한다(공통 규칙 "세션 기록").
 
 ## 1-2. 분석 → `analysis.md`
 
@@ -150,7 +154,7 @@
 
 ```
 dobby_phase {키} 분석
-dobby_agent_state {키} {슬러그} 분석
+dobby_agent_state {키} analysis-agent 분석
 dobby_event {키} "설계 초안 완료 — 사람 확인 대기"
 ```
 
@@ -201,7 +205,7 @@ dobby_event {키} "설계 초안 완료 — 사람 확인 대기"
 
 ```
 dobby_design_ack {키} 사용자
-dobby_agent_state {키} {슬러그} 대기
+dobby_agent_state {키} analysis-agent 완료
 dobby_event {키} "설계 확정 — 구현 세션으로 넘김"
 ```
 
@@ -223,7 +227,7 @@ dobby_v2_autorun {키}
 
 수정 대화는 확정될 때까지 이 세션에서 그대로 이어간다. 대화 길이 때문에 중간에 끊지 않는다.
 
-사람이 확정하지 않고 세션을 닫았다면, 새 세션은 단계 판정에서 "승인 기록이 없다"를 보고 이 절부터 다시 시작한다. 이때는 1-1 부터 1-5 까지를 다시 하지 않는다. `dobby_session_log {키} {슬러그} design 설계 {워크트리경로}` 로 세션만 기록하고, 설계 문서와 테스트 계획을 읽어 바로 요약을 보여 준다.
+사람이 확정하지 않고 세션을 닫았다면, 새 세션은 단계 판정에서 "승인 기록이 없다"를 보고 이 절부터 다시 시작한다. 이때는 1-1 부터 1-5 까지를 다시 하지 않는다. `dobby_session_log {키} analysis-agent design 설계 {워크트리경로}` 로 세션만 기록하고, 설계 문서와 테스트 계획을 읽어 바로 요약을 보여 준다.
 
 ## 1-7. 마무리 (`auto` 가 있을 때)
 
@@ -232,7 +236,7 @@ dobby_v2_autorun {키}
 ```
 dobby_phase {키} 분석
 dobby_design_ack {키} auto
-dobby_agent_state {키} {슬러그} 대기
+dobby_agent_state {키} analysis-agent 완료
 dobby_event {키} "설계 완료(자동 확정) — 구현 세션으로 넘김"
 ```
 
