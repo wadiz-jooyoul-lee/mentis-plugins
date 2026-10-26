@@ -543,6 +543,69 @@ dobby_testrun_update() {
   _testrun_board "$key" "$st"
 }
 
+# ── 정기배포 stage 검증 목록 — $META/RELEASE-{날짜}/stage.md (대시보드 릴리즈 화면) ──
+# 이슈와 회차 경로만 적는다. TC 결과는 회차 result.md 에만 있다. 폴더 이름이 키 형식이라 메타 백업에 담긴다.
+_release_file() { printf '%s/RELEASE-%s/stage.md' "$(_meta)" "$1"; }
+
+# _release_field FILE 이름 값 — `- **이름**:` 줄의 값을 바꾼다.
+_release_field() {
+  awk -v k="$2" -v v="$3" 'index($0, "- **" k "**:") == 1 { print "- **" k "**: " v; next } { print }' \
+    "$1" > "$1.tmp" && mv "$1.tmp" "$1"
+}
+
+# dobby_release_init 날짜 요일 [페이지주소] — 목록 파일을 만든다. 이미 있으면 상태만 '진행 중'으로 되돌린다.
+dobby_release_init() {
+  local d="$1" wd="$2" page="${3:-}" f
+  printf '%s' "$d" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' || { _die "쓰임: dobby_release_init YYYY-MM-DD 요일 [페이지주소]"; return 1; }
+  f="$(_release_file "$d")"
+  if [ -f "$f" ]; then
+    _release_field "$f" "상태" "진행 중"; _release_field "$f" "끝" ""
+    [ -n "$page" ] && _release_field "$f" "릴리즈 노트" "$page"
+    printf '%s' "$f"; return 0
+  fi
+  mkdir -p "$(dirname "$f")"
+  {
+    printf '# %s(%s) 정기배포 stage 검증\n\n' "$d" "$wd"
+    printf -- '- **배포일**: %s\n- **요일**: %s\n- **릴리즈 노트**: %s\n- **상태**: 진행 중\n- **시작**: %s\n- **끝**: \n\n' \
+      "$d" "$wd" "$page" "$(_now)"
+    printf '## 이슈\n\n<!-- dobby:release-issues -->\n'
+    printf '| 행 | 이슈 | 저장소 | stage 반영 | 회차 | stage 칸 | 비고 |\n|---|---|---|---|---|---|---|\n'
+  } > "$f"
+  printf '%s' "$f"
+}
+
+# dobby_release_row 날짜 행 이슈 [저장소] [반영] [회차] [stage칸] [비고] — 이슈 행을 더하거나 고친다.
+# 빈 값은 그 칸을 그대로 둔다(지우려면 '-'). 회차는 절대 경로를 받아 메타 기준 상대 경로로 적는다.
+dobby_release_row() {
+  local d="$1" row="$2" key="$3" rp="${4:-}" refl="${5:-}" run="${6:-}" chk="${7:-}" note="${8:-}" f
+  f="$(_release_file "$d")"
+  [ -f "$f" ] || { _die "목록 파일이 없다 — dobby_release_init 먼저: $f"; return 1; }
+  [ -n "$key" ] || { _die "쓰임: dobby_release_row 날짜 행 이슈 [저장소] [반영] [회차] [stage칸] [비고]"; return 1; }
+  run="${run#"$(_meta)/"}"
+  awk -v row="$row" -v key="$key" -v rp="$rp" -v refl="$refl" -v run="$run" -v chk="$chk" -v note="$note" '
+    function t(x) { gsub(/^[ \t]+|[ \t]+$/, "", x); return x }
+    function pick(new, old) { return new == "" ? old : (new == "-" ? "" : new) }
+    function emit(c) { printf "| %s | %s | %s | %s | %s | %s | %s |\n", pick(row, c[2]), key, pick(rp, c[4]), pick(refl, c[5]), pick(run, c[6]), pick(chk, c[7]), pick(note, c[8]); done = 1 }
+    /<!-- dobby:release-issues -->/ { intab = 1; print; next }
+    intab && /^\|/ {
+      n = split($0, c, "|"); for (i = 1; i <= n; i++) c[i] = t(c[i])
+      if (c[3] == key) { emit(c); next }
+      print; next
+    }
+    intab && !/^\|/ { if (!done) { split("", e); emit(e) } intab = 0 }
+    { print }
+    END { if (intab && !done) { split("", e); emit(e) } }
+  ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+
+# dobby_release_done 날짜 — 상태를 '완료'로 바꾸고 끝 시각을 적는다.
+dobby_release_done() {
+  local f
+  f="$(_release_file "$1")"
+  [ -f "$f" ] || { _die "목록 파일이 없다: $f"; return 1; }
+  _release_field "$f" "상태" "완료"; _release_field "$f" "끝" "$(_now)"
+}
+
 # ── 검증 묶음 — 한 회차를 묶음으로 나눠 세션마다 묶음 하나씩 돈다 ──────────
 # _testrun_open KEY — 이력 표의 마지막 회차가 '테스트중'이면 그 폴더를 낸다. 아니면 출력 없이 1.
 _testrun_open() {
