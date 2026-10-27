@@ -72,7 +72,7 @@ grep -rln "FeedList" static/entries static/services apps/global/src apps/account
 2. 그 조건이 요구하는 주소를 **어느 번들이 그리는지** 확인한다. JSP 화면은 도서관의 `com.wadiz.web.md` 컨트롤러 표로, 실제 환경은 그 주소의 HTML 이 불러오는 번들 파일로 본다. ⛔ 정적 라우터에 경로가 있다고 그 번들이 그린다고 보지 않는다 — 서버가 다른 번들을 내려 주는 주소가 있다(아래 표).
 
    ```bash
-   curl -s https://rc4.wadiz.io/{경로} | grep -o 'cdn-static[^"]*\(main/main\.js\|korea-main\.js\)'
+   curl -s https://{환경 호스트}/{경로} | grep -o 'cdn-static[^"]*\(main/main\.js\|korea-main\.js\)'
    ```
 3. 2번의 번들이 1번의 컴포넌트가 든 번들과 다르면, 그 컴포넌트는 **화면에 닿지 않는다.**
 
@@ -88,7 +88,7 @@ grep -rln "FeedList" static/entries static/services apps/global/src apps/account
 | `static/entries/main/src/pages/portal/MainModalPortal.jsx` 의 `RewardsSelectionModal` | `/web/campaign/detail/{번호}?modal=reward-selection`, 모바일 폭 | 그 주소는 `GlobalKoreaFundingDetailController` 가 글로벌 앱(`global/korea-main.js`)으로 그린다(`com.wadiz.web.md:1063`). static 메인 라우터의 상세 경로는 316736 을 스토어로 보내는 것 하나뿐이다(`RouterConfig.tsx`). 같은 쿼리는 `apps/global/src/app/ModalPortal.tsx` 가 글로벌 창으로 연다 | FE1-2164(2026-10-26), FE1-2261(2026-10-27) |
 | `static/entries/main/src/routes/RouterConfig.tsx` 의 `web/main/earlybird`·`web/main/planned` 화면 | 정적 메인 라우터에 경로가 있음 | 서버가 그 주소에 글로벌 앱(`global/korea-main.js`)을 내려 준다(rc4 HTML 확인). PC 폭이면 정적 라우터도 `/web/main` 으로 돌려보낸다(`RedirectToMainWithParams`). 같은 날 `main/main.js` 를 내려 준 주소는 `/web/wish/main`·`/web/wadiztraders`·`/web/wevent/wadizawards`·`/web/iplicense/main`·`/web/project/registration` | FE1-2261(2026-10-27) |
 
-사례: FE1-2164 가 이 창의 시나리오 S25·S45 를 네 회차에 걸쳐 `SKIP(환경)` 으로 남긴 뒤 닿지 않음을 확인했다. 그런데 그 브랜치에서 딴 FE1-2261 이 같은 창을 영향 화면으로 다시 올리고, 있지도 않은 "찜 카드의 리워드 선택 버튼"을 진입으로 적었다.
+사례: FE1-2164 가 첫 행의 정적 리워드 선택 창 시나리오 S25·S45 를 네 회차에 걸쳐 `SKIP(환경)` 으로 남긴 뒤 닿지 않음을 확인했다. 그런데 그 브랜치에서 딴 FE1-2261 이 같은 창을 영향 화면으로 다시 올리고, 있지도 않은 "찜 카드의 리워드 선택 버튼"을 진입으로 적었다.
 
 ## 테스트 계획에 적는 법
 
@@ -107,7 +107,7 @@ grep -rln "FeedList" static/entries static/services apps/global/src apps/account
 - **영향인 번들마다, 그 번들이 그리는 화면에서 확인하는 시나리오를 최소 하나** 둔다. 같은 공용 컴포넌트를 확인하더라도 번들이 다르면 시나리오를 따로 만든다.
   - 근거 칸이 `화면 닿지 않음` 인 번들은 그 번들이 실제로 그리는 화면의 회귀 시나리오로 채운다(판정 순서 4). 이 규칙을 채우려고 닿지 않는 화면의 시나리오를 지어내지 않는다.
 - 각 시나리오 머리에 `- **번들**: static-global` 처럼 그 시나리오가 확인하는 번들을 적는다. 표의 "확인 시나리오" 칸과 맞아야 한다.
-- 시나리오의 대상 주소는 그 번들이 실제로 그리는 화면이어야 한다. 예를 들어 `static-global` 시나리오가 JSP 화면 주소를 가리키면 그 번들을 확인한 것이 아니다. 어느 번들이 그 주소를 그리는지 모르면 코드의 경로 정의(라우트)에서 찾는다.
+- 시나리오의 대상 주소는 그 번들이 실제로 그리는 화면이어야 한다. 예를 들어 `static-global` 시나리오가 JSP 화면 주소를 가리키면 그 번들을 확인한 것이 아니다. 어느 번들이 그 주소를 그리는지 모르면 코드의 경로 정의(라우트)에서 찾고, 라우트만으로 정하지 말고 그 주소의 HTML 이 불러오는 번들도 본다(판정 순서 4의 2번).
 - 회귀 확인 시나리오도 이 규칙을 따른다. 영향 번들이 둘이면 회귀 확인도 번들마다 둔다.
 
 ## 검증할 때
