@@ -2685,7 +2685,10 @@ dobby_ship_stage() {
       print
     }
     END { if (insec && !found && seen) emit() }
-  ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  ' "$f" > "$f.tmp" && mv "$f.tmp" "$f" || return 1
+  # 배포 중 리뷰 반영·충돌 해결 커밋은 단계 안의 일이라 기준점을 옮긴다. 기준점이 있는 오더만.
+  [ -z "$(_v2_checkpoint_get "$key")" ] || dobby_v2_checkpoint "$key" >/dev/null 2>&1
+  return 0
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2833,9 +2836,6 @@ dobby_v2_change_open() {
 # /do auto 모드 — 통합 뒤 배포·검증까지 사람 없이 간다. 설계와 근거: skills/do/auto-mode.md
 # 상태 문서 '## 현재 단계' 의 `- **자동 배포 환경**: {env}` 줄이 있는 오더만 해당한다.
 # ─────────────────────────────────────────────────────────────────────────────
-DOBBY_NOTIFY_SLACK="U03SRUFP97W"
-DOBBY_NOTIFY_EMAIL="jooyoul.lee@wadiz.kr"
-
 # dobby_v2_env KEY — 자동 배포 환경 값. 줄이 없으면 빈 출력(통합에서 멈추는 오더).
 dobby_v2_env() {
   sed -nE 's/^[ \t]*-[ \t]*\*\*자동 배포 환경\*\*:[ \t]*([a-z0-9]+).*$/\1/p' "$(_order_dir "$1")/status.md" 2>/dev/null | head -1
@@ -2994,22 +2994,10 @@ dobby_jira_start_transition() {
   if twg jira workitem transition --id "$key" --transition-id "$id" >/dev/null 2>&1; then echo changed; else echo failed; return 1; fi
 }
 
-# dobby_v2_notify KEY 본문 — 셸(run.sh)이 사람에게 알린다. 슬랙 DM 과 Gmail 로 같은 본문을 보낸다.
-# 셸에서 바로 보낼 길이 없어 짧은 헤드리스 세션 하나를 띄우고, 그 세션에는 보내기 도구 둘만 허용한다.
-# 보내지 못해도 이벤트 로그에는 남는다. 반환은 언제나 0 — 알림 실패로 실행 판단이 바뀌지 않게.
+# dobby_v2_notify KEY 본문 — 사람에게 알릴 일을 이벤트 로그에 남긴다. 알림은 대시보드가 상태를 읽어 띄운다.
+# 슬랙·메일 발송은 하지 않는다(건당 헤드리스 세션 하나, 23만~31만 토큰). 반환은 언제나 0.
 dobby_v2_notify() {
-  local key="$1" body="$2" prompt
-  dobby_event "$key" "알림 — ${body%%$'\n'*}" 2>/dev/null
-  prompt="아래 알림을 두 곳에 그대로 보내라. 다른 일은 하지 않는다.
-1) 슬랙 DM: mcp__claude_ai_Slack__slack_send_message 로 channel_id $DOBBY_NOTIFY_SLACK 에 보낸다.
-2) 메일: mcp__claude_ai_Gmail__send_message 로 $DOBBY_NOTIFY_EMAIL 에게 보낸다. 제목은 [dobby] $key 와 본문 첫 줄.
-도구가 아직 안 보이면 연결이 늦은 것이니 ToolSearch 로 다시 찾아 본다.
-끝나면 각각 보냈는지 한 줄씩 답한다.
-
---- 알림 본문 ---
-[$key] $body"
-  claude -p "$prompt" --allowedTools mcp__claude_ai_Slack__slack_send_message mcp__claude_ai_Gmail__send_message ToolSearch \
-    --output-format json 2>/dev/null | jq -r '.result // empty' 2>/dev/null
+  dobby_event "$1" "알림 — ${2%%$'\n'*}" 2>/dev/null
   return 0
 }
 
@@ -4293,6 +4281,411 @@ EOF
     printf '안 쓰는 그림 %s개 지움 (%sKB)\n' "$del" "$kb" >&2
   fi
   printf '%s' "$del"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 단계 밖 변경 감지 — /do 단계와 dobby-ship 이 끝날 때 기준점을 남기고, 다음에 지금 상태와 비교한다.
+# 기준점은 상태 문서 `## 현재 단계` 의 한 줄이다:
+#   - **기준점**: {시각} · 설계 {지문} · {저장소}@{커밋}:{미커밋 지문} · …
+# 지문은 내용이 바뀌면 달라지는 짧은 값이다. 머지 커밋으로 들어온 변경(기준 브랜치·i18n-sync)은 세지 않는다.
+# ─────────────────────────────────────────────────────────────────────────────
+DOBBY_CLEAN_FP="$(printf '' | shasum | cut -c1-8)"
+
+# _v2_worktrees KEY — 워크트리 표의 모든 행을 "저장소<TAB>브랜치<TAB>경로" 로.
+_v2_worktrees() {
+  awk '
+    function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);gsub(/`|\*/,"",x);return x}
+    /^## /{ins=(index($0,"워크트리")>0)?1:0; hdr=0; next}
+    ins==1 && /^\|/{
+      n=split($0,a,"|")
+      if(hdr==0){for(i=1;i<=n;i++){c=t(a[i]); if(c=="repo")cr=i; if(c=="브랜치")cb=i; if(c=="경로")cp=i}
+        if(cr&&cb&&cp)hdr=1; next}
+      r=t(a[cr]); b=t(a[cb]); sub(/[ \t]*\(.*$/,"",b); p=t(a[cp])
+      if(r!="" && r !~ /^-+$/ && p!="" && !seen[p]++) print r "\t" b "\t" p
+    }' "$(_order_dir "$1")/status.md" 2>/dev/null | sed "s#\t~/#\t$HOME/#"
+}
+
+# _v2_design_fp KEY — 설계 문서 + 테스트 계획의 지문.
+_v2_design_fp() {
+  local d; d="$(_order_dir "$1")"
+  cat "$d/design.md" "$d/test-plan.md" 2>/dev/null | shasum | cut -c1-8
+}
+
+# _v2_wt_fp 경로 — 커밋 안 된 변경(추적 파일 diff + 새 파일 내용)의 지문. 깨끗하면 DOBBY_CLEAN_FP.
+_v2_wt_fp() {
+  ( cd "$1" 2>/dev/null || exit 0
+    { git diff HEAD --binary 2>/dev/null
+      git ls-files -o --exclude-standard -z 2>/dev/null | xargs -0 shasum 2>/dev/null
+    } | shasum | cut -c1-8 )
+}
+
+# _v2_checkpoint_get KEY — 기준점 줄의 값. 없으면 빈 출력.
+_v2_checkpoint_get() {
+  sed -nE 's/^[ \t]*-[ \t]*\*\*기준점\*\*:[ \t]*(.*)$/\1/p' "$(_order_dir "$1")/status.md" 2>/dev/null | head -1
+}
+
+# _v2_checkpoint_write KEY 값 — `## 현재 단계` 절의 기준점 줄을 바꾸거나 절 끝에 넣는다.
+_v2_checkpoint_write() {
+  local f; f="$(_order_dir "$1")/status.md"
+  [ -f "$f" ] || return 1
+  awk -v line="- **기준점**: $2" '
+    /^## /{ if(insec && !done){print line; done=1} insec=($0 ~ /현재 단계/) }
+    insec && /^[ \t]*-[ \t]*\*\*기준점\*\*/ { if(!done){print line; done=1}; next }
+    insec && /^[ \t]*$/ && !done { print line; done=1 }
+    {print}
+    END{ if(!done) print line }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+
+# dobby_v2_checkpoint KEY — 지금 상태를 기준점으로 남긴다. /do 단계와 dobby-ship 이 끝날 때 부른다.
+dobby_v2_checkpoint() {
+  local key="$1" v r b p h
+  [ -f "$(_order_dir "$key")/status.md" ] || { _die "$key 의 상태 문서가 없습니다"; return 1; }
+  v="$(_now) · 설계 $(_v2_design_fp "$key")"
+  while IFS=$'\t' read -r r b p; do
+    [ -d "$p" ] || continue
+    h="$(git -C "$p" rev-parse --short=12 HEAD 2>/dev/null)" || continue
+    v="$v · $r@$h:$(_v2_wt_fp "$p")"
+  done < <(_v2_worktrees "$key")
+  _v2_checkpoint_write "$key" "$v"
+}
+
+# dobby_v2_drift KEY — 기준점 뒤에 단계 밖에서 바뀐 것을 낸다.
+#   첫 줄: "종류<TAB>처음 바뀐 시각". 종류는 none | nobase(기준점 없음) | design | code | both
+#   다음 줄들: "commit<TAB>저장소<TAB>커밋<TAB>시각<TAB>제목" 과 "file<TAB>저장소<TAB>상태<TAB>경로"
+dobby_v2_drift() {
+  local key="$1" cp dfp r b p tok base wfp code="" design="" since="" out="" t df h s l
+  cp="$(_v2_checkpoint_get "$key")"
+  [ -n "$cp" ] || { printf 'nobase\t\n'; return 0; }
+  dfp="$(printf '%s' "$cp" | sed -nE 's/.*설계 ([0-9a-f]+).*/\1/p')"
+  if [ "$dfp" != "$(_v2_design_fp "$key")" ]; then
+    design=1
+    df="$(stat -f '%m' "$(_order_dir "$key")/design.md" "$(_order_dir "$key")/test-plan.md" 2>/dev/null | sort -n | tail -1)"
+    [ -n "$df" ] && since="$(date -r "$df" '+%Y-%m-%d %H:%M')"
+  fi
+  while IFS=$'\t' read -r r b p; do
+    [ -d "$p" ] || continue
+    tok="$(printf '%s' "$cp" | awk -F' · ' '{for(i=1;i<=NF;i++)print $i}' | sed -nE "s/^[ \t]*$r@([0-9a-f]+):([0-9a-f]+)[ \t]*$/\1 \2/p" | head -1)"
+    [ -n "$tok" ] || continue
+    base="${tok% *}"; wfp="${tok#* }"
+    if git -C "$p" merge-base --is-ancestor "$base" HEAD 2>/dev/null; then
+      while IFS=$'\t' read -r h t s; do
+        [ -n "$h" ] || continue
+        code=1; out="$out$(printf 'commit\t%s\t%s\t%s\t%s' "$r" "$h" "$t" "$s")"$'\n'
+        { [ -z "$since" ] || [[ "$t" < "$since" ]]; } && since="$t"
+      done < <(git -C "$p" log --first-parent --no-merges --reverse --format='%h%x09%ad%x09%s' --date=format:'%Y-%m-%d %H:%M' "$base..HEAD" 2>/dev/null)
+    else
+      code=1; out="$out$(printf 'commit\t%s\t-\t-\t기준 커밋 %s 이 브랜치에 없음(되감기·이력 재작성)' "$r" "$base")"$'\n'
+    fi
+    if [ "$(_v2_wt_fp "$p")" != "$wfp" ]; then
+      code=1
+      while IFS= read -r l; do
+        [ -n "$l" ] || continue
+        out="$out$(printf 'file\t%s\t%s\t%s' "$r" "${l:0:2}" "${l:3}")"$'\n'
+        t="$(stat -f '%m' "$p/${l:3}" 2>/dev/null)"
+        [ -n "$t" ] && t="$(date -r "$t" '+%Y-%m-%d %H:%M')" && { [ -z "$since" ] || [[ "$t" < "$since" ]]; } && since="$t"
+      done < <(git -C "$p" status --porcelain -uall 2>/dev/null)
+    fi
+  done < <(_v2_worktrees "$key")
+  if [ -n "$code" ] && [ -n "$design" ]; then t=both
+  elif [ -n "$code" ]; then t=code
+  elif [ -n "$design" ]; then t=design
+  else t=none
+  fi
+  printf '%s\t%s\n%s' "$t" "$since" "$out"
+}
+
+# _v2_recent KEY [분] — 최근 N분(기본 15) 안에 사람이 이 오더에서 일하고 있는 흔적이 있으면 0.
+# 흔적: 커밋 안 된 파일의 수정 시각, 워크트리 폴더에서 연 세션의 대화 기록(/do 밖에서 연 세션 포함) 수정 시각.
+_v2_recent() {
+  local key="$1" min="${2:-15}" now r b p l m tr
+  now="$(date +%s)"
+  while IFS=$'\t' read -r r b p; do
+    [ -d "$p" ] || continue
+    while IFS= read -r l; do
+      m="$(stat -f '%m' "$p/${l:3}" 2>/dev/null)"
+      [ -n "$m" ] && [ $((now - m)) -lt $((min * 60)) ] && return 0
+    done < <(git -C "$p" status --porcelain -uno 2>/dev/null)
+    # 기록 파일의 수정 시각은 대화 없이도 바뀐다(실측) — 후보만 고르고, 판정은 마지막 메시지 시각으로 한다.
+    while IFS= read -r tr; do
+      l="$(tail -n 30 "$tr" | grep -o '"timestamp":"[0-9T:-]*' | tail -1 | cut -d'"' -f4)"
+      m="$(date -j -u -f '%Y-%m-%dT%H:%M:%S' "${l:0:19}" +%s 2>/dev/null)"
+      [ -n "$m" ] && [ $((now - m)) -lt $((min * 60)) ] && return 0
+    done < <(find "$HOME/.claude/projects/$(printf '%s' "$p" | sed 's#[/.]#-#g')" -maxdepth 1 -name '*.jsonl' -mmin "-$min" 2>/dev/null)
+  done < <(_v2_worktrees "$key")
+  return 1
+}
+
+# _v2_open_next_round KEY — 다음 리뷰 차수 폴더를 연다(마지막 차수 폴더가 비어 있으면 그대로). 차수를 낸다.
+_v2_open_next_round() {
+  local d rd; d="$(_order_dir "$1")"
+  rd="$(find "$d/reviews" -maxdepth 1 -type d -name 'round-*' 2>/dev/null | sed 's/.*round-//' | sort -n | tail -1)"
+  if [ -z "$rd" ]; then rd=1
+  elif ls "$d/reviews/round-$rd"/*.md >/dev/null 2>&1; then rd=$((rd + 1))
+  fi
+  mkdir -p "$d/reviews/round-$rd"; printf '%s' "$rd"
+}
+
+# _v2_drift_section KEY 차수 감지결과 — 설계 문서 끝에 "단계 밖에서 들어온 수정" 변경 절을 붙인다. 변경 번호를 낸다.
+_v2_drift_section() {
+  local key="$1" rd="$2" det="$3" f m
+  f="$(_order_dir "$key")/design.md"; [ -f "$f" ] || return 1
+  m="$(sed -nE 's/^## 변경 ([0-9]+).*/\1/p' "$f" | sort -n | tail -1)"; m=$(( ${m:-0} + 1 ))
+  {
+    printf '\n## 변경 %s — 단계 밖에서 들어온 수정\n\n' "$m"
+    printf -- '- **상태**: 구현 대기 (단계 밖에서 이미 구현됨 — 다시 구현하지 않고 리뷰한다)\n'
+    printf -- '- **종류**: 단계 밖 수정\n- **요청**: /do 단계 밖에서 코드가 바뀌었다(자동 감지)\n'
+    printf -- '- **접수**: %s\n- **리뷰 시작 차수**: %s차\n\n' "$(_now)" "$rd"
+    if printf '%s' "$det" | grep -q '^commit'; then
+      printf '### 들어온 커밋\n\n| 저장소 | 커밋 | 시각 | 제목 |\n|---|---|---|---|\n'
+      printf '%s\n' "$det" | awk -F'\t' '$1=="commit"{printf "| %s | %s | %s | %s |\n",$2,$3,$4,$5}'
+      printf '\n'
+    fi
+    if printf '%s' "$det" | grep -q '^file'; then
+      printf '### 커밋 안 된 파일\n\n| 저장소 | 상태 | 경로 |\n|---|---|---|\n'
+      printf '%s\n' "$det" | awk -F'\t' '$1=="file"{printf "| %s | %s | %s |\n",$2,$3,$4}'
+      printf '\n'
+    fi
+    printf '### 리뷰 항목\n\n'
+    printf -- '- 위 커밋(`git show {커밋}`)과 파일만 범위로 본다. 설계에 의도가 적혀 있지 않으므로 코드에서 의도를 읽고, 기존 설계·결정과 어긋나는지 본다.\n'
+    printf -- '- 이 변경을 확인할 시나리오가 테스트 계획에 있는가. 없으면 `[major]` 로 남긴다(수정 세션이 테스트 계획에 더한다).\n'
+  } >> "$f"
+  printf '%s' "$m"
+}
+
+# dobby_v2_drift_apply KEY — 단계 밖 변경이 있으면 다음 /do 가 알맞은 단계를 하도록 상태를 되돌리고 기준점을 새로 남긴다.
+# 출력: none | nobase | kept(지금 단계가 그대로 다룬다) | design(설계 확인부터) | code(리뷰부터)
+#   design·both : 단계가 착수·분석이면 그대로(단계 판정의 설계 승인 비교가 다룬다). 아니면 dobby_v2_change_open 으로 분석.
+#   code        : 착수·분석·구현이거나 리뷰 결과가 아직 없는 리뷰면 단계는 그대로 두고, 들어온 커밋이 있을 때만 변경 절을 남긴다
+#                 (커밋 안 된 변경은 리뷰 브리프가 이미 본다). 그 밖의 단계면 변경 절을 남기고 단계를 구현으로 — 다음은 리뷰다.
+dobby_v2_drift_apply() {
+  local key="$1" det kind ph rd m d dev
+  d="$(_order_dir "$key")"
+  det="$(dobby_v2_drift "$key")"; kind="$(printf '%s' "$det" | head -1 | cut -f1)"
+  case "$kind" in none|nobase) printf '%s\n' "$kind"; return 0 ;; esac
+  det="$(printf '%s' "$det" | tail -n +2)"
+  ph="$(_order_phase "$key")"
+  if [ "$kind" != code ]; then
+    case "$ph" in
+      착수|분석) dobby_v2_checkpoint "$key"; printf 'kept\n'; return 0 ;;
+    esac
+    rd="$(dobby_v2_change_open "$key")" || return 1
+    [ "$kind" = both ] && _v2_drift_section "$key" "$rd" "$det" >/dev/null
+    dobby_agent_state "$key" analysis-agent 분석 "" "단계 밖 설계 변경 확인" 2>/dev/null
+    dobby_event "$key" "단계 밖 설계 변경 감지 — 단계 $ph → 분석, 설계 확인부터 다시" 2>/dev/null
+    dobby_v2_checkpoint "$key"; printf 'design\n'; return 0
+  fi
+  dev="$(_board_dev_slug "$d/orchestration.md")"
+  case "$ph" in
+    착수|분석|구현)
+      printf '%s' "$det" | grep -q '^commit' && _v2_drift_section "$key" "$(_v2_open_next_round "$key")" "$det" >/dev/null
+      dobby_v2_checkpoint "$key"; printf 'kept\n'; return 0 ;;
+    리뷰)
+      rd="$(find "$d/reviews" -maxdepth 1 -type d -name 'round-*' 2>/dev/null | sed 's/.*round-//' | sort -n | tail -1)"
+      if [ -z "$rd" ] || ! ls "$d/reviews/round-$rd"/*.md >/dev/null 2>&1; then
+        printf '%s' "$det" | grep -q '^commit' && _v2_drift_section "$key" "${rd:-1}" "$det" >/dev/null
+        dobby_v2_checkpoint "$key"; printf 'kept\n'; return 0
+      fi ;;
+  esac
+  if [ "$ph" = 해결 ]; then
+    awk '/^## 해결/{skip=1; next} /^## /{if(skip)skip=0} !skip{print}' "$d/status.md" > "$d/status.md.tmp" && mv "$d/status.md.tmp" "$d/status.md"
+  fi
+  rd="$(_v2_open_next_round "$key")"
+  m="$(_v2_drift_section "$key" "$rd" "$det")"
+  dobby_phase "$key" 구현
+  [ -n "$dev" ] && dobby_agent_state "$key" "$dev" 대기 2>/dev/null
+  dobby_event "$key" "단계 밖 코드 변경 감지 — 변경 $m 로 기록, 단계 $ph → 구현, ${rd}차 리뷰부터 다시" 2>/dev/null
+  dobby_v2_checkpoint "$key"; printf 'code\n'
+}
+
+# dobby_v2_drift_backfill [KEY accept|review] — 기준점이 없는 /do 오더의 첫 기준점을 정한다.
+#   인자 없음: 오더마다 마지막 "통합 완료" 이벤트 때의 커밋을 기준으로 비교해 표 한 줄씩 낸다(바꾸지 않는다).
+#             "키<TAB>단계<TAB>판정<TAB>기준 시각<TAB>단계 밖 커밋 수<TAB>커밋 안 된 파일 수"
+#             판정: 작업 중(최근 15분 흔적, 제외) | 변경 없음 | 단계 밖 변경 | 기준 없음(통합 전)
+#   KEY accept: 지금 상태를 그대로 기준점으로 남긴다.
+#   KEY review: 그 기준 커밋으로 기준점을 남긴 뒤 dobby_v2_drift_apply 로 리뷰부터 다시 하게 한다.
+dobby_v2_drift_backfill() {
+  local key="${1:-}" mode="${2:-}" d k ph ts r b p base v nc nf verdict
+  # 기록 시각은 분까지라 그 분의 끝(59초)까지 센다. 통합 커밋이 같은 분에 찍힌다(실측).
+  _v2_base_at() { git -C "$1" rev-list -1 --first-parent --before="$2:59" HEAD 2>/dev/null | cut -c1-12; }
+  _v2_integrated_at() {
+    sed -nE 's/^- ([0-9-]+ [0-9:]+) 통합 완료.*/\1/p' "$(_order_dir "$1")/orchestration.md" 2>/dev/null | tail -1
+  }
+  if [ -n "$key" ]; then
+    case "$mode" in
+      accept) dobby_v2_checkpoint "$key"; dobby_event "$key" "기준점 처음 기록 — 지금 상태를 그대로 인정" 2>/dev/null; return 0 ;;
+      review)
+        ts="$(_v2_integrated_at "$key")"; [ -n "$ts" ] || { _die "$key 에 통합 완료 기록이 없습니다"; return 1; }
+        v="$ts · 설계 $(_v2_design_fp "$key")"
+        while IFS=$'\t' read -r r b p; do
+          base="$(_v2_base_at "$p" "$ts")"; [ -n "$base" ] && v="$v · $r@$base:$DOBBY_CLEAN_FP"
+        done < <(_v2_worktrees "$key")
+        _v2_checkpoint_write "$key" "$v"
+        dobby_event "$key" "기준점 처음 기록 — $ts 통합 때 커밋 기준, 그 뒤 변경은 리뷰부터 다시" 2>/dev/null
+        dobby_v2_drift_apply "$key"; return $? ;;
+      *) _die "쓰임: dobby_v2_drift_backfill [KEY accept|review]"; return 1 ;;
+    esac
+  fi
+  for d in "$(_meta)"/*/; do
+    k="$(basename "$d")"
+    grep -q '^## 지난 세션' "$d/status.md" 2>/dev/null || continue
+    [ -n "$(_v2_checkpoint_get "$k")" ] && continue
+    ph="$(_order_phase "$k")"
+    case "$ph" in 해결|종료|완료) continue ;; esac
+    ts="$(_v2_integrated_at "$k")"
+    if _v2_recent "$k"; then printf '%s\t%s\t작업 중\t%s\t-\t-\n' "$k" "$ph" "${ts:--}"; continue; fi
+    [ -n "$ts" ] || { printf '%s\t%s\t기준 없음(통합 전)\t-\t-\t-\n' "$k" "$ph"; continue; }
+    nc=0; nf=0
+    while IFS=$'\t' read -r r b p; do
+      [ -d "$p" ] || continue
+      base="$(_v2_base_at "$p" "$ts")"; [ -n "$base" ] || continue
+      nc=$((nc + $(git -C "$p" log --first-parent --no-merges --format=%h "$base..HEAD" 2>/dev/null | grep -c .)))
+      nf=$((nf + $(git -C "$p" status --porcelain -uall 2>/dev/null | grep -c .)))
+    done < <(_v2_worktrees "$k")
+    verdict="변경 없음"; [ $((nc + nf)) -gt 0 ] && verdict="단계 밖 변경"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$k" "$ph" "$verdict" "$ts" "$nc" "$nf"
+  done
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 다음 할 일 — 대시보드가 30초마다 부른다. 모델을 부르지 않고 파일·git·프로세스 목록만 본다(토큰 0).
+# dobby_v2_next_all — 끝나지 않은 /do 오더마다 JSON 한 줄:
+#   {key,title,phase,group,kind,text,since,env,cmd,link,action}
+#   group : mine(사람 차례) | auto(자동 진행 중) | wait(날짜·조건 기다림) | work(터미널에서 작업 중)
+#   action: 대시보드 버튼 — autorun | deploy | approve | drift | resolve | "" (cmd 는 복사할 명령, link 는 열 주소)
+# ─────────────────────────────────────────────────────────────────────────────
+# _v2_drift_cached KEY — dobby_v2_drift 의 첫 줄. 커밋·인덱스·상태 문서·설계 문서가 그대로면 지난 결과를 쓴다.
+# 대시보드 주기 판정용이다(오더마다 새 파일 검사가 0.2초). /do 시작의 되돌리기는 이것을 쓰지 않는다.
+_v2_drift_cached() {
+  local key="$1" d sig r b p g c
+  d="$(_order_dir "$key")"
+  sig="$(stat -f '%m' "$d/status.md" "$d/design.md" "$d/test-plan.md" 2>/dev/null | tr '\n' ' ')"
+  while IFS=$'\t' read -r r b p; do
+    [ -d "$p" ] || continue
+    g="$(git -C "$p" rev-parse --absolute-git-dir 2>/dev/null)"
+    sig="$sig $(git -C "$p" rev-parse HEAD 2>/dev/null) $(stat -f '%m' "$g/index" 2>/dev/null)"
+  done < <(_v2_worktrees "$key")
+  c="${TMPDIR:-/tmp}/dobby-next/$key"
+  if [ -f "$c" ] && [ "$(head -1 "$c")" = "$sig" ]; then sed -n 2p "$c"; return 0; fi
+  mkdir -p "$(dirname "$c")"
+  r="$(dobby_v2_drift "$key" | head -1)"
+  printf '%s\n%s\n' "$sig" "$r" > "$c"; printf '%s\n' "$r"
+}
+
+_v2_md_day() {
+  local u w; u="$(date -j -f '%Y-%m-%d' "$1" '+%u' 2>/dev/null)" || { printf '%s' "$1"; return; }
+  case "$u" in 1) w=월 ;; 2) w=화 ;; 3) w=수 ;; 4) w=목 ;; 5) w=금 ;; 6) w=토 ;; *) w=일 ;; esac
+  printf '%s(%s)' "$(date -j -f '%Y-%m-%d' "$1" '+%m/%d')" "$w"
+}
+
+dobby_v2_next_all() {
+  local ps today d k f ph title upd env kind grp text since cmd link act dr drk drs rd row st ln dt stf tf
+  ps="$(ps -axo command 2>/dev/null)"; today="$(date '+%Y-%m-%d')"
+  _v2_emit() {
+    jq -nc --arg key "$k" --arg title "$title" --arg phase "$ph" --arg group "$grp" --arg kind "$kind" \
+      --arg text "$text" --arg since "$since" --arg env "$env" --arg cmd "$cmd" --arg link "$link" --arg action "$act" \
+      '{key:$key,title:$title,phase:$phase,group:$group,kind:$kind,text:$text,since:$since,env:$env,cmd:$cmd,link:$link,action:$action}'
+  }
+  while IFS= read -r f; do
+    d="${f%/status.md}"; k="${d##*/}"
+    ph="$(_order_phase "$k")"
+    case "$ph" in 해결|종료|완료) continue ;; esac
+    title="$(sed -nE 's/^- \*\*제목\*\*:[ \t]*(.*)$/\1/p' "$f" | head -1)"
+    upd="$(sed -nE 's/^- \*\*갱신\*\*:[ \t]*([0-9-]+ [0-9:]+).*/\1/p' "$f" | head -1)"
+    env="$(dobby_v2_env "$k")"
+    grp=mine; kind=""; text=""; since="$upd"; cmd=""; link=""; act=""
+
+    if printf '%s\n' "$ps" | grep -Eq "run\.sh'? '?$k'?( |$)"; then
+      grp=auto; kind=running; text="자동 실행 중 — $ph 단계"; _v2_emit; continue
+    fi
+
+    dr="$(_v2_drift_cached "$k")"; drk="${dr%%$'\t'*}"; drs="${dr#*$'\t'}"
+    if [ "$drk" = design ] || [ "$drk" = both ]; then
+      case "$ph" in 착수|분석) ;; *)
+        if _v2_recent "$k"; then grp=work; kind=working; text="터미널에서 작업 중 — 설계가 바뀌는 중"
+        else kind=drift-design; text="단계 밖에서 설계가 바뀌었습니다 — 설계 확인이 필요합니다"; since="$drs"; cmd="/do $k"
+        fi; _v2_emit; continue ;;
+      esac
+    fi
+    if [ "$drk" = code ]; then
+      rd="$(find "$d/reviews" -maxdepth 1 -type d -name 'round-*' 2>/dev/null | sed 's/.*round-//' | sort -n | tail -1)"
+      case "$ph" in
+        통합|검증|보류) dr=1 ;;
+        리뷰) { [ -n "$rd" ] && ls "$d/reviews/round-$rd"/*.md >/dev/null 2>&1; } && dr=1 || dr="" ;;
+        *) dr="" ;;
+      esac
+      if [ -n "$dr" ]; then
+        if _v2_recent "$k"; then grp=work; kind=working; text="터미널에서 작업 중 — 단계 밖에서 코드가 바뀌는 중"
+        else kind=drift-code; text="단계 밖에서 코드가 바뀌었습니다 — 리뷰가 필요합니다"; since="$drs"; act=drift
+        fi; _v2_emit; continue
+      fi
+    fi
+
+    case "$ph" in
+      보류)
+        kind=decision; text="판단이 필요합니다"; cmd="/do $k" ;;
+      착수|분석)
+        if [ ! -f "$d/design.md" ]; then grp=work; kind=designing; text="설계 작성 중"
+        elif _v2_takeover_pending "$k" || ! jq -r '.["사용자"] // empty, .auto // empty' "$d/design-ack.json" 2>/dev/null | grep -qx "$(dobby_design_rev "$k")"; then
+          kind=design-confirm; text="설계 확인 대기 — 자동 실행인지 직접 실행인지 답해 주세요"; cmd="/do $k"; act=approve
+        else
+          kind=run-ready; text="설계 확정 — 자동 실행 대기"; act=autorun
+        fi ;;
+      구현|리뷰)
+        if _v2_recent "$k"; then grp=work; kind=working; text="터미널에서 $ph 진행 중"
+        else kind=resume; text="$ph 단계에서 멈춰 있습니다 — 자동 실행으로 이어 가기"; act=autorun
+        fi ;;
+      통합)
+        row="$(awk -F'|' '
+          function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
+          /^## /{ins=($0 ~ /^##[ \t]*배포[ \t]*$/); next}
+          ins && /^\|/ && NF>=9 && t($2)!="저장소" && t($2) !~ /^-+$/ {
+            if(t($7)>=best){best=t($7); r=t($2) "\t" t($3) "\t" t($4) "\t" t($7) "\t" t($8)}
+          } END{print r}' "$f")"
+        IFS=$'\t' read -r ln dt st stf tf <<<"$row"
+        if [ -n "$row" ] && case "$st" in *⚠*) true ;; *) false ;; esac; then
+          kind=blocked; text="배포가 막혔습니다 — $ln $dt: ${tf:-비고 없음}"; since="$stf"
+        elif [ -n "$env" ]; then
+          kind=ship-resume; text="$env 배포 이어 가기${st:+ — $ln $st}"; act=autorun
+        elif [ -z "$row" ]; then
+          kind=deploy; text="통합 완료 — 배포 차례"; act=deploy
+        else
+          case "$st" in
+            배포\ 확인) kind=verify; text="$dt 배포 확인 — 검증 차례"; cmd="/do $k"; since="$stf" ;;
+            검증\ 중|검증\ 완료|검증\ 종료) kind=deploy; text="통합 완료 — 배포 차례 (지난 배포: $dt $st)"; act=deploy ;;
+            *) kind=ship-continue; text="$ln $dt $st — 배포 이어 가기"; cmd="/dobby-ship $k $dt"; since="$stf" ;;
+          esac
+        fi ;;
+      검증)
+        if _testrun_open "$k" >/dev/null; then
+          if _v2_recent "$k"; then grp=work; kind=working; text="터미널에서 검증 중"
+          else kind=verify-continue; text="검증이 중간에 멈췄습니다 — 남은 묶음 이어 가기"; act=autorun
+          fi
+        elif _v2_test_passed "$k"; then
+          ln="$(sed -nE 's/^- \*\*완료 조건\*\*:[ \t]*(.*)$/\1/p' "$f" | head -1)"
+          dt="$(awk -F'|' '
+            function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
+            /^## /{ins=(index($0,"릴리즈 노트")>0); next}
+            ins && /^\|/ && t($2) ~ /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/ {if(t($2)>m)m=t($2)} END{print m}' "$f")"
+          if [ -n "$ln" ]; then grp=wait; kind=condition; text="완료 조건 기다림 — $ln"
+          elif [ -z "$dt" ]; then kind=release; text="검증 통과 — 릴리즈 노트 등록 차례"; cmd="/dobby-release $k"
+          elif [[ "$dt" > "$today" ]]; then grp=wait; kind=release-wait; text="$(_v2_md_day "$dt") 정기배포 뒤 해결"; since="$dt 09:00"
+          elif [ "$dt" = "$today" ] && ! grep -q '^- \*\*상태\*\*: 완료' "$(_release_file "$dt")" 2>/dev/null; then
+            kind=stage-check; text="오늘 정기배포 — stage 확인 차례"; link="/releases/$dt"; since="$dt 09:00"
+          else
+            kind=resolve; text="$(_v2_md_day "$dt") 배포분 — 라이브에서 확인했으면 해결"; act=resolve; since="$dt 09:00"
+          fi
+        elif ! awk -F'|' '/^## /{ins=(index($0,"테스트 실행 이력")>0); next} ins && /^\|/ && $2 !~ /회차|---/ {n++} END{exit n?0:1}' "$f"; then
+          kind=verify; text="검증 차례"; act=autorun
+        else
+          kind=fix; text="검증 실패 — ${env:+자동 실행이 원인을 가르고 }수정 차례"; act=autorun
+        fi ;;
+      *) continue ;;
+    esac
+    if [ "$grp" = mine ] && [ "$kind" != decision ] && [ "$kind" != design-confirm ] && _v2_recent "$k"; then
+      grp=work; text="터미널에서 작업 중 — $text"; act=""; cmd=""
+    fi
+    _v2_emit
+  done < <(grep -l "^## 지난 세션" "$(_meta)"/*/status.md 2>/dev/null)
 }
 
 echo "dobby-lib loaded" >&2
