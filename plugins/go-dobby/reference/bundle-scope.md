@@ -69,7 +69,11 @@ grep -rln "FeedList" static/entries static/services apps/global/src apps/account
 가져오는(import) 파일이 있다고 그 화면이 실제로 뜨는 것은 아니다. **빌드에 들어가는 것**과 **사용자가 그 화면을 보는 것**은 다르다. 시나리오를 쓰기 전에 그려지는 길을 끝까지 따라간다.
 
 1. 그 컴포넌트를 그리는 조건을 찾는다. 라우트 정의, 창을 여는 함수(`useOpenModalPortal` 등)의 호출처, 주소 쿼리로 여는 처리(`useAutoOpenModalFromURL` 등)다.
-2. 그 조건이 요구하는 주소를 **어느 번들이 그리는지** 확인한다. JSP 화면은 도서관의 `com.wadiz.web.md` 컨트롤러 표로, 실제 환경은 그 주소의 HTML 이 불러오는 번들 파일로 본다.
+2. 그 조건이 요구하는 주소를 **어느 번들이 그리는지** 확인한다. JSP 화면은 도서관의 `com.wadiz.web.md` 컨트롤러 표로, 실제 환경은 그 주소의 HTML 이 불러오는 번들 파일로 본다. ⛔ 정적 라우터에 경로가 있다고 그 번들이 그린다고 보지 않는다 — 서버가 다른 번들을 내려 주는 주소가 있다(아래 표).
+
+   ```bash
+   curl -s https://rc4.wadiz.io/{경로} | grep -o 'cdn-static[^"]*\(main/main\.js\|korea-main\.js\)'
+   ```
 3. 2번의 번들이 1번의 컴포넌트가 든 번들과 다르면, 그 컴포넌트는 **화면에 닿지 않는다.**
 
 화면에 닿지 않으면 이렇게 적는다.
@@ -82,6 +86,7 @@ grep -rln "FeedList" static/entries static/services apps/global/src apps/account
 | 컴포넌트 | 열리는 조건 | 닿지 않는 이유 | 확인한 오더 |
 |---|---|---|---|
 | `static/entries/main/src/pages/portal/MainModalPortal.jsx` 의 `RewardsSelectionModal` | `/web/campaign/detail/{번호}?modal=reward-selection`, 모바일 폭 | 그 주소는 `GlobalKoreaFundingDetailController` 가 글로벌 앱(`global/korea-main.js`)으로 그린다(`com.wadiz.web.md:1063`). static 메인 라우터의 상세 경로는 316736 을 스토어로 보내는 것 하나뿐이다(`RouterConfig.tsx`). 같은 쿼리는 `apps/global/src/app/ModalPortal.tsx` 가 글로벌 창으로 연다 | FE1-2164(2026-10-26), FE1-2261(2026-10-27) |
+| `static/entries/main/src/routes/RouterConfig.tsx` 의 `web/main/earlybird`·`web/main/planned` 화면 | 정적 메인 라우터에 경로가 있음 | 서버가 그 주소에 글로벌 앱(`global/korea-main.js`)을 내려 준다(rc4 HTML 확인). PC 폭이면 정적 라우터도 `/web/main` 으로 돌려보낸다(`RedirectToMainWithParams`). 같은 날 `main/main.js` 를 내려 준 주소는 `/web/wish/main`·`/web/wadiztraders`·`/web/wevent/wadizawards`·`/web/iplicense/main`·`/web/project/registration` | FE1-2261(2026-10-27) |
 
 사례: FE1-2164 가 이 창의 시나리오 S25·S45 를 네 회차에 걸쳐 `SKIP(환경)` 으로 남긴 뒤 닿지 않음을 확인했다. 그런데 그 브랜치에서 딴 FE1-2261 이 같은 창을 영향 화면으로 다시 올리고, 있지도 않은 "찜 카드의 리워드 선택 버튼"을 진입으로 적었다.
 
