@@ -4550,8 +4550,9 @@ dobby_v2_drift_backfill() {
 # 다음 할 일 — 대시보드가 30초마다 부른다. 모델을 부르지 않고 파일·git·프로세스 목록만 본다(토큰 0).
 # dobby_v2_next_all — 끝나지 않은 /do 오더마다 JSON 한 줄:
 #   {key,title,phase,group,kind,text,since,env,cmd,link,action}
-#   group : mine(사람 차례) | auto(자동 진행 중) | wait(날짜·조건 기다림) | work(터미널에서 작업 중)
-#   action: 대시보드 버튼 — autorun | deploy | approve | drift | resolve | "" (cmd 는 복사할 명령, link 는 열 주소)
+#   group : mine(자동화가 끝나 사람이 할 일이 있음) | notice(알림만, 할 일 없음) | auto(자동 진행 중)
+#           | wait(날짜·조건 기다림) | work(터미널에서 작업 중). 정기배포일이 지난 오더는 내지 않는다.
+#   action: 대시보드 버튼 — autorun | deploy | approve | drift | "" (cmd 는 복사할 명령, link 는 열 주소)
 # ─────────────────────────────────────────────────────────────────────────────
 # _v2_drift_cached KEY — dobby_v2_drift 의 첫 줄. 커밋·인덱스·상태 문서·설계 문서가 그대로면 지난 결과를 쓴다.
 # 대시보드 주기 판정용이다(오더마다 새 파일 검사가 0.2초). /do 시작의 되돌리기는 이것을 쓰지 않는다.
@@ -4569,6 +4570,11 @@ _v2_drift_cached() {
   mkdir -p "$(dirname "$c")"
   r="$(dobby_v2_drift "$key" | head -1)"
   printf '%s\n%s\n' "$sig" "$r" > "$c"; printf '%s\n' "$r"
+}
+
+# _v2_test_skip KEY — 테스트 계획에 "- **검증**: 필요 없음" 줄이 있으면 참. 배포 뒤 할 일이 없는 오더다.
+_v2_test_skip() {
+  grep -q '^- \*\*검증\*\*:[[:space:]]*필요 없음' "$(_order_dir "$1")/test-plan.md" 2>/dev/null
 }
 
 _v2_md_day() {
@@ -4650,7 +4656,10 @@ dobby_v2_next_all() {
           kind=deploy; text="통합 완료 — 배포 차례"; act=deploy
         else
           case "$st" in
-            배포\ 확인) kind=verify; text="$dt 배포 확인 — 검증 차례"; cmd="/do $k"; since="$stf" ;;
+            배포\ 확인)
+              if _v2_test_skip "$k"; then grp=notice; kind=verify-skip; text="$dt 배포 확인 — 검증 필요 없음"; since="$stf"
+              else kind=verify; text="$dt 배포 확인 — 검증 차례"; cmd="/do $k"; since="$stf"
+              fi ;;
             검증\ 중|검증\ 완료|검증\ 종료) kind=deploy; text="통합 완료 — 배포 차례 (지난 배포: $dt $st)"; act=deploy ;;
             *) kind=ship-continue; text="$ln $dt $st — 배포 이어 가기"; cmd="/dobby-ship $k $dt"; since="$stf" ;;
           esac
@@ -4667,17 +4676,19 @@ dobby_v2_next_all() {
             /^## /{ins=(index($0,"릴리즈 노트")>0); next}
             ins && /^\|/ && t($2) ~ /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/ {if(t($2)>m)m=t($2)} END{print m}' "$f")"
           if [ -n "$ln" ]; then grp=wait; kind=condition; text="완료 조건 기다림 — $ln"
-          elif [ -z "$dt" ]; then kind=release; text="검증 통과 — 릴리즈 노트 등록 차례"; cmd="/dobby-release $k"
+          elif [ -z "$dt" ]; then grp=notice; kind=release; text="검증 통과 — 릴리즈 노트 등록 차례"; cmd="/dobby-release $k"
           elif [[ "$dt" > "$today" ]]; then grp=wait; kind=release-wait; text="$(_v2_md_day "$dt") 정기배포 뒤 해결"; since="$dt 09:00"
           elif [ "$dt" = "$today" ] && ! grep -q '^- \*\*상태\*\*: 완료' "$(_release_file "$dt")" 2>/dev/null; then
-            kind=stage-check; text="오늘 정기배포 — stage 확인 차례"; link="/releases/$dt"; since="$dt 09:00"
+            grp=wait; kind=stage-check; text="오늘 정기배포 — stage 확인은 릴리즈 화면에서"; link="/releases/$dt"; since="$dt 09:00"
           else
-            kind=resolve; text="$(_v2_md_day "$dt") 배포분 — 라이브에서 확인했으면 해결"; act=resolve; since="$dt 09:00"
+            continue
           fi
         elif ! awk -F'|' '/^## /{ins=(index($0,"테스트 실행 이력")>0); next} ins && /^\|/ && $2 !~ /회차|---/ {n++} END{exit n?0:1}' "$f"; then
-          kind=verify; text="검증 차례"; act=autorun
+          if _v2_test_skip "$k"; then grp=notice; kind=verify-skip; text="검증 필요 없음 — 릴리즈 노트 등록 차례"; cmd="/dobby-release $k"
+          else kind=verify; text="검증 차례"; act=autorun
+          fi
         else
-          kind=fix; text="검증 실패 — ${env:+자동 실행이 원인을 가르고 }수정 차례"; act=autorun
+          grp=notice; kind=fix; text="검증 실패 — ${env:+자동 실행이 원인을 가르고 }수정 차례"; act=autorun
         fi ;;
       *) continue ;;
     esac
