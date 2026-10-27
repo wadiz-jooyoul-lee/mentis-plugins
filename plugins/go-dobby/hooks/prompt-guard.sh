@@ -2,6 +2,7 @@
 # go-dobby 입력 검사 훅 — UserPromptSubmit
 #
 #   G19: 문맥이 큰 세션에서 go-dobby 명령(/do, /dobby-*)을 새로 시작하지 못하게 막는다.
+#        /dobby-qa 는 뺀다. 예약으로 같은 세션에서 계속 도는 폴링 루프라 막으면 감시가 끊긴다.
 #        세션이 길수록 호출 한 번이 그때까지 쌓인 문맥을 통째로 다시 읽는다.
 #        (실측 2026-10-19: 문맥 52만 세션에서 이어 한 릴리즈 1회가 1,801만 토큰. 다른 세션의 같은 일은 약 450만)
 #   G20: /do 가 "이 세션을 닫아 주세요"로 끝난 뒤 들어온 일반 요청에 경고만 붙인다(막지 않음).
@@ -30,6 +31,7 @@ CTX="$(printf '%s\n' "$TAIL" | jq -R 'fromjson? | select(.type=="assistant") | .
 CTX="${CTX:-0}"
 
 case "$PROMPT" in
+  /dobby-qa|/dobby-qa\ *|/go-dobby:dobby-qa|/go-dobby:dobby-qa\ *) exit 0 ;;
   /do\ *|/do|/go-dobby:*|/dobby-*)
     if [ "$CTX" -ge "$MAX" ]; then
       jq -n --arg r "go-dobby 훅 [G19] 이 세션의 문맥이 약 $((CTX / 1000))천 토큰입니다(기준 $((MAX / 1000))천). 여기서 새 단계를 시작하면 호출마다 이 문맥을 다시 읽어 비용이 몇 배로 늘어납니다. /clear 로 세션을 비우거나 새 터미널에서 같은 명령을 다시 입력해 주세요." \
