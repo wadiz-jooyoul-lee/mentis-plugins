@@ -4638,8 +4638,8 @@ dobby_v2_next_all() {
       보류)
         kind=decision; text="판단이 필요합니다"; cmd="/do $k" ;;
       착수|분석)
-        # 설계 세션은 틀부터 깔고 채우므로, 틀 자리표시가 남아 있으면 아직 작성 중이다.
-        if [ ! -f "$d/design.md" ] || grep -qE '^(\| 무엇이 문제인가 \| \(한 문장\)|\((고칠 파일과 읽어야 할|실제 코드를 보여 주고|문제를 만드는 코드를))' "$d/design.md"; then
+        # 설계 세션은 테스트 계획까지 다 쓴 뒤에야 단계를 분석으로 바꾼다. 착수거나 틀 자리표시가 남아 있으면 아직 작성 중이다.
+        if [ "$ph" = 착수 ] || [ ! -f "$d/design.md" ] || grep -qE '^(\| 무엇이 문제인가 \| \(한 문장\)|\((고칠 파일과 읽어야 할|실제 코드를 보여 주고|문제를 만드는 코드를))' "$d/design.md"; then
           grp=work; kind=designing; text="설계 작성 중"
         elif _v2_takeover_pending "$k" || ! jq -r '.["사용자"] // empty, .auto // empty' "$d/design-ack.json" 2>/dev/null | grep -qx "$(dobby_design_rev "$k")"; then
           kind=design-confirm; text="설계 확인 대기 — 자동 실행인지 직접 실행인지 답해 주세요"; cmd="/do $k"; act=approve
