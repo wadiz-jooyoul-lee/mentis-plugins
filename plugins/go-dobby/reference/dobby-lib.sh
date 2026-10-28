@@ -4401,7 +4401,7 @@ dobby_v2_drift() {
 }
 
 # _v2_recent KEY [분] — 최근 N분(기본 15) 안에 사람이 이 오더에서 일하고 있는 흔적이 있으면 0.
-# 흔적: 커밋 안 된 파일의 수정 시각, 워크트리 폴더에서 연 세션의 대화 기록(/do 밖에서 연 세션 포함) 수정 시각.
+# 흔적: 커밋 안 된 파일의 수정 시각, 워크트리 폴더에서 사람이 연 세션의 대화 기록(/do 밖에서 연 세션 포함) 수정 시각.
 _v2_recent() {
   local key="$1" min="${2:-15}" now r b p l m tr
   now="$(date +%s)"
@@ -4413,6 +4413,8 @@ _v2_recent() {
     done < <(git -C "$p" status --porcelain -uno 2>/dev/null)
     # 기록 파일의 수정 시각은 대화 없이도 바뀐다(실측) — 후보만 고르고, 판정은 마지막 메시지 시각으로 한다.
     while IFS= read -r tr; do
+      # claude -p 로 띄운 세션(run.sh 자동 실행·대시보드 잡)은 sdk-cli 로 남는다. 사람 작업이 아니다.
+      [ "$(grep -m1 -o '"entrypoint":"[a-z-]*"' "$tr")" = '"entrypoint":"sdk-cli"' ] && continue
       l="$(tail -n 30 "$tr" | grep -o '"timestamp":"[0-9T:-]*' | tail -1 | cut -d'"' -f4)"
       m="$(date -j -u -f '%Y-%m-%dT%H:%M:%S' "${l:0:19}" +%s 2>/dev/null)"
       [ -n "$m" ] && [ $((now - m)) -lt $((min * 60)) ] && return 0
