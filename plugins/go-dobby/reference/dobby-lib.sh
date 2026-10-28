@@ -942,6 +942,12 @@ dobby_commit_push() {
     }
   fi
   git -C "$wt" commit --no-verify -m "$msg" >&2 || return 1
+  # 도비가 낸 커밋은 단계 안의 일이라, 이 작업 폴더를 쓰는 오더의 기준점을 바로 옮긴다(기준점이 있는 오더만).
+  local f k
+  for f in $(grep -lF "| ${wt%/} |" "$(_meta)"/*/status.md 2>/dev/null); do
+    k="${f%/status.md}"; k="${k##*/}"
+    [ -z "$(_v2_checkpoint_get "$k")" ] || dobby_v2_checkpoint "$k" >/dev/null 2>&1
+  done
   git -C "$wt" push origin "$br" >&2 2>/dev/null || git -C "$wt" push -u origin "$br" >&2
 }
 
