@@ -2863,6 +2863,16 @@ dobby_v2_set_env() {
   dobby_event "$key" "자동 배포 환경 → $env" 2>/dev/null
 }
 
+# dobby_v2_unset_env KEY — 그 줄을 지운다. 줄이 없으면 아무것도 하지 않는다. 통합에서 멈추는 오더로 되돌린다.
+dobby_v2_unset_env() {
+  local key="$1" f
+  f="$(_order_dir "$key")/status.md"
+  [ -f "$f" ] || { _die "$key 의 상태 문서가 없습니다"; return 1; }
+  [ -n "$(dobby_v2_env "$key")" ] || return 0
+  awk '/^[ \t]*-[ \t]*\*\*자동 배포 환경\*\*/ { next } { print }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  dobby_event "$key" "자동 배포 환경 해제 — 통합에서 멈춤" 2>/dev/null
+}
+
 # dobby_v2_set_base KEY REPO BASE — '- **기준 브랜치**: 저장소=브랜치, …' 줄에 그 저장소의 기준을 더한다. 이미 있으면 두지 않는다.
 dobby_v2_set_base() {
   local key="$1" repo="$2" base="$3" f cur
@@ -4714,7 +4724,7 @@ dobby_v2_next_all() {
         if [ "$ph" = 착수 ] || [ ! -f "$d/design.md" ] || grep -qE '^(\| 무엇이 문제인가 \| \(한 문장\)|\((고칠 파일과 읽어야 할|실제 코드를 보여 주고|문제를 만드는 코드를))' "$d/design.md"; then
           grp=work; kind=designing; text="설계 작성 중"
         elif _v2_takeover_pending "$k" || ! jq -r '.["사용자"] // empty, .auto // empty' "$d/design-ack.json" 2>/dev/null | grep -qx "$(dobby_design_rev "$k")"; then
-          kind=design-confirm; text="설계 확인 대기 — 자동 실행인지 직접 실행인지 답해 주세요"; cmd="/do $k"; act=approve
+          kind=design-confirm; text="설계 확인 대기 — 자동 실행·수동 실행·전체 실행 중 하나로 답해 주세요"; cmd="/do $k"; act=approve
         else
           kind=run-ready; text="설계 확정 — 자동 실행 대기"; act=autorun
         fi ;;
