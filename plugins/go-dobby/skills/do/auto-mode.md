@@ -145,7 +145,6 @@ dev 는 리뷰를 기다리지 않는다(dobby-ship 규칙: dev 는 충돌만 �
 | stage 머지·배포 | 훅 G1, `dobby_ship_argo` |
 | cloud_live, 라이브 argocd 앱 | 훅 G1 |
 | 반영 안 한 변경요청 | `dobby_ship_merge` |
-| 배포 쪽 리뷰 4라운드째 | `dobby_ship_round` |
 | wadiz-frontend 머지 전 com.wadiz.web 머지, wadiz-frontend 배포 전 sync | `dobby_ship_merge`, `dobby_ship_argo` |
 | argocd 세션 만료 | `dobby_ship_argo` |
 
@@ -169,7 +168,7 @@ dev 는 리뷰를 기다리지 않는다(dobby-ship 규칙: dev 는 충돌만 �
 
 ### 수정 상한
 
-**테스트 실패를 고치는 시도는 2번까지다.** 2번 고쳤는데도 실패하면 판단 요청으로 넘어간다. 리뷰 라운드 상한(3차)과는 따로 센다. 센 값은 `agent-logs.json` 의 `fix-test-*` 하위 키 수다(수정 세션이 `fix-test-{시각}` 으로 기록한다).
+**테스트 실패를 고치는 시도는 2번까지다.** 2번 고쳤는데도 실패하면 판단 요청으로 넘어간다. 센 값은 `agent-logs.json` 의 `fix-test-*` 하위 키 수다(수정 세션이 `fix-test-{시각}` 으로 기록한다).
 
 ## 알림
 

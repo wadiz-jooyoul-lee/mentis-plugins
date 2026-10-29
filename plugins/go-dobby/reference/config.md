@@ -67,7 +67,7 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 | `dobby_ship_web_ci KEY 환경 [머지시각]` | dobby-ship 6단계 | **com.wadiz.web 전용.** 머지 push 로 **자동 시작된** CI run 을 찾아 빌드 칸에 `web#{run id}` 로 적는다(run id stdout). ⛔ 빌드를 걸지 않는다 — 걸면 push 트리거와 겹쳐 두 번 돈다. 3분 안에 run 이 안 나타나면 거부 |
 | `dobby_ship_argo KEY 환경 [check]` | dobby-ship 8단계 | **com.wadiz.web 전용.** argocd `app sync` + `app wait --health`. **거부**: stage · **G-B** 같은 환경의 wadiz-frontend 가 `배포 확인` 전 · CI 가 success 아님 · argocd 세션 없음(브라우저 SSO 라 사람만 가능) · app list 에 없는 앱 · 라이브 앱. `check` 를 주면 sync 하지 않고 상태만 본다(테스트 실패 진단용) |
 | `dobby_ship_merge KEY 저장소 PR번호` | dobby-ship 5단계 | 머지. **베이스가 그 저장소의 dev·rc1·rc4 브랜치가 아니면·충돌이면·미반영 변경요청이 있으면 거부**(stage·정식 배포 베이스는 사용자가 직접). **G-A** com.wadiz.web 은 같은 환경의 wadiz-frontend 가 머지되기 전이면 거부 |
-| `dobby_ship_round KEY 저장소 환경` | dobby-ship 리뷰 반영 직전 | 회차 stdout + 배포 표에 `리뷰 반영 N회차`. **4회째면 거부**하고 비고에 `리뷰 왕복 3회 — 사람 확인 필요` |
+| `dobby_ship_round KEY 저장소 환경` | dobby-ship 리뷰 반영 직전 | 회차 stdout + 배포 표에 `리뷰 반영 N회차` |
 | `dobby_ship_verify KEY "필요번들" "확인된번들"` | dobby-ship 10단계(테스트 **실패했을 때**) | **wadiz-frontend 번들 대조.** 빠진 번들이 있으면 1 반환. **게이트가 아니라 진단 도구다** — 배포 완료가 확인되면 바로 테스트하고, 실패하면 코드를 의심하기 전에 이것으로 반쪽 배포부터 가른다(사례 FE1-1808). com.wadiz.web 쪽은 `dobby_ship_argo … check` 가 같은 자리다 |
 | `dobby_bridge_make 워크트리 브랜치 환경브랜치` | dobby_ship_pr 안에서 | 충돌 해결 브랜치를 만들어 올린다. 충돌 없으면 `clean`, 있으면 임시 워크트리 경로를 주고 2를 반환 |
 | `dobby_conflict_evidence 임시워크트리 브랜치 환경브랜치` | 충돌을 풀기 전 | 충돌 파일마다 양쪽 이력·diff 를 한 번에. **근거 없이 한쪽을 고르지 않는다** |
