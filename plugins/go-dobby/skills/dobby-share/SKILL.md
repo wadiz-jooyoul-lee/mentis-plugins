@@ -1,6 +1,6 @@
 ---
 name: dobby-share
-description: 오더(이슈/작업)의 "구현 내용"(explainer.md)을 claude.ai 공개 아티팩트로 게시하고, 그 링크를 $ORCHESTRATION_META/{키}/artifact-share.md에 저장하는 대화형 스킬. 헤드리스(대시보드 백그라운드 잡)에서는 Artifact 게시 도구·claude.ai 인증이 없어 게시가 불가능하므로, 사용자가 대화형 Claude Code에서 직접 실행해야 한다. 저장된 artifact-share.md는 대시보드 "아티팩트" 탭이 읽어 공개 링크(복사·열기)를 제공한다. explainer.md만 근거로 self-contained HTML(외부 CDN·호스트 없음, 인라인 CSS)을 만들어 게시한다. 원고에는 목차를 넣고 쉬운 용어로 쓰며, 도구(이 플러그인·대시보드) 이야기는 근거 문서에 있어도 옮기지 않는다 — 읽는 사람은 이 도구를 쓰지 않으므로 소음이다. 사용법 /dobby-share {키}.
+description: 오더(이슈/작업)의 "구현 내용"(explainer.md)을 claude.ai 공개 아티팩트로 게시하고, 그 링크를 $ORCHESTRATION_META/{키}/artifact-share.md에 저장하는 대화형 스킬. 헤드리스(대시보드 백그라운드 잡)에서는 Artifact 게시 도구·claude.ai 인증이 없어 게시가 불가능하므로, 사용자가 대화형 Claude Code에서 직접 실행해야 한다. 저장된 artifact-share.md는 대시보드 "아티팩트" 탭이 읽어 공개 링크(복사·열기)를 제공한다. explainer.md만 근거로 self-contained HTML(외부 CDN·호스트 없음, 인라인 CSS)을 만들어 게시한다. 원고에는 목차를 넣고 쉬운 용어로 쓰며, 도구(이 플러그인·대시보드) 이야기는 근거 문서에 있어도 옮기지 않는다 — 읽는 사람은 이 도구를 쓰지 않으므로 소음이다. data 를 붙이면 데이터 분석 해석(data/report.md)을 게시한다(슬러그 data). 사용법 /dobby-share {키} [data].
 ---
 
 # dobby-share
@@ -16,7 +16,24 @@ description: 오더(이슈/작업)의 "구현 내용"(explainer.md)을 claude.ai
 작업 시작 전 **`${CLAUDE_PLUGIN_ROOT}/reference/config.md`의 "설정 절차"를 그대로 따른다**: `~/.config/go-dobby/config.env`를 source 해 환경 변수를 **읽기만** 한다(config.env 없으면 `/dobby-init` 먼저). 이하 메타 경로는 `$ORCHESTRATION_META` 기준.
 
 ## 입력
-`/dobby-share {키}` — {키}는 이슈 키 또는 `TASK-{slug}`. 대상 폴더 `$ORCHESTRATION_META/{키}/`.
+`/dobby-share {키} [data]` — {키}는 이슈 키 또는 `TASK-{slug}`. 대상 폴더 `$ORCHESTRATION_META/{키}/`.
+
+## 데이터 분석 게시 (`data`)
+
+`data` 를 붙이면 구현 내용 대신 **데이터 분석 해석**을 게시한다. 아래만 다르고 나머지 절차(용어 게이트, 도구 누수 검사, 게시, 링크 저장)는 같다.
+
+| | 구현 내용 게시 | 데이터 분석 게시 |
+|---|---|---|
+| 근거 | 아래 "사전 조건"의 우선순위 | `data/report.md`, 숫자는 `data/summary.json` |
+| 없을 때 | 먼저 문서를 만들라고 알리고 중단 | "먼저 데이터 탭에서 데이터 수집을 실행하라"고 알리고 중단 |
+| 슬러그 | 근거 문서로 정한다 | 언제나 `data`. 행이 있으면 갱신이다 |
+| 제목 | `"{키} 구현 내용"` | `"{키} 데이터 분석"` |
+
+원고 규칙:
+- **해석의 절 순서를 지킨다.** 결론과 근거 데이터를 맨 앞에 크게 두고, 결론 첫 줄의 `[달성도]` 는 눈에 띄는 배지로 그린다. 자세한 분석과 집계 관리 메모는 그 아래에 둔다.
+- **숫자는 `report.md` 와 `summary.json` 에 있는 값만 쓴다.** 다시 계산하거나 반올림을 바꾸지 않는다.
+- 날짜별 건수(`summary.json` 의 `daily`)는 인라인 SVG 선 그래프 하나로 그려도 된다. 그릴 때는 값 그대로 쓴다.
+- 해석의 `집계 관리 메모` 절은 원고에 넣지 않는다. 읽는 사람에게 필요 없는 내부 관리 내용이다.
 
 ## 사전 조건
 - **근거 우선순위**: ① `$ORCHESTRATION_META/{키}/outcome.md`(구현 결과 — 있으면 1차 근거, `design.md`를 배경으로 참고) → ② 없으면 `explainer.md`(기존 방식 — 과거 오더 호환) → ③ 둘 다 없으면 **"먼저 `/dobby-design {키} outcome` 또는 `/dobby-explain {키}`로 생성하라"**고 알리고 중단한다(지어내지 않는다).
