@@ -873,7 +873,8 @@ dobby_ensure_worktree() {
   elif [ -n "$rec" ]; then
     _die "상태 문서의 브랜치 $branch 가 $src 에도 origin 에도 없다 — 브랜치 이름을 확인하세요"; return 1
   else
-    dobby_setup_worktree "$repo" "$key" "$prefix" "$base"; return
+    dobby_setup_worktree "$repo" "$key" "$prefix" "$base" || return 1
+    dobby_v2_set_base "$key" "$repo" "$base"; return 0
   fi
   [ -n "$rec" ] || dobby_record_branch "$key" "$repo" "$branch" "$wt"
   printf '%s' "$wt"
@@ -2850,6 +2851,7 @@ dobby_v2_env() {
 # dobby_v2_set_env KEY ENV — 그 줄을 '- **단계**:' 바로 아래에 적는다(있으면 값만 바꾼다). dev·rc1·rc4 만 받는다.
 dobby_v2_set_env() {
   local key="$1" env="$2" f
+  case "$key" in TASK-*) _die "TASK- 오더는 자동 배포를 하지 않는다(통합에서 PR 을 만들고 끝난다): $key"; return 1 ;; esac
   _ship_has "$env" "$DOBBY_SHIP_MERGE_ENVS" || { _die "자동 배포 환경은 dev·rc1·rc4 중 하나다: '$env'"; return 1; }
   f="$(_order_dir "$key")/status.md"
   [ -f "$f" ] || { _die "$key 의 상태 문서가 없습니다"; return 1; }
@@ -2859,6 +2861,76 @@ dobby_v2_set_env() {
     /^[ \t]*-[ \t]*\*\*단계\*\*/ && !done { print "- **자동 배포 환경**: " env; done = 1 }
   ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
   dobby_event "$key" "자동 배포 환경 → $env" 2>/dev/null
+}
+
+# dobby_v2_set_base KEY REPO BASE — '- **기준 브랜치**: 저장소=브랜치, …' 줄에 그 저장소의 기준을 더한다. 이미 있으면 두지 않는다.
+dobby_v2_set_base() {
+  local key="$1" repo="$2" base="$3" f cur
+  f="$(_order_dir "$key")/status.md"
+  [ -f "$f" ] && [ -n "$base" ] || return 0
+  cur="$(sed -nE 's/^[ \t]*-[ \t]*\*\*기준 브랜치\*\*:[ \t]*//p' "$f" | head -1)"
+  printf '%s' "$cur" | tr ',' '\n' | awk -F= -v r="$repo" '{gsub(/^[ \t]+/,"")} $1==r{f=1} END{exit !f}' && return 0
+  awk -v v="${cur:+$cur, }$repo=$base" '
+    /^[ \t]*-[ \t]*\*\*기준 브랜치\*\*/ { next }
+    { print }
+    /^[ \t]*-[ \t]*\*\*단계\*\*/ && !done { print "- **기준 브랜치**: " v; done = 1 }
+  ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+
+# _v2_base_of KEY REPO WORKTREE — 기록된 기준 브랜치. 기록이 없으면 원격에 기본 기준(cloud_live)이 있으면 그것, 없으면 원격 기본 브랜치.
+_v2_base_of() {
+  local b
+  b="$(sed -nE 's/^[ \t]*-[ \t]*\*\*기준 브랜치\*\*:[ \t]*//p' "$(_order_dir "$1")/status.md" 2>/dev/null | head -1 \
+    | tr ',' '\n' | awk -F= -v r="$2" '{gsub(/^[ \t]+|[ \t]+$/,"")} $1==r{print $2; exit}')"
+  [ -n "$b" ] || ! git -C "$3" ls-remote --exit-code --heads origin "$ORCHESTRATION_DEFAULT_BASE" >/dev/null 2>&1 \
+    || b="$ORCHESTRATION_DEFAULT_BASE"
+  [ -n "$b" ] || b="$(git -C "$3" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)"
+  printf '%s' "${b#origin/}"
+}
+
+# dobby_v2_task_pr KEY 제목 본문 — TASK- 오더의 작업 브랜치마다 기준 브랜치로 PR 을 연다. 머지는 하지 않는다.
+# 이미 열린 PR 이 있으면 그 주소를 쓰고, 기준 브랜치보다 앞선 커밋이 없는 저장소는 건너뛴다. 출력: 저장소<TAB>PR 주소.
+# PR 주소는 '- **PR**: 주소, …' 줄에 적는다(대시보드 다음 할 일이 이 줄로 PR 을 연다).
+dobby_v2_task_pr() {
+  local key="$1" title="$2" body="$3" repo br wt base rp url out=""
+  case "$key" in TASK-*) ;; *) _die "TASK- 오더만 이 헬퍼로 PR 을 만든다(이슈 오더는 dobby-ship): $key"; return 1 ;; esac
+  out="$(_v2_task_pr_each "$key" "$title" "$body")" || return 1
+  [ -z "$out" ] || _v2_set_line "$key" PR "$(printf '%s\n' "$out" | cut -f2 | paste -sd, - | sed 's/,/, /g')"
+  printf '%s\n' "$out" | sed '/^$/d'
+}
+
+# _v2_set_line KEY 이름 값 — '## 현재 단계' 의 '- **이름**: 값' 줄을 '- **단계**:' 바로 아래에 적는다(있으면 바꾼다).
+_v2_set_line() {
+  local f; f="$(_order_dir "$1")/status.md"
+  [ -f "$f" ] || return 0
+  awk -v n="$2" -v v="$3" '
+    index($0, "- **" n "**:") == 1 { next }
+    { print }
+    /^[ \t]*-[ \t]*\*\*단계\*\*/ && !done { print "- **" n "**: " v; done = 1 }
+  ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+
+_v2_task_pr_each() {
+  local key="$1" title="$2" body="$3" repo br wt base rp url
+  while IFS=$'\t' read -r repo br wt; do
+    [ -n "$repo" ] || continue
+    [ -z "$(git -C "$wt" status --porcelain 2>/dev/null | head -1)" ] \
+      || { _die "$repo 에 커밋하지 않은 변경이 있다 — 커밋·푸시한 뒤 PR 을 만든다"; return 1; }
+    base="$(_v2_base_of "$key" "$repo" "$wt")"
+    [ -n "$base" ] || { _die "$repo 의 기준 브랜치를 정하지 못했다"; return 1; }
+    git -C "$wt" fetch -q origin "$base" "$br" 2>/dev/null
+    [ "$(git -C "$wt" rev-list --count "origin/$base..origin/$br" 2>/dev/null)" != 0 ] || continue
+    rp="$(_ship_repo "$wt")"
+    url="$(gh pr list --repo "$rp" --head "$br" --base "$base" --state open --json url -q '.[0].url' 2>/dev/null)"
+    if [ -z "$url" ]; then
+      url="$(cd "$wt" && gh pr create --base "$base" --head "$br" --title "$title" --body "$body")" || return 1
+      url="${url##*$'\n'}"
+      dobby_event "$key" "PR 생성 — $repo $url ($br → $base)"
+    fi
+    printf '%s\t%s\n' "$repo" "$url"
+  done <<EOF
+$(_v2_worktrees "$key")
+EOF
 }
 
 # _v2_ship_repos KEY — 워크트리 표에서 배포를 맡는 저장소마다 "저장소<TAB>브랜치<TAB>경로".
@@ -4658,7 +4730,11 @@ dobby_v2_next_all() {
             if(t($7)>=best){best=t($7); r=t($2) "\t" t($3) "\t" t($4) "\t" t($7) "\t" t($8)}
           } END{print r}' "$f")"
         IFS=$'\t' read -r ln dt st stf tf <<<"$row"
-        if [ -n "$row" ] && case "$st" in *⚠*) true ;; *) false ;; esac; then
+        if [[ "$k" == TASK-* ]]; then
+          link="$(sed -nE 's/^- \*\*PR\*\*:[ \t]*([^ ,]+).*$/\1/p' "$f" | head -1)"
+          kind=pr-merge; act=resolve
+          if [ -n "$link" ]; then text="PR 머지 차례 — 머지한 뒤 해결 처리"; else text="통합 완료 — PR 없음, 해결 처리 차례"; fi
+        elif [ -n "$row" ] && case "$st" in *⚠*) true ;; *) false ;; esac; then
           kind=blocked; text="배포가 막혔습니다 — $ln $dt: ${tf:-비고 없음}"; since="$stf"
         elif [ -n "$env" ]; then
           kind=ship-resume; text="$env 배포 이어 가기${st:+ — $ln $st}"; act=autorun
