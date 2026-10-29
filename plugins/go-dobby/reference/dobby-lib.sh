@@ -3468,8 +3468,7 @@ _ship_owner() {
   esac
 }
 
-# dobby_ship_round KEY 저장소 환경 — 리뷰 반영 라운드를 하나 올린다. 4회째면 거부한다. 회차 stdout.
-# 리뷰↔수정이 무한히 오가는 것을 막는다(글로 적은 "3라운드 상한"을 코드로).
+# dobby_ship_round KEY 저장소 환경 — 리뷰 반영 라운드를 하나 올려 배포 표에 적는다. 회차 stdout.
 # 리뷰봇이 없는 저장소(com.wadiz.web)에서는 쓸 일이 없다 — 불러도 막지는 않는다.
 dobby_ship_round() {
   local key="$1" rp="${2:-}" env="${3:-}" f n
@@ -3477,11 +3476,6 @@ dobby_ship_round() {
   [ -f "$f" ] || { _die "status.md 가 없다: $key"; return 1; }
   n="$(grep -cE '^- .* PR 리뷰 [0-9]+회차' "$(_order_dir "$key")/orchestration.md" 2>/dev/null)" || n=0
   n=$((n + 1))
-  if [ "$n" -gt 3 ]; then
-    [ -n "$rp" ] && [ -n "$env" ] && dobby_ship_stage "$key" "$rp" "$env" "리뷰 대기" "" "" "리뷰 왕복 3회 — 사람 확인 필요"
-    _die "리뷰 반영이 3회를 넘었다($n회째). 무엇이 반복해서 걸리는지 정리해 사용자에게 알리고 멈춰라."
-    return 1
-  fi
   [ -n "$rp" ] && [ -n "$env" ] && dobby_ship_stage "$key" "$rp" "$env" "리뷰 반영 ${n}회차"
   printf '%s' "$n"
 }
