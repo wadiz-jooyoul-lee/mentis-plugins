@@ -464,7 +464,7 @@ dobby_blocking() {
 # (집계 칸의 "(전체 N)"은 참고 표기 — 대시보드는 앞 숫자 3개(성공/실패/skip)만 읽는다.)
 # 환경(dev·rc4 등)은 result.md 머리의 `- **환경**:` 줄로 들어간다 — 대시보드 검증 탭의 환경 칸.
 dobby_testrun_new() {
-  local key="$1" total="${2:-}" env="${3:-}" n dir sf now
+  local key="$1" total="${2:-}" env="${3:-}" n dir sf now scope
   n="$(find "$(_order_dir "$key")/test-runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
   n=$((n + 1))
   dir="$(_order_dir "$key")/test-runs/$(_ts)"; mkdir -p "$dir"
@@ -482,7 +482,14 @@ dobby_testrun_new() {
       # 이 칸이 있어야 대시보드가 "조건 N개 중 M개 확인"을 스스로 말할 수 있다.
       printf '| # | 조건 | 페이지 / URL | 확인 항목 | 기대 | 실제 | 판정 | 근거 |\n'
       printf '|---|---|---|---|---|---|---|---|\n'
-      if [ -n "$total" ] && [ "$total" -eq "$total" ] 2>/dev/null; then
+      # 행은 계획의 실제 시나리오 번호로 깐다. 개수로 S1..SN 을 깔면 지운 번호·늘어난 번호와 어긋난다
+      # (실측 FE1-2261: 계획에 없는 S14~S16 행이 생기고 S42~S44 행이 빠짐). 범위 밖은 미리 SKIP(범위) 로 채운다.
+      scope="$(_testplan_scope "$key" 2>/dev/null)"
+      if [ -n "$scope" ]; then
+        printf '%s\n' "$scope" | awk -F'\t' '
+          $2=="in"  { printf "| %s |  |  |  |  |  |  |  |\n", $1 }
+          $2=="out" { r=$3; gsub(/\|/, "/", r); printf "| %s |  |  |  |  |  | SKIP(범위) | 범위 제외: %s |\n", $1, r }'
+      elif [ -n "$total" ] && [ "$total" -eq "$total" ] 2>/dev/null; then
         i=1; while [ "$i" -le "$total" ]; do printf '| S%s |  |  |  |  |  |  |  |\n' "$i"; i=$((i+1)); done
       fi
     } > "$dir/result.md"
@@ -623,21 +630,93 @@ dobby_testrun_current() {
   _testrun_open "$1" || dobby_testrun_new "$@"
 }
 
+# _testplan_scope KEY — 계획의 시나리오마다 "S1<TAB>in" 또는 "S1<TAB>out<TAB>이유".
+# `## 검증 범위` 표(| 구분 | 시나리오 | 이유 |)에서 구분이 `검증함` 인 행만 이번 회차 대상이다.
+# 표가 없거나 `검증함` 행의 시나리오 칸이 `전체` 면 모두 대상이다. 시나리오 칸은 `S1, S3~S5` 꼴.
+# 변경마다 계획 전체를 다시 돌리면 시나리오가 쌓여 회차가 끝없이 길어진다(실측 FE1-2261: 41개).
+_testplan_scope() {
+  local p; p="$(_order_dir "$1")/test-plan.md"
+  [ -f "$p" ] || return 1
+  awk -F'|' '
+    function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
+    function add(cell, kind, why,   n, a, i, tok, b, lo, hi, k) {
+      gsub(/[ \t]/, "", cell); n = split(cell, a, ",")
+      for (i = 1; i <= n; i++) {
+        tok = a[i]
+        if (tok == "전체") { if (kind == "in") all = 1; continue }
+        if (tok ~ /^S[0-9]+[~-]S?[0-9]+$/) {
+          split(tok, b, /[~-]/); lo = substr(b[1], 2) + 0; hi = b[2]; sub(/^S/, "", hi); hi += 0
+          for (k = lo; k <= hi; k++) { st["S" k] = kind; rs["S" k] = why }
+        } else if (tok ~ /^S[0-9]+$/) { st[tok] = kind; rs[tok] = why }
+      }
+    }
+    FNR == NR {
+      if (/^## /) { ins = (index(substr($0, 4), "검증 범위") == 1); if (ins) has = 1; next }
+      if (ins && /^\|/ && t($2) !~ /^(구분|-+)$/) add(t($3), (t($2) == "검증함") ? "in" : "out", t($4))
+      next
+    }
+    /^## S[0-9]+\./ {
+      id = $0; sub(/^## /, "", id); sub(/\..*/, "", id)
+      if (!has || all || st[id] == "in") print id "\tin"
+      else print id "\tout\t" ((id in rs) ? rs[id] : "검증 범위 표에 없음")
+    }' "$p" "$p"
+}
+
+# dobby_testplan_scope_all KEY "사람 지시" — 검증 범위를 전체로 바꾼다. 사람이 전체 테스트를 명시했을 때만 부른다.
+# 열린 회차가 있으면 범위 밖으로 건너뛴 행(SKIP(범위))의 판정·근거를 비워 남은 묶음에 다시 들어가게 한다.
+dobby_testplan_scope_all() {
+  local key="$1" why="${2:-전체 테스트 지시}" p run
+  p="$(_order_dir "$key")/test-plan.md"
+  [ -f "$p" ] || { _die "테스트 계획이 없다: $p"; return 1; }
+  awk -v why="$why" -v d="$(_now)" '
+    BEGIN { sec = "## 검증 범위 (" d ", 전체)\n\n| 구분 | 시나리오 | 이유 |\n|---|---|---|\n| 검증함 | 전체 | 사람 지시: " why " |\n" }
+    /^## / { if (skip) skip = 0
+      if (index(substr($0, 4), "검증 범위") == 1) { skip = 1; if (!done) { print sec; done = 1 }; next }
+      if (!done && substr($0, 4) == "검증 묶음") { print sec; done = 1 } }
+    !skip
+    END { if (!done) printf "\n%s", sec }' "$p" > "$p.tmp" && mv "$p.tmp" "$p"
+  run="$(_testrun_open "$key")"
+  if [ -n "$run" ]; then
+    awk -F'|' -v OFS='|' '
+      /dobby:scenarios/ { m = 1; print; next }
+      m && /^\|/ { if (!h) { for (i = 2; i < NF; i++) { x = $i; gsub(/[ \t]/, "", x); if (x == "판정") j = i }; h = 1 }
+        else if (j && $j ~ /SKIP\(범위\)/) { $j = "  "; $(j + 1) = "  " } }
+      m && !/^\|/ && h { m = 0 }
+      { print }' "$run/result.md" > "$run/result.md.tmp" && mv "$run/result.md.tmp" "$run/result.md"
+  fi
+  dobby_event "$key" "검증 범위를 전체로 바꿈 — $why" >/dev/null 2>&1
+  return 0
+}
+
 # _testplan_batches KEY — "묶음<TAB>S1,S2,…" 줄들. `## 검증 묶음` 표를 따르고, 표에 없는 시나리오는 4개씩 덧붙인다.
+# 검증 범위(_testplan_scope) 밖 시나리오는 빼고, 남는 것이 없는 묶음은 내지 않는다.
 _testplan_batches() {
-  local p n=0 rest="" i=0 s
+  local p n=0 rest="" i=0 s name list kept scope
   p="$(_order_dir "$1")/test-plan.md"
   [ -f "$p" ] || return 1
+  scope=" $(_testplan_scope "$1" | awk -F'\t' '$2=="in"{printf "%s ", $1}')"
   local tbl; tbl="$(awk -F'|' '
     function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
     /^## /{ins=(t(substr($0,4))=="검증 묶음"); next}
     ins && /^\|/ && t($2) !~ /^(묶음|-+)$/ {s=t($3); gsub(/[ \t]/,"",s); print t($2) "\t" s}' "$p")"
-  [ -n "$tbl" ] && { printf '%s\n' "$tbl"; n="$(printf '%s\n' "$tbl" | wc -l | tr -d ' ')"; }
-  for s in $(sed -nE 's/^## (S[0-9]+)\..*/\1/p' "$p"); do
+  if [ -n "$tbl" ]; then
+    n="$(printf '%s\n' "$tbl" | wc -l | tr -d ' ')"
+    while IFS=$'\t' read -r name list; do
+      kept=""
+      # ⛔ `for s in ${list//,/ }` 를 쓰지 않는다 — zsh 는 따옴표 없는 확장을 나누지 않는다(_words 와 같은 이유)
+      while IFS= read -r s; do
+        case "$scope" in *" $s "*) kept="${kept:+$kept,}$s" ;; esac
+      done <<<"$(printf '%s\n' "$list" | tr ',' '\n')"
+      [ -n "$kept" ] && printf '%s\t%s\n' "$name" "$kept"
+    done <<<"$tbl"
+  fi
+  while IFS= read -r s; do
+    [ -n "$s" ] || continue
+    case "$scope" in *" $s "*) ;; *) continue ;; esac
     printf '%s\n' "$tbl" | cut -f2 | tr ',' '\n' | grep -qx "$s" && continue
     rest="${rest:+$rest,}$s"; i=$((i + 1))
     [ "$i" -eq 4 ] && { n=$((n + 1)); printf 'V%s\t%s\n' "$n" "$rest"; rest=""; i=0; }
-  done
+  done <<<"$(sed -nE 's/^## (S[0-9]+)\..*/\1/p' "$p")"
   [ -n "$rest" ] && printf 'V%s\t%s\n' "$((n + 1))" "$rest"
   return 0
 }
@@ -655,9 +734,10 @@ dobby_verify_next() {
     m && h {m=0}' "$run/result.md" | tr '\n' ' ')"
   while IFS=$'\t' read -r name list; do
     left=""
-    for s in ${list//,/ }; do
+    while IFS= read -r s; do
+      [ -n "$s" ] || continue
       case "$judged" in *" $s "*) ;; *) left="${left:+$left,}$s" ;; esac
-    done
+    done <<<"$(printf '%s\n' "$list" | tr ',' '\n')"
     [ -n "$left" ] && { printf '%s\t%s\n' "$name" "$left"; return 0; }
   done <<<"$(_testplan_batches "$key")"
   printf 'done\n'
@@ -4240,6 +4320,8 @@ $(sed -n '/^| 갈래/,$p' "$(_order_dir "$tkey")/track-scan.md" 2>/dev/null | he
       num=t($2)
       if (num !~ /^S[0-9]+$/) next
       cond=t($(cc)); verd=t($(cv))
+      # 검증 범위 밖으로 회차를 열 때 깔린 행이다. 확인하지 않았으니 조건을 짚지 않는다
+      if (verd == "SKIP(범위)") next
       if (cond == "") printf "COND\t%s\n", num
       else if (cond !~ /^(R|C[0-9]+([ \t]*[,·][ \t]*C[0-9]+)*)$/) printf "CONDBAD\t%s\t%s\n", num, cond
       else if (cond != "R") { n=split(cond, a, /[,·]/); for(i=1;i<=n;i++) printf "HAS\t%s\n", t(a[i]) }
