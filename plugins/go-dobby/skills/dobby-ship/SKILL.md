@@ -66,7 +66,7 @@ com.wadiz.web   PR → (리뷰 없음) → 머지 → CI 자동 → argocd sync 
 | `dev` · `rc1` · `rc4` · `stage` 중 하나 | **환경** |
 | `FE1-1982` · `TASK-{슬러그}` 꼴 | **오더 키** |
 | `feature/FE1-1982` 처럼 `/`가 있는 브랜치 | 거기서 **오더 키를 뽑는다**(`FE1-1982`) |
-| `clive` · `cloud_live` · `master` | **거부한다** — 훅 G1 이 PR·머지·빌드를 모두 막는다 |
+| `clive` · `cloud_live` · `master` | **거부한다** — `dobby_ship_pr` 이 이 환경의 PR 을 만들지 않고, 훅 G1 이 머지를 막는다 |
 | 그 밖 | 무엇인지 되묻고 멈춘다 — 짐작해서 넘기지 않는다 |
 
 **가르고 나서 확인한다.**
