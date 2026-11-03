@@ -9,6 +9,7 @@
 #       update-release-note), 그 밖은 차단.
 #       (cloud_dev 는 com.wadiz.web 의 dev 브랜치다 — 저장소마다 이름이 다르다)
 #       gh workflow run 의 environment=clive(=cloud_live 배포)도 차단.
+#       단, 정기 배포 스킬이 REGULAR_RELEASE=1 을 붙인 명령은 통과.
 #       argocd app sync 는 라이브 앱(web-live-*·client-live-*)·서버 미지정이면 차단.
 #   G5: dobby 워크스페이스 안에서 subtree/ 밖 폴더 제거 금지 (dobby-end 안전 경계)
 #   G6: 메타 폴더($ORCHESTRATION_META) 삭제 금지 (비파괴 원칙 — 생명주기 기록 보존)
@@ -239,9 +240,11 @@ if in_dobby_scope; then
 
   # (3-1) gh workflow run — 빌드로 라이브를 건드리는 길을 막는다.
   # `-f environment=clive` 는 워크플로가 cloud_live 브랜치로 바꿔 빌드·배포한다.
+  # 정기 배포 스킬은 명령 앞에 REGULAR_RELEASE=1 을 붙여 통과한다.
   if printf '%s' "$CMD" | grep -qE "gh[[:space:]]+workflow[[:space:]]+run" \
+     && ! printf '%s' "$CMD" | grep -q "REGULAR_RELEASE=1" \
      && printf '%s' "$CMD" | grep -qE "environment[[:space:]]*=[[:space:]]*(clive|cloud_live)([[:space:]\"']|$)"; then
-    deny G1 "environment=clive 빌드는 금지다(cloud_live 배포 — dobby-order C1). 라이브 반영은 사용자가 별도 릴리스 절차로 한다."
+    deny G1 "environment=clive 빌드는 금지다(cloud_live 배포 — dobby-order C1). 라이브 반영은 사용자가 별도 릴리스 절차로 한다. 정기 배포 스킬이면 명령 앞에 REGULAR_RELEASE=1 을 붙인다."
   fi
 
   # (3-2) argocd app sync — com.wadiz.web 의 실제 배포다. 라이브로 가는 길을 막는다.
