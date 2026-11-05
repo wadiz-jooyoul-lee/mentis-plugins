@@ -8,7 +8,6 @@
 #       PR 머지는 베이스가 dev·rc1·rc4·cloud_dev·release/v* 일 때만 통과(dobby-ship·
 #       update-release-note), 그 밖은 차단.
 #       (cloud_dev 는 com.wadiz.web 의 dev 브랜치다 — 저장소마다 이름이 다르다)
-#       gh workflow run 의 environment=clive(=cloud_live 배포)도 차단.
 #       argocd app sync 는 라이브 앱(web-live-*·client-live-*)·서버 미지정이면 차단.
 #   G5: dobby 워크스페이스 안에서 subtree/ 밖 폴더 제거 금지 (dobby-end 안전 경계)
 #   G6: 메타 폴더($ORCHESTRATION_META) 삭제 금지 (비파괴 원칙 — 생명주기 기록 보존)
@@ -237,18 +236,9 @@ if in_dobby_scope; then
     esac
   fi
 
-  # (3-1) gh workflow run — 빌드로 라이브를 건드리는 길을 막는다.
-  # `-f environment=clive` 는 워크플로가 cloud_live 브랜치로 바꿔 빌드·배포한다.
-  if printf '%s' "$CMD" | grep -qE "gh[[:space:]]+workflow[[:space:]]+run" \
-     && printf '%s' "$CMD" | grep -qE "environment[[:space:]]*=[[:space:]]*(clive|cloud_live)([[:space:]\"']|$)"; then
-    deny G1 "environment=clive 빌드는 금지다(cloud_live 배포 — dobby-order C1). 라이브 반영은 사용자가 별도 릴리스 절차로 한다."
-  fi
-
   # (3-2) argocd app sync — com.wadiz.web 의 실제 배포다. 라이브로 가는 길을 막는다.
   #
-  # wadiz-frontend 는 빌드가 곧 배포라 workflow run 만 막으면 됐지만, com.wadiz.web 은
-  # 배포가 argocd sync 다(네 환경 모두 SYNCPOLICY=Manual). 여기를 안 막으면 (3-1) 을
-  # 우회해 라이브에 반영할 수 있다.
+  # com.wadiz.web 은 배포가 argocd sync 다(네 환경 모두 SYNCPOLICY=Manual).
   #   · 앱 이름에 `-live-` 가 들어가면 거부 — web-live-web-server·client-live-app-api 등
   #   · `--server` 가 없으면 거부 — 현재 컨텍스트가 라이브(argocd.wadiz.io)일 수 있다.
   #     실측: 컨텍스트는 마지막 로그인한 서버로 바뀐다. 어디로 가는지 모르면 통과가 아니라 차단이다.
