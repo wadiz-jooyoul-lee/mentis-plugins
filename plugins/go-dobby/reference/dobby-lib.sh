@@ -286,6 +286,7 @@ dobby_agent_state() {
   ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
   # 상태 전이는 타임라인 사건 → 전이할 때마다 이벤트 자동 기록(밀도 일관화, 끄기: DOBBY_AUTO_EVENT=0)
   _dobby_autoevent "$key" "$slug → $st${rd:+ (라운드 $rd)}"
+  _office_notify "$(_office_json kind agent key "$key" slug "$slug" state "$st" round "$rd")"
 }
 
 # dobby_event KEY TEXT — 이벤트 로그에 `- {now} TEXT` append(섹션 없으면 만든다).
@@ -300,6 +301,7 @@ dobby_event() {
     {print}
     END{ if(inlog==1) print line }
   ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  _office_notify "$(_office_json kind event key "$key" text "$text")"
 }
 
 # ── agent-logs.json ──────────────────────────────────────────────────
@@ -346,6 +348,24 @@ dobby_log() {
   fi
 }
 
+# _office_notify JSON — 에이전트 오피스 수신 API 로 상태 변화를 알린다. 백그라운드로 1초 안에 끝내고 실패는 무시한다
+#   오피스가 꺼져 있으면 연결 거부로 즉시 끝난다. ORCHESTRATION_OFFICE_INBOX=off 면 보내지 않는다
+_office_notify() {
+  [ -n "$1" ] || return 0   # jq 가 없어 본문이 비면 보내지 않는다
+  local url="${ORCHESTRATION_OFFICE_INBOX:-http://127.0.0.1:6898/dobby}"
+  [ "$url" = off ] && return 0
+  command -v curl >/dev/null 2>&1 || return 0
+  ( curl -s -o /dev/null --max-time 1 -X POST -H 'content-type: application/json' --data-binary "$1" "$url" >/dev/null 2>&1 & ) 2>/dev/null
+  return 0
+}
+# _office_json k v [k v …] — 알림 본문. jq 가 없으면 빈 값(보내지 않음)
+_office_json() {
+  command -v jq >/dev/null 2>&1 || return 0
+  local args=() k
+  while [ $# -ge 2 ]; do args+=(--arg "$1" "$2"); k="${k:+$k,}$1:\$$1"; shift 2; done
+  jq -nc "${args[@]}" "{$k}"
+}
+
 # ── status.md 단계 ───────────────────────────────────────────────────
 # dobby_phase KEY PHASE — 현재 단계/갱신 갱신.
 dobby_phase() {
@@ -360,6 +380,7 @@ dobby_phase() {
       print
     }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
   _dobby_autoevent "$key" "단계 → $ph"
+  _office_notify "$(_office_json kind phase key "$key" phase "$ph")"
 }
 
 # ── 리뷰/검증 경로 ───────────────────────────────────────────────────
@@ -737,6 +758,7 @@ dobby_set_title() {
     /^##/ { insec = ($0 ~ /이슈\/작업/) }
     { if (insec && $0 ~ /^[ \t]*-[ \t]*\*\*제목\*\*/) { print "- **제목**: " t; next } print }
   ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  _office_notify "$(_office_json kind title key "$key" title "$title")"
 }
 
 # dobby_set_scope KEY "한 줄" — status.md '## 이슈/작업'에 '- **닫히는 조건**: …'를 upsert(범위 경계).
