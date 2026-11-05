@@ -114,6 +114,19 @@
             "statusMessage": "go-dobby 스폰 기록"
           }
         ]
+      },
+      {
+        "matcher": "Edit|Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/post-tool-office.sh"
+            ],
+            "timeout": 3
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
