@@ -53,15 +53,17 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 | `dobby_review_brief 워크트리...` | P5 리뷰 프롬프트를 만들 때 | 바뀐 것·저장소 금지 규칙 검사 결과·사라진 심볼의 소비처 표를 markdown 으로. 리뷰어가 여러 턴에 걸쳐 알아내던 것을 한 번에 준다 |
 | `dobby_review_path KEY 라운드 슬러그` | P5 | reviews/round-N/{슬러그}.md 경로(폴더 생성) |
 | `dobby_blocking KEY 라운드` | P6 전이 판정 | reviews/round-N의 `## [blocker\|major]` 카드 헤더 집계(숫자 stdout). 카드 형식 없는 파일은 경고 — 그 파일만 직접 읽어 판정 |
-| `dobby_testrun_new KEY [전체시나리오수] [환경]` | dobby-test 시작 | 회차 자동 계산 + test-runs/{시각}/ + result.md 골격(`- **환경**:` 줄·`조건` 칸 포함) + status.md 이력 표 행 추가(경로 stdout) |
+| `dobby_testrun_new KEY [전체시나리오수] [환경]` | dobby-test 시작 | 회차 자동 계산 + test-runs/{시각}/ + result.md 골격(`- **환경**:` 줄·`조건` 칸 포함) + status.md 이력 표 행 추가(경로 stdout). 시나리오 행은 테스트 계획의 실제 번호로 깔고 검증 범위 밖은 `SKIP(범위)` 로 채운다. 계획이 없을 때만 수만큼 `S1`부터 깐다 |
 | `dobby_track_scan KEY [환경]` | dobby-ship 1단계 · dobby-test 2-1단계 | 변경 diff 로 **광고·데이터 수집 접촉**을 기계 판정해 `track-scan.md` 에 남긴다(보고 — 막지 않는다). ① 수집·광고 코드 자체(`packages/core/src/metrics/`·`packages/event-tracker/`·`react-ad-boundary`·`banner`·`winclude/tracking*.jsp`) ② 바뀐 줄의 심볼(`trackingEvent`·`trackingCustomTag`·`@wadiz/metrics`·`dataLayer`·`AdBoundary`·`_refer_section_st` 등) — **지워진 줄도 본다**(추적을 지운 것이 가장 조용한 사고다). 머지된 뒤에는 3점 diff 가 비므로 **그 환경 베이스의 PR diff** 로 떨어진다. 못 읽으면 `접촉 없음` 이 아니라 **`⚠ 확인 불가`** 로 적는다 |
 | `dobby_testrun_lint 결과폴더` | dobby-test 마감(정리 직전) | 근거 칸에 **파일 이름만** 적힌 행이 있으면 거부(관측한 사실을 적게 한다). **`track-scan` 이 보고한 `[수집]`·[광고]` 갈래가 result.md 에 없어도 거부** — 광고·수집은 화면에 안 보이게 깨져 다른 시나리오가 통과해도 따로 봐야 한다. 확인 불가면 시나리오를 넣고 `SKIP(…)` 으로 사유를 적는다(빼지 말 것) |
 | `dobby_testrun_prune 결과폴더` | dobby-test 8단계(요약을 쓴 **뒤**) | 그 회차에서 `result.md`·`summary.html` 이 이름으로 가리키지 않는 그림만 지운다. 테스트 중 화면 확인하려고 찍은 것이 남는 문제. test-runs 폴더 안·그림 확장자만 |
 | `dobby_testrun_update KEY 폴더시각 상태 [성공/실패/skip]` | 시나리오마다·마감 | 이력 표의 그 회차 행만 상태·집계 수정(통독 없음). 개발 담당 행 상태도 함께 바꾼다 — 테스트중이면 `검증`, `완료` 면 `완료`, 그 밖이면 `대기` (`dobby_testrun_new` 도 회차를 열 때 `검증` 으로) |
 | `dobby_split_dev KEY [check]` | 기존 /do 오더 정리(사람이 승인한 뒤) | "분석/개발자" 한 행을 분석(`analysis-agent`)과 개발자로 나누고, 설계 쪽 세션 기록(`design`·`takeover`·`change-*`·`answer-*`)을 분석 행으로 옮긴다. 자동 실행 중이면 건너뜀. `check` 는 바꾸지 않고 할 일만 출력 |
 | `dobby_testrun_current KEY [전체시나리오수] [환경]` | dobby-test 묶음 모드 시작 | 이력 표의 마지막 회차가 `테스트중` 이면 그 폴더, 아니면 `dobby_testrun_new` 로 새 회차(경로 stdout) |
-| `dobby_verify_next KEY` | /do 검증 세션 시작·끝 | 판정이 빈 시나리오가 든 첫 검증 묶음 `묶음<TAB>S1,S2`(빈 것만). 다 찼으면 `done`. 묶음은 테스트 계획의 `## 검증 묶음` 표를 따르고, 표에 없는 시나리오는 번호 순서로 4개씩 붙인다 |
-| `dobby_testplan_slice KEY S1,S2` | /do 검증 세션 | 테스트 계획에서 제목·`## 사전 준비`·`## 영향 번들` 과 그 시나리오 절만 출력 |
+| `dobby_verify_next KEY` | /do 검증 세션 시작·끝 | 판정이 빈 시나리오가 든 첫 검증 묶음 `묶음<TAB>S1,S2`(빈 것만). 다 찼으면 `done`. 묶음은 테스트 계획의 `## 검증 묶음` 표를 따르고, 표에 없는 시나리오는 번호 순서로 4개씩 붙인다. `## 검증 범위` 밖 시나리오는 빼고, 비는 묶음은 내지 않는다 |
+| `_testplan_scope KEY` | 묶음·회차 헬퍼 안 | 계획의 시나리오마다 `S1<TAB>in` 또는 `S1<TAB>out<TAB>이유`. `## 검증 범위` 표의 `검증함` 행만 대상이고, 표가 없거나 `전체` 면 모두 대상 |
+| `dobby_testplan_scope_all KEY "사람 지시"` | `/do {키} 전체 테스트`, 변경 접수에서 전체 테스트 지시 | `## 검증 범위` 절을 `전체` 로 덮어쓰고, 열린 회차의 `SKIP(범위)` 행 판정·근거를 비운다 |
+| `dobby_testplan_slice KEY S1,S2` | /do 검증 세션 | 테스트 계획에서 제목·`## 사전 준비`·`## 영향 번들` 과 그 시나리오 절만 출력. 그 밖의 `##` 절은 나가지 않으므로 공통 지시는 `## 사전 준비` 아래에 둔다 |
 | `dobby_ship_pr KEY 워크트리 브랜치 환경 "제목" "본문"` | dobby-ship 2단계 | PR 생성(번호 stdout). **환경이 dev·rc1·rc4·stage 가 아니면·그 저장소에 그 환경이 없으면·미커밋이 남아 있으면 거부**, 이미 열린 PR 은 재사용. 저장소는 워크트리에서 읽고 **베이스 브랜치를 저장소에 맞게 옮긴다**(com.wadiz.web 의 dev → `cloud_dev`). 리뷰봇이 있는 저장소(wadiz-frontend)의 dev 외 환경에만 `--reviewer wadiz-fe/fe1-team` 자동 부착 |
 | `dobby_ship_build KEY 환경 번들...` | dobby-ship 6단계 | **wadiz-frontend 전용.** 번들마다 CI/CD 워크플로 실행(run id stdout). **static 은 `build_entry_all=true` 를 무조건 붙인다** — 없으면 `--since` 로 바뀐 엔트리만 빌드돼 공용 패키지 변경이 반영 안 된다. admin 은 static 빌드의 옵션(`build_admin`)으로 얹는다. 모르는 번들은 거부 |
 | `dobby_ship_web_ci KEY 환경 [머지시각]` | dobby-ship 6단계 | **com.wadiz.web 전용.** 머지 push 로 **자동 시작된** CI run 을 찾아 빌드 칸에 `web#{run id}` 로 적는다(run id stdout). ⛔ 빌드를 걸지 않는다 — 걸면 push 트리거와 겹쳐 두 번 돈다. 3분 안에 run 이 안 나타나면 거부 |
