@@ -365,6 +365,16 @@ _office_json() {
   while [ $# -ge 2 ]; do args+=(--arg "$1" "$2"); k="${k:+$k,}$1:\$$1"; shift 2; done
   jq -nc "${args[@]}" "{$k}"
 }
+# dobby_unit_start 키 종류 [단위] — 사무실에 작업 단위가 시작됐다고 알린다. 단위를 안 주면 {종류}:{지금 세션}
+dobby_unit_start() {
+  [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 0
+  _office_notify "$(_office_json kind unit op start key "$1" by "$2" unit "${3:-$2:${CLAUDE_CODE_SESSION_ID:-}}")"
+}
+# dobby_unit_end 키 종류 결과 [단위] — 작업 단위가 끝났다고 알린다. 결과는 보고서 캐비닛에 보이는 한 줄
+dobby_unit_end() {
+  [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 0
+  _office_notify "$(_office_json kind unit op end key "$1" by "$2" result "${3:-}" unit "${4:-$2:${CLAUDE_CODE_SESSION_ID:-}}")"
+}
 
 # ── status.md 단계 ───────────────────────────────────────────────────
 # dobby_phase KEY PHASE — 현재 단계/갱신 갱신.
@@ -1049,7 +1059,7 @@ dobby_commit_push() {
   local f k
   for f in $(grep -lF "| ${wt%/} |" "$(_meta)"/*/status.md 2>/dev/null); do
     k="${f%/status.md}"; k="${k##*/}"
-    [ -z "$(_v2_checkpoint_get "$k")" ] || dobby_v2_checkpoint "$k" >/dev/null 2>&1
+    [ -z "$(_v2_checkpoint_get "$k")" ] || _v2_checkpoint_mark "$k" >/dev/null 2>&1
   done
   git -C "$wt" push origin "$br" >&2 2>/dev/null || git -C "$wt" push -u origin "$br" >&2
 }
@@ -2000,6 +2010,7 @@ dobby_session_log() {
   grep -q "| $step | \`$sid\` |" "$f" || _past_session_add "$f" "| $(_now) | $step | \`$sid\` | $cwd |"
   tr="$(_session_transcript "$sid")"
   [ -n "$tr" ] && dobby_log "$key" "$slug" "$tr" "$sub"
+  dobby_unit_start "$key" do
   return 0
 }
 
@@ -2796,7 +2807,7 @@ dobby_ship_stage() {
     END { if (insec && !found && seen) emit() }
   ' "$f" > "$f.tmp" && mv "$f.tmp" "$f" || return 1
   # 배포 중 리뷰 반영·충돌 해결 커밋은 단계 안의 일이라 기준점을 옮긴다. 기준점이 있는 오더만.
-  [ -z "$(_v2_checkpoint_get "$key")" ] || dobby_v2_checkpoint "$key" >/dev/null 2>&1
+  [ -z "$(_v2_checkpoint_get "$key")" ] || _v2_checkpoint_mark "$key" >/dev/null 2>&1
   return 0
 }
 
@@ -4522,8 +4533,8 @@ _v2_checkpoint_write() {
     END{ if(!done) print line }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
 }
 
-# dobby_v2_checkpoint KEY — 지금 상태를 기준점으로 남긴다. /do 단계와 dobby-ship 이 끝날 때 부른다.
-dobby_v2_checkpoint() {
+# _v2_checkpoint_mark KEY — 지금 상태를 기준점으로 남기기만 한다. 단계 도중(커밋, 배포 표, 변경 찾기)에 부른다.
+_v2_checkpoint_mark() {
   local key="$1" v r b p h
   [ -f "$(_order_dir "$key")/status.md" ] || { _die "$key 의 상태 문서가 없습니다"; return 1; }
   v="$(_now) · 설계 $(_v2_design_fp "$key")"
@@ -4533,6 +4544,17 @@ dobby_v2_checkpoint() {
     v="$v · $r@$h:$(_v2_wt_fp "$p")"
   done < <(_v2_worktrees "$key")
   _v2_checkpoint_write "$key" "$v"
+}
+
+# dobby_v2_checkpoint KEY — 기준점을 남기고 사무실에 작업 단위가 끝났다고 알린다. /do 세션을 닫을 때만 부른다.
+dobby_v2_checkpoint() {
+  local key="$1" f last now
+  _v2_checkpoint_mark "$key" || return 1
+  # 지난 세션 표 마지막 줄의 단계와 지금 단계를 보고서에 남긴다
+  f="$(_order_dir "$key")/status.md"
+  last="$(awk '/^## 지난 세션/{inb=1;next} /^## /{inb=0} inb==1 && /^\| [0-9]/{l=$0} END{print l}' "$f" | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$3); print $3}')"
+  now="$(awk '/^## 현재 단계/{ins=1;next} /^## /{ins=0} ins==1 && /^- \*\*단계\*\*:/{sub(/^[^:]*:[ \t]*/,""); print; exit}' "$f")"
+  dobby_unit_end "$key" do "${last:-세션} 세션 끝 · 지금 단계 ${now:-알 수 없음}"
 }
 
 # dobby_v2_drift KEY — 기준점 뒤에 단계 밖에서 바뀐 것을 낸다.
@@ -4654,24 +4676,24 @@ dobby_v2_drift_apply() {
   ph="$(_order_phase "$key")"
   if [ "$kind" != code ]; then
     case "$ph" in
-      착수|분석) dobby_v2_checkpoint "$key"; printf 'kept\n'; return 0 ;;
+      착수|분석) _v2_checkpoint_mark "$key"; printf 'kept\n'; return 0 ;;
     esac
     rd="$(dobby_v2_change_open "$key")" || return 1
     [ "$kind" = both ] && _v2_drift_section "$key" "$rd" "$det" >/dev/null
     dobby_agent_state "$key" analysis-agent 분석 "" "단계 밖 설계 변경 확인" 2>/dev/null
     dobby_event "$key" "단계 밖 설계 변경 감지 — 단계 $ph → 분석, 설계 확인부터 다시" 2>/dev/null
-    dobby_v2_checkpoint "$key"; printf 'design\n'; return 0
+    _v2_checkpoint_mark "$key"; printf 'design\n'; return 0
   fi
   dev="$(_board_dev_slug "$d/orchestration.md")"
   case "$ph" in
     착수|분석|구현)
       printf '%s' "$det" | grep -q '^commit' && _v2_drift_section "$key" "$(_v2_open_next_round "$key")" "$det" >/dev/null
-      dobby_v2_checkpoint "$key"; printf 'kept\n'; return 0 ;;
+      _v2_checkpoint_mark "$key"; printf 'kept\n'; return 0 ;;
     리뷰)
       rd="$(find "$d/reviews" -maxdepth 1 -type d -name 'round-*' 2>/dev/null | sed 's/.*round-//' | sort -n | tail -1)"
       if [ -z "$rd" ] || ! ls "$d/reviews/round-$rd"/*.md >/dev/null 2>&1; then
         printf '%s' "$det" | grep -q '^commit' && _v2_drift_section "$key" "${rd:-1}" "$det" >/dev/null
-        dobby_v2_checkpoint "$key"; printf 'kept\n'; return 0
+        _v2_checkpoint_mark "$key"; printf 'kept\n'; return 0
       fi ;;
   esac
   if [ "$ph" = 해결 ]; then
@@ -4682,7 +4704,7 @@ dobby_v2_drift_apply() {
   dobby_phase "$key" 구현
   [ -n "$dev" ] && dobby_agent_state "$key" "$dev" 대기 2>/dev/null
   dobby_event "$key" "단계 밖 코드 변경 감지 — 변경 $m 로 기록, 단계 $ph → 구현, ${rd}차 리뷰부터 다시" 2>/dev/null
-  dobby_v2_checkpoint "$key"; printf 'code\n'
+  _v2_checkpoint_mark "$key"; printf 'code\n'
 }
 
 # dobby_v2_drift_backfill [KEY accept|review] — 기준점이 없는 /do 오더의 첫 기준점을 정한다.
@@ -4700,7 +4722,7 @@ dobby_v2_drift_backfill() {
   }
   if [ -n "$key" ]; then
     case "$mode" in
-      accept) dobby_v2_checkpoint "$key"; dobby_event "$key" "기준점 처음 기록 — 지금 상태를 그대로 인정" 2>/dev/null; return 0 ;;
+      accept) _v2_checkpoint_mark "$key"; dobby_event "$key" "기준점 처음 기록 — 지금 상태를 그대로 인정" 2>/dev/null; return 0 ;;
       review)
         ts="$(_v2_integrated_at "$key")"; [ -n "$ts" ] || { _die "$key 에 통합 완료 기록이 없습니다"; return 1; }
         v="$ts · 설계 $(_v2_design_fp "$key")"

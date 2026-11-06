@@ -32,7 +32,7 @@
 #   · 세션이 끝났는데 아무것도 바뀌지 않음(사람 판단이 필요해 스킬이 멈춘 것) · 세션 오류 · 상한 도달
 set -uo pipefail
 
-die() { printf '자동 실행 중단: %s\n' "$1" >&2; exit "${2:-1}"; }
+die() { END_NOTE="자동 실행 중단: $1"; printf '%s\n' "$END_NOTE" >&2; exit "${2:-1}"; }
 
 KEY="${1:-}"; [ -n "$KEY" ] && shift || die "오더 키를 주세요. 예: run.sh FE1-1234"
 MODE=auto; MAX=""; WITH_TEST=0; APPROVE=0
@@ -107,7 +107,10 @@ WT="$(_order_worktree "$KEY")"
 mcp=()
 MCP_CFG="${TMPDIR:-/tmp}/dobby-mcp-$KEY.json"
 PROFILE="$HOME/.cache/dobby-chrome/$KEY"
-trap 'rm -rf "$PROFILE"' EXIT
+# 사무실에 이 실행을 작업 단위 하나로 알린다. 끝날 때(멈춤·오류·완료 모두) 서류철이 캐비닛으로 간다
+UBY=auto; [ -n "$AUTO_ENV" ] && UBY=full
+dobby_unit_start "$KEY" "$UBY" "$UBY:$$"
+trap 'rm -rf "$PROFILE"; dobby_unit_end "$KEY" "$UBY" "${END_NOTE:-자동 실행이 끝났습니다}" "$UBY:$$"' EXIT
 if jq -e '.mcpServers["chrome-devtools"]' ~/.claude.json >/dev/null 2>&1 \
    && jq --arg p "$PROFILE" '{mcpServers: {"chrome-devtools": (.mcpServers["chrome-devtools"]
         | .args = ([(.args // [])[] | select(. != "--isolated")] + ["--userDataDir", $p]))}}' ~/.claude.json >"$MCP_CFG" 2>/dev/null; then
@@ -134,14 +137,14 @@ while :; do
     && stop "단계 밖에서 설계 문서가 바뀌었습니다. 터미널에서 /do $KEY 로 바뀐 설계를 확인해 주세요"
   ph="$(phase)"
   case "$ph" in
-    해결|종료|완료) echo "$KEY 는 이미 $ph 단계입니다."; exit 0 ;;
+    해결|종료|완료) END_NOTE="$KEY 는 이미 $ph 단계입니다."; echo "$END_NOTE"; exit 0 ;;
     보류)     [ -n "$AUTO_ENV" ] && die "$KEY 는 판단이 필요해 멈춰 있습니다. 설계 문서 '확인이 필요했던 것'을 보고 터미널에서 /do $KEY 로 답해 주세요"
               die "$KEY 는 보류 중입니다. 다시 진행하려면 상태 문서의 단계를 되돌린 뒤 실행하세요" ;;
     착수|"")  stop "설계가 끝나지 않았습니다. 터미널에서 /do $KEY 로 설계를 확정하세요" ;;
     분석)     design_approved || stop "설계가 확정되지 않았습니다. 터미널에서 /do $KEY 로 설계를 보고 \"확정\"해 주세요" ;;
     구현|리뷰) ;;
     통합)
-      case "$KEY" in TASK-*) echo "통합에서 PR 까지 만들었습니다. PR 을 머지한 뒤 /dobby-resolve $KEY 로 해결 처리하세요."; exit 0 ;; esac
+      case "$KEY" in TASK-*) END_NOTE="통합에서 PR 까지 만들었습니다. PR 을 머지한 뒤 /dobby-resolve $KEY 로 해결 처리하세요."; echo "$END_NOTE"; exit 0 ;; esac
       if [ -n "$AUTO_ENV" ]; then
         dobby_ship_reopen "$KEY" >/dev/null
         # 결과를 먼저 받고 나눈다. `IFS=… read <<<"$(…)"` 로 쓰면 괄호 안 함수까지 탭 구분자를 물려받는다.
@@ -166,9 +169,9 @@ while :; do
           *) stop "배포 다음 일을 정하지 못했습니다: ${what:-빈 값}" ;;
         esac
       else
-        [ "$WITH_TEST" = 1 ] || { echo "통합까지 끝났습니다. 배포한 뒤 run.sh $KEY --with-test 또는 /do $KEY 로 검증하세요."; exit 0; }
+        [ "$WITH_TEST" = 1 ] || { END_NOTE="통합까지 끝났습니다. 배포한 뒤 run.sh $KEY --with-test 또는 /do $KEY 로 검증하세요."; echo "$END_NOTE"; exit 0; }
       fi ;;
-    검증)     test_passed && { echo "검증을 전부 통과했습니다. /dobby-resolve $KEY 로 해결 처리하세요."; exit 0; }
+    검증)     test_passed && { END_NOTE="검증을 전부 통과했습니다. /dobby-resolve $KEY 로 해결 처리하세요."; echo "$END_NOTE"; exit 0; }
               # 열린 회차를 잇는 세션은 다음 검증 묶음이다. 묶음마다 세션 하나라 상한에 하나씩 더해 센다.
               _testrun_open "$KEY" >/dev/null && MAX=$((MAX + 1)) ;;
     *)        stop "모르는 단계값입니다: $ph. 상태 문서를 확인하세요" ;;
