@@ -3154,6 +3154,27 @@ dobby_v2_ship_next() {
   fi
 }
 
+# dobby_v2_wait KEY [초] — light 세션용. dobby_v2_ship_next 가 wait-* 인 동안 셸에서 기다렸다가 그 결과 한 줄을 낸다.
+# 모델이 30초마다 깨어나 문맥을 다시 읽지 않게 기다림을 호출 한 번으로 묶는다. 기본 480초(도구 호출 상한 10분 안).
+dobby_v2_wait() {
+  local key="$1" max="${2:-480}" t0 nx
+  t0=$(date +%s)
+  while :; do
+    nx="$(dobby_v2_ship_next "$key")" || return 1
+    case "${nx%%$'\t'*}" in
+      wait-review|wait-build) [ $(( $(date +%s) - t0 )) -lt "$max" ] || { printf '%s\n' "$nx"; return 0; }; sleep 30 ;;
+      *) printf '%s\n' "$nx"; return 0 ;;
+    esac
+  done
+}
+
+# dobby_v2_ctx — 지금 세션의 마지막 호출 문맥 크기(토큰). 기록을 못 찾으면 0. light 가 일반 실행으로 넘길지 가를 때 쓴다.
+dobby_v2_ctx() {
+  local r; r="$(_v2_last_call "$(_session_id)")"
+  r="${r%%$'\t'*}"
+  case "$r" in ''|*[!0-9]*) echo 0 ;; *) echo "$r" ;; esac
+}
+
 # dobby_v2_test_fixes KEY — 검증 실패를 고친 횟수(agent-logs.json 의 fix-test-* 하위 키 수, 모든 담당 합계).
 # 상한은 2번이다(auto-mode.md "수정 상한"). 리뷰 지적 수정(fix-N)은 세지 않는다.
 dobby_v2_test_fixes() {
