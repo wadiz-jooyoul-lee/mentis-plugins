@@ -547,6 +547,7 @@ _testrun_carry() {
 # 시험커밋(4번째, 없으면 워크트리 HEAD)은 `- **시험 커밋**:` 줄로 들어가고, 이전 결과 가져오기(_testrun_carry)의 기준이 된다.
 dobby_testrun_new() {
   local key="$1" total="${2:-}" env="${3:-}" commit="${4:-}" n dir sf now scope carry
+  _presence_claim "$key"
   n="$(find "$(_order_dir "$key")/test-runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
   n=$((n + 1))
   dir="$(_order_dir "$key")/test-runs/$(_ts)"; mkdir -p "$dir"
@@ -621,6 +622,7 @@ _testrun_board() {
 # 행의 상태·집계만 수정한다(통독 없음). 상태 예: 테스트중·완료·완료(이슈 있음)·중단. 집계 예: "3/1/0".
 dobby_testrun_update() {
   local key="$1" ts="$2" st="$3" counts="${4:-}" sf
+  _presence_claim "$key"
   sf="$(_order_dir "$key")/status.md"
   [ -f "$sf" ] || return 1
   awk -F'|' -v OFS='|' -v ts="$ts" -v st="$st" -v counts="$counts" '
@@ -2054,6 +2056,7 @@ EOF
 #   (dobby-order 로 시작한 오더의 원래 세션을 잃지 않게). 시각 칸은 그 대화 기록 파일의 마지막 수정 시각이다.
 dobby_session_log() {
   local key="$1" slug="$2" sub="$3" step="$4" cwd="${5:-$(pwd)}" f sid tr old oldcwd oldtr oldt
+  _presence_claim "$key"
   f="$(_order_dir "$key")/status.md"; [ -f "$f" ] || return 1
   sid="$(_session_id "$cwd")"
   [ -n "$sid" ] || { printf 'dobby-lib: 세션 ID 를 알 수 없다(CLAUDE_CODE_SESSION_ID 없음) — 세션 기록 건너뜀\n' >&2; return 0; }
@@ -2799,6 +2802,7 @@ _ship_stage_ok() {
 # "쓸 때 올린다"로 간다. 손대지 않은 오더는 옛 모양 그대로 남고 대시보드가 둘 다 읽는다.
 dobby_ship_stage() {
   local key="$1" rp="$2" env="$3" st="$4" pr="${5:-}" bd="${6:-}" note="${7:-}" f ts old
+  _presence_claim "$key"
   [ -n "$rp" ] && [ -n "$env" ] && [ -n "$st" ] \
     || { _die "쓰임: dobby_ship_stage KEY 저장소 환경 단계 [PR] [빌드] [비고]"; return 1; }
   _ship_has "$rp" "$DOBBY_SHIP_REPOS" \
@@ -2886,6 +2890,7 @@ dobby_ship_stage() {
 dobby_v2_autorun() {
   local key="$1" url="${ORCHESTRATION_DASHBOARD_URL:-http://localhost:7253}" chk res run
   [ -n "$key" ] || { _die "쓰임: dobby_v2_autorun KEY"; return 1; }
+  _presence_done   # 이 세션은 곧 닫힌다. 표시가 남으면 run.sh 가 겹침으로 보고 시작하지 않는다
   # 대시보드 오더 실행 탭이 띄운 설계 세션이면 이 세션이 끝난 뒤 같은 잡이 run.sh 를 이어서 실행한다.
   # 여기서 띄우면 잡 이름(오더 키)이 겹쳐 대시보드가 "이미 실행 중"으로 거부한다.
   if [ -n "${DOBBY_V2_CHAINED:-}" ]; then
@@ -4688,9 +4693,76 @@ dobby_v2_drift() {
   printf '%s\t%s\n%s' "$t" "$since" "$out"
 }
 
-# _v2_recent KEY [분] — 최근 N분(기본 15) 안에 사람이 이 오더에서 일하고 있는 흔적이 있으면 0.
-# 흔적: 커밋 안 된 파일의 수정 시각, 워크트리 폴더에서 사람이 연 세션의 대화 기록(/do 밖에서 연 세션 포함) 수정 시각.
+# ── 작업 표시 — 오더를 잡은 세션이 남기는 표시. 상태는 훅 presence.sh 가 대화 차례마다 고친다 ──
+# 파일 하나가 세션 하나다: {session,pid,pstart,keys,state(working|waiting|done),since,transcript}
+_presence_dir() {
+  local d; d="$(_meta)/.presence"
+  [ -f "$d/.gitignore" ] || { mkdir -p "$d" && printf '*\n' > "$d/.gitignore"; }
+  printf '%s' "$d"
+}
+
+# _presence_pid — 이 셸을 띄운 claude 프로세스 번호. 못 찾으면 빈 값.
+_presence_pid() {
+  local p="$$" c i
+  for i in 1 2 3 4 5 6 7 8; do
+    c="$(ps -o comm= -p "$p" 2>/dev/null)"; [ "${c##*/}" = claude ] && { printf '%s' "$p"; return 0; }
+    p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')"; [ -n "$p" ] && [ "$p" -gt 1 ] || return 0
+  done
+}
+
+# _presence_claim KEY — 지금 세션이 이 오더를 잡았다고 표시한다. 세션 밖(대시보드·셸)에서는 아무것도 안 한다.
+_presence_claim() {
+  local key="$1" sid="${CLAUDE_CODE_SESSION_ID:-}" f pid
+  [ -n "$sid" ] && [ -n "$key" ] || return 0
+  f="$(_presence_dir)/$sid.json"
+  if [ -f "$f" ]; then
+    jq --arg k "$key" --arg t "$(_now)" '(if (.keys|index($k)) then . else .keys += [$k] end)
+      | if .state == "working" then . else .state = "working" | .since = $t end' "$f" > "$f.tmp" 2>/dev/null \
+      && mv "$f.tmp" "$f"
+    return 0
+  fi
+  pid="$(_presence_pid)"; [ -n "$pid" ] || return 0
+  jq -nc --arg s "$sid" --argjson p "$pid" --arg ps "$(ps -o lstart= -p "$pid" 2>/dev/null)" --arg k "$key" \
+    --arg t "$(_now)" --arg tr "$(_session_transcript "$sid")" \
+    '{session:$s,pid:$p,pstart:$ps,keys:[$k],state:"working",since:$t,transcript:$tr}' > "$f.tmp" && mv "$f.tmp" "$f"
+}
+
+# _presence_done — 지금 세션의 표시를 끝남으로 바꾼다(자동 실행에 넘길 때).
+_presence_done() {
+  local f; [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] || return 0
+  f="$(_presence_dir)/$CLAUDE_CODE_SESSION_ID.json"; [ -f "$f" ] || return 0
+  jq --arg t "$(_now)" '.state = "done" | .since = $t' "$f" > "$f.tmp" 2>/dev/null && mv "$f.tmp" "$f"
+}
+
+# _v2_presence KEY — 이 오더를 잡은 살아 있는 세션의 상태: working | waiting | 빈 값(없음).
+# 프로세스가 죽은 표시는 지운다. Esc 로 끊으면 응답 끝 훅이 안 돌아(실측) 기록의 끊김 표지로 waiting 을 가린다.
+_v2_presence() {
+  local key="$1" d f pid ps st tr best=""
+  d="$(_meta)/.presence"; [ -d "$d" ] || return 0
+  while IFS=$'\t' read -r f pid ps st tr; do
+    [ -n "$f" ] || continue
+    if [ "$(ps -o lstart= -p "$pid" 2>/dev/null)" != "$ps" ] || [ -z "$ps" ]; then rm -f "$f"; continue; fi
+    if [ "$st" = working ] && [ -f "$tr" ] && tail -n 40 "$tr" \
+      | jq -rs '[.[] | select(.type == "user" or .type == "assistant")] | last | .message.content
+          | if type == "array" then (.[0].text // "") else (. // "") end' 2>/dev/null \
+      | grep -q '^\[Request interrupted by user'; then st=waiting; fi
+    case "$st" in working) printf working; return 0 ;; waiting) best=waiting ;; esac
+  done < <(for f in "$d"/*.json; do [ -f "$f" ] && jq -r --arg k "$key" --arg f "$f" \
+    'select(.keys | index($k)) | [$f, .pid, .pstart, .state, .transcript] | @tsv' "$f" 2>/dev/null; done)
+  printf '%s' "$best"
+}
+
+# _v2_recent KEY [분] — 이 오더를 사람이 지금 작업 중이면 0. 작업 표시가 있으면 표시만 따른다.
+# 표시가 없을 때(업데이트 전에 연 세션)만 예전 흔적 짐작(_v2_recent_legacy)을 쓴다.
 _v2_recent() {
+  local st; st="$(_v2_presence "$1")"
+  case "$st" in working) return 0 ;; waiting) return 1 ;; esac
+  _v2_recent_legacy "$@"
+}
+
+# _v2_recent_legacy KEY [분] — 최근 N분(기본 15) 안에 사람이 이 오더에서 일하고 있는 흔적이 있으면 0.
+# 흔적: 커밋 안 된 파일의 수정 시각, 워크트리 폴더에서 사람이 연 세션의 대화 기록(/do 밖에서 연 세션 포함) 수정 시각.
+_v2_recent_legacy() {
   local key="$1" min="${2:-15}" now r b p l m tr
   now="$(date +%s)"
   while IFS=$'\t' read -r r b p; do
@@ -4880,9 +4952,13 @@ _v2_md_day() {
 }
 
 dobby_v2_next_all() {
-  local ps today d k f ph title upd env kind grp text since cmd link act dr drk drs rd row st ln dt stf tf
+  local ps today d k f ph title upd env kind grp text since cmd link act dr drk drs rd row st ln dt stf tf pst
   ps="$(ps -axo command 2>/dev/null)"; today="$(date '+%Y-%m-%d')"
   _v2_emit() {
+    # "멈췄다" 판정이어도 이 오더를 잡은 세션이 살아서 사람 답을 기다리면 그 사실을 알린다(자동 실행 버튼 없음).
+    case "$kind" in verify-continue|resume|drift-design|drift-code)
+      [ "$pst" = waiting ] && { grp=mine; kind=answer-wait; text="터미널 세션이 답을 기다립니다 — $ph 단계"; cmd=""; link=""; act=""; } ;;
+    esac
     jq -nc --arg key "$k" --arg title "$title" --arg phase "$ph" --arg group "$grp" --arg kind "$kind" \
       --arg text "$text" --arg since "$since" --arg env "$env" --arg cmd "$cmd" --arg link "$link" --arg action "$act" \
       '{key:$key,title:$title,phase:$phase,group:$group,kind:$kind,text:$text,since:$since,env:$env,cmd:$cmd,link:$link,action:$action}'
@@ -4894,7 +4970,7 @@ dobby_v2_next_all() {
     title="$(sed -nE 's/^- \*\*제목\*\*:[ \t]*(.*)$/\1/p' "$f" | head -1)"
     upd="$(sed -nE 's/^- \*\*갱신\*\*:[ \t]*([0-9-]+ [0-9:]+).*/\1/p' "$f" | head -1)"
     env="$(dobby_v2_env "$k")"
-    grp=mine; kind=""; text=""; since="$upd"; cmd=""; link=""; act=""
+    grp=mine; kind=""; text=""; since="$upd"; cmd=""; link=""; act=""; pst="$(_v2_presence "$k")"
 
     if printf '%s\n' "$ps" | grep -Eq "run\.sh'? '?$k'?( |$)"; then
       grp=auto; kind=running; text="자동 실행 중 — $ph 단계"; _v2_emit; continue

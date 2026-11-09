@@ -63,6 +63,9 @@ phase() { sed -nE 's/^- \*\*단계\*\*: *(.*)$/\1/p' "$D/status.md" | head -1; }
 # 없으면 dobby-order 가 만든 메타다 — 두 스킬이 한 오더를 번갈아 맡지 않는다.
 grep -q '^## 지난 세션' "$D/status.md" || [ "$(phase)" = 착수 ] \
   || die "$KEY 는 dobby-order 로 진행한 오더입니다. dobby-order 로 이어가거나 /dobby-migrate-v2 $KEY 로 옮기세요"
+# 터미널 세션이 이 오더를 작업 중이면(작업 표시) 겹쳐 돌지 않는다.
+[ "$(_v2_presence "$KEY")" = working ] \
+  && die "터미널 세션이 $KEY 를 작업 중입니다. 그 세션이 끝난 뒤 다시 실행하세요(작업 표시: $ORCHESTRATION_META/.presence)"
 
 design_approved() {
   local rev; rev="$(dobby_design_rev "$KEY")"

@@ -140,6 +140,14 @@
             ],
             "timeout": 5,
             "statusMessage": "go-dobby 입력 검사"
+          },
+          {
+            "type": "command",
+            "command": "bash",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/presence.sh"
+            ],
+            "timeout": 3
           }
         ]
       }
@@ -152,6 +160,28 @@
             "command": "bash",
             "args": [
               "${CLAUDE_PLUGIN_ROOT}/hooks/session-end-office.sh"
+            ],
+            "timeout": 3
+          },
+          {
+            "type": "command",
+            "command": "bash",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/presence.sh"
+            ],
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/presence.sh"
             ],
             "timeout": 3
           }
