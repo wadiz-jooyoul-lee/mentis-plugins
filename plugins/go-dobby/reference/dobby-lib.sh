@@ -4415,7 +4415,8 @@ _track_scan_kinds() {
   local f
   f="$(_order_dir "$1")/track-scan.md"
   [ -f "$f" ] || return 0
-  grep -oE '\[(수집|광고)\]' "$f" 2>/dev/null | sort -u | tr '\n' ' '
+  # 표의 갈래 칸만 읽는다 — 안내 문장의 `[수집]`·`[광고]` 까지 세면 늘 둘 다 요구한다
+  grep -oE '^\| *\[(수집|광고)\]' "$f" 2>/dev/null | grep -oE '\[(수집|광고)\]' | sort -u | tr '\n' ' '
 }
 
 # dobby_testrun_lint 결과폴더 — 근거 칸에 **파일 이름만** 적힌 행을 잡는다.
@@ -4491,7 +4492,8 @@ $(sed -n '/^| 갈래/,$p' "$(_order_dir "$tkey")/track-scan.md" 2>/dev/null | he
   # 실측 FE1-2378 3회차: 2회차 보류 60건을 두고 새 묶음 4건만 표에 적어 마감했다.
   local tenv need
   tenv="$(sed -nE 's/^- \*\*환경\*\*: *([^ ]+) *$/\1/p' "$f" | head -1)"
-  need="$(_testplan_scope "$tkey" "$tenv" "$dir" 2>/dev/null | awk -F'\t' '$2=="in"{print $1}' | awk -F'|' '
+  # stage 는 핵심 시험 2~3개만 하므로 계획 전부를 요구하지 않는다
+  [ "$tenv" = stage ] || need="$(_testplan_scope "$tkey" "$tenv" "$dir" 2>/dev/null | awk -F'\t' '$2=="in"{print $1}' | awk -F'|' '
     function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
     FNR == NR { want[$1] = 1; order[++n] = $1; next }
     /dobby:scenarios/ { m = 1; next }
