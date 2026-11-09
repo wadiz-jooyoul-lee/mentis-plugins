@@ -3367,6 +3367,43 @@ dobby_release_note() {
   ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
 }
 
+# dobby_release_note_pending [기준일] — 배포일이 기준일(기본 오늘) 이후인 등록 기록을 모든 오더에서 모은다.
+# 한 줄에 하나, 탭으로 나눠 출력: 키 배포일 저장소 브랜치 행 PR 머지 페이지주소
+dobby_release_note_pending() {
+  local since="${1:-$(date +%Y-%m-%d)}" f key
+  for f in "$(_meta)"/*/status.md; do
+    [ -f "$f" ] || continue
+    key="$(basename "$(dirname "$f")")"
+    awk -v key="$key" -v since="$since" '
+      function trim(x) { gsub(/^[ \t]+|[ \t]+$/, "", x); return x }
+      /^## / { insec = ($0 ~ /^##[ \t]*릴리즈 노트[ \t]*$/); next }
+      insec && /^[ \t]*\|/ {
+        n = split($0, c, "|"); d = trim(c[2])
+        if (d !~ /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/ || d < since) next
+        printf "%s", key
+        for (i = 2; i <= 8; i++) printf "\t%s", trim(c[i])
+        printf "\n"
+      }
+    ' "$f"
+  done
+}
+
+# dobby_release_note_drop KEY 배포일 — 그 배포일의 등록 기록 줄(저장소 전부)을 지운다.
+# 사람이 페이지에서 직접 뺀 이슈를 등록 점검이 다시 묻지 않게 할 때 쓴다.
+dobby_release_note_drop() {
+  local key="$1" day="$2" f
+  [ -n "$key" ] && [[ "$day" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
+    || { _die "쓰임: dobby_release_note_drop KEY 배포일(YYYY-MM-DD)"; return 1; }
+  f="$(_order_dir "$key")/status.md"
+  [ -f "$f" ] || { _die "status.md 가 없다: $key"; return 1; }
+  awk -v day="$day" '
+    function trim(x) { gsub(/^[ \t]+|[ \t]+$/, "", x); return x }
+    /^## / { insec = ($0 ~ /^##[ \t]*릴리즈 노트[ \t]*$/) }
+    insec && /^[ \t]*\|/ { split($0, c, "|"); if (trim(c[2]) == day) next }
+    { print }
+  ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 충돌 해결 브랜치 — {브랜치}_into_{환경}
 #
