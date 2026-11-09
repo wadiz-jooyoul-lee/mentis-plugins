@@ -185,6 +185,7 @@ v2.1.246에서 실측 확인: 설치본 스크립트를 수동 실행하면 deny
 | G19 | 문맥 25만 토큰 이상 세션에서 `/do`·`/go-dobby:*`·`/dobby-*` 시작 금지(`/dobby-qa` 는 제외 — 예약으로 같은 세션에서 도는 폴링 루프). 기준 `DOBBY_PROMPT_GUARD_CTX`, 끄기 `DOBBY_PROMPT_GUARD=off`(config.env) | UserPromptSubmit | block | 플러그인 hooks.json(prompt-guard.sh) | 상동 |
 | G20 | `/do` 세션 닫기 안내("이 세션을 닫아 주세요") 뒤 일반 요청에 경고(막지 않음) | UserPromptSubmit | systemMessage + additionalContext | 플러그인 hooks.json(prompt-guard.sh) | 상동 |
 | — | 안전 훅 미등록·구버전 감지 안내 | SessionStart | 안내 출력 | 플러그인 hooks.json(라이프사이클 훅은 정상 발화) | dobby-init |
+| — | 작업 표시 상태 갱신 — 질문 입력은 working, 응답 끝은 waiting(세션 닫기 안내면 done, 백그라운드 작업이 남으면 working), 세션 종료는 표시 삭제. 표시는 `_presence_claim`(기록 헬퍼)이 `$ORCHESTRATION_META/.presence/{세션}.json` 에 만들고 대시보드 판정·run.sh 가 읽는다 | UserPromptSubmit·Stop·SessionEnd | 상태 기록(막지 않음) | 플러그인 hooks.json(presence.sh) | /do 다음 할 일 판정 |
 
 ## 로드맵 (다음 단계 후보 — 분석 완료, 미구현)
 
