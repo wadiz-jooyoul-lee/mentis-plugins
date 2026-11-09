@@ -567,7 +567,7 @@ dobby_testrun_new() {
       printf '|---|---|---|---|---|---|---|---|\n'
       # 행은 계획의 실제 시나리오 번호로 깐다. 개수로 S1..SN 을 깔면 지운 번호·늘어난 번호와 어긋난다
       # (실측 FE1-2261: 계획에 없는 S14~S16 행이 생기고 S42~S44 행이 빠짐). 범위 밖은 미리 SKIP(범위) 로 채운다.
-      scope="$(_testplan_scope "$key" 2>/dev/null)"
+      scope="$(_testplan_scope "$key" "$env" "$dir" 2>/dev/null)"
       if [ -n "$scope" ]; then
         printf '%s\n' "$scope" | awk -F'\t' '
           $2=="in"  { printf "| %s |  |  |  |  |  |  |  |\n", $1 }
@@ -728,14 +728,37 @@ dobby_testrun_current() {
   _testrun_open "$1" || dobby_testrun_new "$@"
 }
 
-# _testplan_scope KEY — 계획의 시나리오마다 "S1<TAB>in" 또는 "S1<TAB>out<TAB>이유".
+# _testrun_last KEY 환경 [뺄회차폴더] — 같은 환경의 회차를 최신순으로 훑어 시나리오마다 마지막 판정을 "S1<TAB>판정" 으로 낸다.
+# 빈 칸만 건너뛰고 SKIP 도 판정으로 친다. 환경 줄이 다른 회차는 보지 않는다.
+_testrun_last() {
+  local key="$1" env="$2" skip="${3%/}" run seen=" " id v
+  [ -n "$env" ] || return 0
+  for run in $(find "$(_order_dir "$key")/test-runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort -r); do
+    [ "$run" = "$skip" ] && continue
+    [ -f "$run/result.md" ] || continue
+    grep -qE "^- \*\*환경\*\*: *$env *\$" "$run/result.md" || continue
+    while IFS=$'\t' read -r id v; do
+      case "$seen" in *" $id "*) continue ;; esac
+      seen="$seen$id "; printf '%s\t%s\n' "$id" "$v"
+    done < <(awk -F'|' '
+      function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
+      /dobby:scenarios/ { m = 1; next }
+      m && /^\|/ { if (!h) { h = 1; next } id = t($2); if (id ~ /^S[0-9]+$/ && t($8) != "") print id "\t" t($8); next }
+      m && h && !/^\|/ { m = 0 }' "$run/result.md")
+  done
+}
+
+# _testplan_scope KEY [환경] [뺄회차폴더] — 계획의 시나리오마다 "S1<TAB>in" 또는 "S1<TAB>out<TAB>이유".
 # `## 검증 범위` 표(| 구분 | 시나리오 | 이유 |)에서 구분이 `검증함` 인 행만 이번 회차 대상이다.
 # 표가 없거나 `검증함` 행의 시나리오 칸이 `전체` 면 모두 대상이다. 시나리오 칸은 `S1, S3~S5` 꼴.
 # 변경마다 계획 전체를 다시 돌리면 시나리오가 쌓여 회차가 끝없이 길어진다(실측 FE1-2261: 41개).
+# 환경을 주면 표가 제외해도 그 환경의 마지막 판정이 PASS 가 아닌 것(보류·실패·기록 없음)은 대상으로 되돌린다.
+# 보류를 다음 회차가 또 건너뛰고(실측 FE1-2378 3회차: 60건), dev 통과로 rc4 를 건너뛰었다(FE1-2368).
 _testplan_scope() {
-  local p; p="$(_order_dir "$1")/test-plan.md"
+  local p last=""; p="$(_order_dir "$1")/test-plan.md"
   [ -f "$p" ] || return 1
-  awk -F'|' '
+  [ -n "${2:-}" ] && last="$(_testrun_last "$1" "$2" "${3:-}" | awk -F'\t' '$2=="PASS"{printf "%s ", $1}')"
+  awk -F'|' -v env="${2:-}" -v passed=" $last" '
     function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
     function add(cell, kind, why,   n, a, i, tok, b, lo, hi, k) {
       gsub(/[ \t]/, "", cell); n = split(cell, a, ",")
@@ -756,6 +779,7 @@ _testplan_scope() {
     /^## S[0-9]+\./ {
       id = $0; sub(/^## /, "", id); sub(/\..*/, "", id)
       if (!has || all || st[id] == "in") print id "\tin"
+      else if (env != "" && index(passed, " " id " ") == 0) print id "\tin"
       else print id "\tout\t" ((id in rs) ? rs[id] : "검증 범위 표에 없음")
     }' "$p" "$p"
 }
@@ -789,10 +813,13 @@ dobby_testplan_scope_all() {
 # _testplan_batches KEY — "묶음<TAB>S1,S2,…" 줄들. `## 검증 묶음` 표를 따르고, 표에 없는 시나리오는 4개씩 덧붙인다.
 # 검증 범위(_testplan_scope) 밖 시나리오는 빼고, 남는 것이 없는 묶음은 내지 않는다.
 _testplan_batches() {
-  local p n=0 rest="" i=0 s name list kept scope
+  local p n=0 rest="" i=0 s name list kept scope run env=""
   p="$(_order_dir "$1")/test-plan.md"
   [ -f "$p" ] || return 1
-  scope=" $(_testplan_scope "$1" | awk -F'\t' '$2=="in"{printf "%s ", $1}')"
+  # 열린 회차의 환경으로 범위를 정한다. 그 회차 자신은 빼고 앞 회차만 본다.
+  run="$(_testrun_open "$1")"
+  [ -n "$run" ] && env="$(sed -nE 's/^- \*\*환경\*\*: *([^ ]+) *$/\1/p' "$run/result.md" | head -1)"
+  scope=" $(_testplan_scope "$1" "$env" "$run" | awk -F'\t' '$2=="in"{printf "%s ", $1}')"
   local tbl; tbl="$(awk -F'|' '
     function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
     /^## /{ins=(t(substr($0,4))=="검증 묶음"); next}
@@ -4419,6 +4446,26 @@ $(sed -n '/^| 갈래/,$p' "$(_order_dir "$tkey")/track-scan.md" 2>/dev/null | he
   [광고] 배너가 **75% 보일 때까지 스크롤**한 뒤 ad.section.view 를 본다(threshold 0.75).
          링크에 _refer_section_st= 가 있는지도 함께 본다 — 없으면 추적 자체가 안 걸린다.
 확인할 수 없는 사정이면 시나리오를 넣고 **판정을 보류**로, 사유를 함께 적어라(빼지 말 것)."
+    return 1
+  fi
+
+  # ── 이번 회차 대상인데 시험하지 않은 시나리오 ─────────────────────────────
+  # 대상은 검증 범위 표의 `검증함` 과, 같은 환경의 마지막 판정이 PASS 가 아닌 것(보류·실패·기록 없음)이다.
+  # 실측 FE1-2378 3회차: 2회차 보류 60건을 두고 새 묶음 4건만 표에 적어 마감했다.
+  local tenv need
+  tenv="$(sed -nE 's/^- \*\*환경\*\*: *([^ ]+) *$/\1/p' "$f" | head -1)"
+  need="$(_testplan_scope "$tkey" "$tenv" "$dir" 2>/dev/null | awk -F'\t' '$2=="in"{print $1}' | awk -F'|' '
+    function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
+    FNR == NR { want[$1] = 1; order[++n] = $1; next }
+    /dobby:scenarios/ { m = 1; next }
+    m && /^\|/ { if (!h) { h = 1; next } id = t($2); if (id ~ /^S[0-9]+$/) v[id] = t($8); next }
+    m && h && !/^\|/ { m = 0 }
+    END { for (i = 1; i <= n; i++) { id = order[i]; if (!(id in v) || v[id] == "" || v[id] == "SKIP(범위)") printf "%s ", id } }' - "$f")"
+  if [ -n "$need" ]; then
+    _die "이번 회차에서 시험해야 하는데 판정이 없는 시나리오가 있다: $need
+검증 범위 표의 \`검증함\` 이거나, ${tenv:-이} 환경의 마지막 판정이 PASS 가 아닌 것(보류·실패·이 환경 기록 없음)이다.
+앞 회차의 보류는 다음 회차에서 시험한다. 다른 환경의 통과는 이 환경의 통과로 치지 않는다.
+시험해서 판정을 적어라. 정말 할 수 없으면 \`SKIP(환경)\`·\`SKIP(위험)\`·\`SKIP(미비)\` 중 하나와 사유를 적는다."
     return 1
   fi
 
