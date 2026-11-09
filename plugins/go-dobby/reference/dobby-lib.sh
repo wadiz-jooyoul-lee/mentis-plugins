@@ -489,13 +489,64 @@ dobby_blocking() {
   printf '%s' "$n"
 }
 
-# dobby_testrun_new KEY [총시나리오수] [환경] — 회차를 자동 계산(기존 test-runs/ 폴더 수 + 1)하고
+# _testrun_carry KEY 환경 시험커밋 새회차폴더 — 같은 환경의 앞 회차에서 마지막 판정이 PASS 이고, 그 회차
+# 시험 커밋부터 이번 시험 커밋까지 계획의 `- **관련 파일**:` 이 바뀌지 않은 시나리오를 "S1<TAB>행" 으로 낸다.
+# 관련 파일 줄이 없거나, 앞 회차에 시험 커밋이 없거나, 마지막 판정이 FAIL 이면 내지 않는다(다시 시험).
+_testrun_carry() {
+  local key="$1" env="$2" cur="$3" new="$4" od p wt run id files base rnd cells
+  od="$(_order_dir "$key")"; p="$od/test-plan.md"
+  [ -f "$p" ] && [ -n "$env" ] && [ -n "$cur" ] || return 0
+  wt="$(_order_worktree "$key")"
+  git -C "$wt" cat-file -e "$cur^{commit}" 2>/dev/null || return 0
+  # 시나리오마다 관련 파일
+  local rel; rel="$(awk '
+    /^## S[0-9]+\./ { id = $2; sub(/\..*/, "", id); next }
+    /^## / { id = ""; next }
+    id != "" && /^- \*\*관련 파일\*\*:/ {
+      s = $0; out = ""
+      while (match(s, /`[^`]+`/)) { out = out "\t" substr(s, RSTART + 1, RLENGTH - 2); s = substr(s, RSTART + RLENGTH) }
+      if (out != "") print id out
+    }' "$p")"
+  [ -n "$rel" ] || return 0
+  # 앞 회차를 최신순으로 훑어 시나리오마다 마지막 판정(PASS·FAIL)을 정한다. SKIP·빈 칸은 더 앞 회차를 본다.
+  local seen=" " pick=""
+  for run in $(find "$od/test-runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort -r); do
+    [ "$run" = "${new%/}" ] && continue
+    [ -f "$run/result.md" ] || continue
+    grep -qE "^- \*\*환경\*\*: *$env *\$" "$run/result.md" || continue
+    base="$(grep -m1 -E '^- \*\*시험 커밋\*\*:' "$run/result.md" | grep -oE '`[0-9a-f]{7,40}`' | head -1 | tr -d '`')"
+    rnd="$(sed -nE '1s/.*회차 ([0-9]+).*/\1/p' "$run/result.md")"
+    while IFS=$'\t' read -r id v cells; do
+      case "$seen" in *" $id "*) continue ;; esac
+      case "$v" in PASS|FAIL) seen="$seen$id " ;; *) continue ;; esac
+      [ "$v" = PASS ] && [ -n "$base" ] && pick="$pick$id"$'\t'"$base"$'\t'"$rnd"$'\t'"$(basename "$run")"$'\t'"$cells"$'\n'
+    done < <(awk -F'|' '
+      function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
+      /dobby:scenarios/ { m = 1; next }
+      m && /^\|/ { if (!h) { h = 1; next } id = t($2); if (id ~ /^S[0-9]+$/) print id "\t" t($8) "\t" t($3) "|" t($4) "|" t($5) "|" t($6); next }
+      m && h && !/^\|/ { m = 0 }' "$run/result.md")
+  done
+  [ -n "$pick" ] || return 0
+  while IFS=$'\t' read -r id base rnd folder cells; do
+    [ -n "$id" ] || continue
+    files="$(printf '%s\n' "$rel" | awk -F'\t' -v s="$id" '$1==s { for (i = 2; i <= NF; i++) print $i; exit }')"
+    [ -n "$files" ] || continue
+    git -C "$wt" cat-file -e "$base^{commit}" 2>/dev/null || continue
+    local changed; changed="$(printf '%s\n' "$files" | tr '\n' '\0' | xargs -0 git -C "$wt" diff --name-only "$base" "$cur" -- 2>/dev/null)"
+    [ $? -eq 0 ] && [ -z "$changed" ] || continue
+    printf '%s\t| %s | %s | 이전 결과 가져옴 | PASS | %s회차(%s) %s PASS 가져옴, %s..%s 관련 파일 변경 0건 |\n' \
+      "$id" "$id" "$(printf '%s' "$cells" | sed 's/|/ | /g')" "$rnd" "$folder" "$id" "${base:0:11}" "${cur:0:11}"
+  done <<<"$pick"
+}
+
+# dobby_testrun_new KEY [총시나리오수] [환경] [시험커밋] — 회차를 자동 계산(기존 test-runs/ 폴더 수 + 1)하고
 # test-runs/{ts}/ + result.md 골격을 만든 뒤, status.md '## 테스트 실행 이력' 표에
 # 이번 회차 행(상태 테스트중·집계 0/0/0)을 추가한다. 폴더 경로 stdout.
 # (집계 칸의 "(전체 N)"은 참고 표기 — 대시보드는 앞 숫자 3개(성공/실패/skip)만 읽는다.)
 # 환경(dev·rc4 등)은 result.md 머리의 `- **환경**:` 줄로 들어간다 — 대시보드 검증 탭의 환경 칸.
+# 시험커밋(4번째, 없으면 워크트리 HEAD)은 `- **시험 커밋**:` 줄로 들어가고, 이전 결과 가져오기(_testrun_carry)의 기준이 된다.
 dobby_testrun_new() {
-  local key="$1" total="${2:-}" env="${3:-}" n dir sf now scope
+  local key="$1" total="${2:-}" env="${3:-}" commit="${4:-}" n dir sf now scope carry
   n="$(find "$(_order_dir "$key")/test-runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
   n=$((n + 1))
   dir="$(_order_dir "$key")/test-runs/$(_ts)"; mkdir -p "$dir"
@@ -524,6 +575,20 @@ dobby_testrun_new() {
         i=1; while [ "$i" -le "$total" ]; do printf '| S%s |  |  |  |  |  |  |  |\n' "$i"; i=$((i+1)); done
       fi
     } > "$dir/result.md"
+    # 같은 환경에서 통과했고 관련 파일이 그대로인 시나리오는 다시 시험하지 않는다.
+    # 범위 밖을 SKIP 으로만 채우면 앞 회차 PASS 가 보류로 덮였다(실측 FE1-2378 2회차: 90건).
+    [ -n "$commit" ] || commit="$(git -C "$(_order_worktree "$key")" rev-parse HEAD 2>/dev/null)"
+    if [ -n "$commit" ]; then
+      awk -v c="$commit" '/^- \*\*환경\*\*:/ { print; print "- **시험 커밋**: `" c "`"; next } { print }' \
+        "$dir/result.md" > "$dir/result.md.tmp" && mv "$dir/result.md.tmp" "$dir/result.md"
+      carry="$(_testrun_carry "$key" "$env" "$commit" "$dir")"
+      if [ -n "$carry" ]; then
+        printf '%s\n' "$carry" | awk -F'\t' '
+          FNR == NR { row[$1] = $2; next }
+          match($0, /^\| S[0-9]+ \|/) { id = substr($0, 3, RLENGTH - 4); if (id in row) { print row[id]; next } }
+          { print }' - "$dir/result.md" > "$dir/result.md.tmp" && mv "$dir/result.md.tmp" "$dir/result.md"
+      fi
+    fi
   fi
   sf="$(_order_dir "$key")/status.md"; now="$(_now)"
   if [ -f "$sf" ]; then
@@ -656,7 +721,7 @@ _testrun_open() {
   [ -n "$dir" ] && [ -d "$dir" ] && printf '%s' "$dir"
 }
 
-# dobby_testrun_current KEY [총시나리오수] [환경] — 열린 회차('테스트중')가 있으면 그 폴더를, 없으면 새 회차를 연다.
+# dobby_testrun_current KEY [총시나리오수] [환경] [시험커밋] — 열린 회차('테스트중')가 있으면 그 폴더를, 없으면 새 회차를 연다.
 dobby_testrun_current() {
   _testrun_open "$1" || dobby_testrun_new "$@"
 }
