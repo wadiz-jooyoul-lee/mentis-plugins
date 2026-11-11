@@ -34,7 +34,7 @@ mkdir -p ~/.config/go-dobby
 
 - **이미 값이 있는 변수**: `현재값`을 보여주고 **그대로 둘지 / 바꿀지** 묻는다. 아무 응답이 없으면 **유지**가 기본.
 - **비어 있고 기본값이 있는 변수**: 기본값을 제안하고 그대로 쓸지 바꿀지 묻는다.
-- **선택 변수**(`ORCHESTRATION_META_PATH`, `TEST_LOGIN_ID`/`TEST_LOGIN_PW`): 생략 시 영향(예: 메타 경로 미지정 → `$ORCHESTRATION_WORKSPACE/meta` 사용)을 설명하고 **생략을 허용**한다. 이미 값이 있으면 **보존**이 기본.
+- **선택 변수**(`ORCHESTRATION_META_PATH`, `TEST_LOGIN_ID`/`TEST_LOGIN_PW`, `TEST_MAKER_LOGIN_ID`/`TEST_ADMIN_LOGIN_ID`): 생략 시 영향(예: 메타 경로 미지정 → `$ORCHESTRATION_WORKSPACE/meta` 사용)을 설명하고 **생략을 허용**한다. 이미 값이 있으면 **보존**이 기본.
 
 > 여러 개를 한꺼번에 물어도 되지만, **"현재값 유지"가 항상 기본 선택지**여야 한다. 사용자가 명시적으로 바꾼 것만 반영한다.
 

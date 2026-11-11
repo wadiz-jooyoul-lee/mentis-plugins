@@ -539,6 +539,31 @@ _testrun_carry() {
   done <<<"$pick"
 }
 
+# dobby_precheck [환경] [argo] — 브라우저를 열기 전에 사람 손이 필요한 준비를 한 번에 본다(도구 호출 한 번으로 끝내려고 묶었다).
+#   대화형=예|아니오 (claude -p 는 CLAUDE_CODE_ENTRYPOINT=sdk-cli — 아니오면 아무것도 묻지 않는다)
+#   계정 세 줄: 아이디가 없으면 "없음". 비밀번호는 출력하지 않고, 칸별 값이 없으면 TEST_LOGIN_PW 를 함께 쓴다.
+#   창보기도구=있음|없음 — ~/.claude.json 에 chrome-devtools-window 가 등록됐는가
+#   argo 를 주면 그 환경 argocd 서버 로그인도 본다(SSO 라 사람만 로그인할 수 있다).
+dobby_precheck() {
+  local env="${1:-}" srv acct
+  [ "${CLAUDE_CODE_ENTRYPOINT:-}" = cli ] && echo "대화형=예" || echo "대화형=아니오"
+  for acct in "서포터:TEST_LOGIN_ID:TEST_LOGIN_PW" "메이커:TEST_MAKER_LOGIN_ID:TEST_MAKER_LOGIN_PW" "관리자:TEST_ADMIN_LOGIN_ID:TEST_ADMIN_LOGIN_PW"; do
+    IFS=: read -r name idv pwv <<<"$acct"
+    if [ -z "${!idv:-}" ]; then echo "계정.$name=없음($idv)"
+    elif [ -z "${!pwv:-}${TEST_LOGIN_PW:-}" ]; then echo "계정.$name=${!idv} (비밀번호 없음)"
+    elif [ -n "${!pwv:-}" ]; then echo "계정.$name=${!idv} (비밀번호 칸: $pwv)"
+    else echo "계정.$name=${!idv} (비밀번호 칸: TEST_LOGIN_PW)"; fi
+  done
+  jq -e '.mcpServers["chrome-devtools-window"]' ~/.claude.json >/dev/null 2>&1 && echo "창보기도구=있음" || echo "창보기도구=없음"
+  if [ "${2:-}" = argo ] && [ -n "$env" ]; then
+    srv="$(_ship_argo_server "$env")"
+    if [ -z "$srv" ]; then echo "argocd=대상아님($env)"
+    elif argocd account get-user-info --server "$srv" --grpc-web 2>/dev/null | grep -q 'Logged In: *true'; then echo "argocd=로그인됨($srv)"
+    else echo "argocd=로그인필요 — argocd login $srv --sso --grpc-web"; fi
+  fi
+  gh auth status >/dev/null 2>&1 && echo "gh=로그인됨" || echo "gh=로그인필요 — gh auth login"
+}
+
 # dobby_testrun_new KEY [총시나리오수] [환경] [시험커밋] — 회차를 자동 계산(기존 test-runs/ 폴더 수 + 1)하고
 # test-runs/{ts}/ + result.md 골격을 만든 뒤, status.md '## 테스트 실행 이력' 표에
 # 이번 회차 행(상태 테스트중·집계 0/0/0)을 추가한다. 폴더 경로 stdout.

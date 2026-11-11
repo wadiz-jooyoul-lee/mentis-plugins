@@ -86,7 +86,7 @@ description: 정기배포 날 stage 에 올라간 내 이슈를 확인하는 스
 
 ## 4. 이슈마다 핵심 시험 2~3개
 
-스킬이 골라 바로 실행한다(사람에게 고르게 하지 않는다). chrome-devtools 로 새 탭을 열어 `https://stage.wadiz.io` 주소로 바꿔 시험한다.
+스킬이 골라 바로 실행한다(사람에게 고르게 하지 않는다). 창 보기 도구(`mcp__chrome-devtools-window__*`)로 새 탭을 열어 `https://stage.wadiz.io` 주소로 바꿔 시험한다. 기본 도구(`mcp__chrome-devtools__*`)는 창이 없어 사람이 탭에서 로그인할 수 없다. 창 보기 도구가 없으면 기본 도구를 쓰고, 로그인이 필요한 시험은 보류한다.
 
 **고르는 기준**
 

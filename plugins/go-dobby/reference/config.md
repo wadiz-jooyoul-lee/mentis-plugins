@@ -127,6 +127,7 @@ ORCHESTRATION_META="${ORCHESTRATION_META_PATH:-$ORCHESTRATION_WORKSPACE/meta}"
 | `ORCHESTRATION_BACKUP_KEEP_DAYS` | 진행중 백업 보관 기간(일, 선택) | `14` | dobby-resolve |
 | `ORCHESTRATION_DASHBOARD_URL` | 대시보드 주소(선택). 설계 확정 뒤 자동 실행을 대시보드에 맡겨 띄울 때 쓴다 | `http://localhost:7253` | `/do` |
 | `TEST_LOGIN_ID` / `TEST_LOGIN_PW` | 테스트 계정(선택) | (없음 → 로그인 필요 테스트는 건너뜀) | dobby-test |
+| `TEST_MAKER_LOGIN_ID` / `TEST_ADMIN_LOGIN_ID` | 메이커·관리자 시험 계정 아이디(선택). 비밀번호는 `TEST_MAKER_LOGIN_PW`·`TEST_ADMIN_LOGIN_PW` 가 없으면 `TEST_LOGIN_PW` 를 쓴다 | (없음 → 시험 시작 전에 아이디만 묻는다) | dobby-test |
 
 - "사용 스킬"은 그 변수를 **직접 쓰는** 스킬을 표시한 것이다. 설정 파일(`config.env`)에는 모든 변수를 함께 두고, 각 스킬은 자기에게 필요한 값만 사용한다.
 - 기본값 중 일부(Jira 호스트·테스트 환경 매핑)는 와디즈 환경 기준이다. 첫 실행 시 각자 환경에 맞게 바꾸면 된다.
