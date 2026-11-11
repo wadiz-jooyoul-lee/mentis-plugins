@@ -5393,6 +5393,12 @@ _v2_last_failed() {
     "$(_order_dir "$1")/status.md" 2>/dev/null
 }
 
+# _v2_run_count KEY — 테스트 실행 이력 표의 회차 수.
+_v2_run_count() {
+  awk -F'|' '/^## /{ins=(index($0,"테스트 실행 이력")>0); next} ins && /^\|/ && $2 !~ /회차|---/ {n++} END{print n+0}' \
+    "$(_order_dir "$1")/status.md" 2>/dev/null
+}
+
 # _v2_phase_migrate KEY — 옛 규칙의 단계값을 새 규칙으로 한 번 옮기고 담당자 다섯 행을 맞춘다. /do 오더만.
 _v2_phase_migrate() {
   local key="$1" f ph new="" rd
@@ -5421,7 +5427,24 @@ _v2_phase_migrate() {
     ns="$(dobby_norm_state "$st")"; [ "$ns" = 작업중 ] && [ -z "$live" ] && ns=대기
     _v2_set "$key" "$sl" "$ns"
   done < <(_board_rows "$(_order_dir "$key")/orchestration.md")
-  [ "$(_order_phase "$key")" = 검증 ] && _v2_last_failed "$key" && _v2_set "$key" test-agent 완료 "" "마지막 회차 실패"
+  # 더한 행은 대기다. 지금 단계에서 실제로 누구 차례인지 끝 헬퍼와 같은 문구로 맞춘다.
+  local pr
+  case "$(_order_phase "$key")" in
+    검증)
+      if _v2_test_passed "$key"; then
+        _v2_set "$key" deploy-agent 완료 "" "배포 확인"
+        _v2_set "$key" test-agent 완료 "" "$(_v2_run_count "$key")회차 통과"
+      elif _v2_last_failed "$key"; then _v2_set "$key" test-agent 완료 "" "마지막 회차 실패"
+      fi ;;
+    배포)
+      [ -n "$(dobby_v2_env "$key")" ] \
+        || _v2_set "$key" deploy-agent "사람 차례" "" "통합 끝 — 배포하기" "/dobby-ship $key {환경}" ;;
+    통합)
+      case "$key" in TASK-*)
+        pr="$(_v2_pr_line "$key")"
+        [ -z "$pr" ] || _v2_set "$key" deploy-agent "사람 차례" "" "PR 머지 — 기준 브랜치로" "$pr 머지 뒤 /dobby-resolve $key" ;;
+      esac ;;
+  esac
   dobby_event "$key" "상태 규칙을 다섯 담당자로 옮김 — 단계 ${ph:-없음}${new:+ → $new}" 2>/dev/null
 }
 
