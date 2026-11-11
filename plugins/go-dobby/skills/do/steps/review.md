@@ -7,18 +7,6 @@
 
 **직접 `git diff` 를 치기 전에 `dobby_review_brief` 를 먼저 쓴다.** 리뷰 비용은 읽는 양이 아니라 **왕복 횟수**다. 한 번 부를 때마다 그때까지 쌓인 문맥을 다시 읽기 때문이다. 미리 받아 두면 그만큼 왕복이 준다.
 
-## 시작할 때
-
-리뷰는 개발 담당과 다른 행으로 보드에 올린다. 구현한 쪽과 리뷰하는 쪽을 보드에서 구별하기 위해서다. 슬러그는 라운드가 바뀌어도 `review-agent` 하나를 쓴다. 라운드마다 새 슬러그를 만들면 보드에 같은 리뷰어가 여러 명 생긴다.
-
-```
-dobby_agent_add {키} review-agent "리뷰어" "{N}차 리뷰" 리뷰 {N}
-dobby_agent_state {키} review-agent 리뷰 {N} "{N}차 리뷰"
-dobby_session_log {키} review-agent round-{N} "{N}차 리뷰" {워크트리경로}
-```
-
-첫 줄은 행이 이미 있으면 아무것도 하지 않는다. 그래서 2차 리뷰부터는 둘째 줄이 상태, 라운드, 설명을 바꾼다(다섯째 인자가 설명 칸이다).
-
 ## 리뷰 기준
 
 `## 리뷰 항목` 을 먼저 전부 확인하고, 그다음 아래를 본다.
@@ -33,7 +21,7 @@ dobby_session_log {키} review-agent round-{N} "{N}차 리뷰" {워크트리경�
 
 ## 결과 쓰기
 
-`dobby_review_path {키} {N} review-agent` 가 알려 준 경로에 쓴다. N 은 단계 판정에서 구한 최신 라운드 번호다. 첫 리뷰면 1 이고, 수정 뒤의 리뷰면 수정 세션이 열어 둔 빈 폴더의 번호다.
+`dobby_review_path {키} {N} review-agent` 가 알려 준 경로에 쓴다. N 은 시작 헬퍼가 알려 준 리뷰 차수다(설명 칸의 "{N}차 리뷰").
 
 각 지적은 **`## [blocker|major|minor|nit] {제목 한 줄}`** 카드로 시작한다. 이 머리글을 `dobby_blocking` 이 센다. 카드 머리글이 없으면 그 파일은 결함 1건으로 세어진다.
 
@@ -46,8 +34,6 @@ dobby_session_log {키} review-agent round-{N} "{N}차 리뷰" {워크트리경�
 ```
 dobby_review_lint {키} {N}
 dobby_blocking {키} {N}
-dobby_phase {키} 리뷰
-dobby_agent_state {키} review-agent 완료
 ```
 
-`dobby_blocking` 결과를 알린다. 0 이면 다음은 통합, 0 보다 크면 다음은 수정이다.
+`dobby_blocking` 결과가 0 이면 `dobby_v2_end {키} 통과`, 0 보다 크면 `dobby_v2_end {키} 지적 {건수}` 로 끝낸다. 끝 헬퍼가 리뷰 파일의 지적 수를 다시 세어 맞지 않으면 `거부:` 를 낸다. 다음은 통과면 통합, 지적이면 수정이다.

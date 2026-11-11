@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # go-dobby 작업 표시 훅 — UserPromptSubmit·Stop·SessionEnd. 오더를 잡은 세션의 표시 상태를 대화 차례마다 고친다.
 # 표시는 dobby-lib.sh 의 _presence_claim 이 만든다. 이 훅은 만들지 않는다. 절대 막지 않는다(항상 exit 0)
+# 세션이 닫히거나 닫기 안내로 멈췄는데 이 세션의 담당자 행이 아직 작업중이면(끝 헬퍼를 부르지 않음) 사람 차례 "세션 끊김"으로 돌린다.
 
 set -u
 command -v jq >/dev/null 2>&1 || exit 0
@@ -22,16 +23,29 @@ set_state() {
     && mv "$F.tmp" "$F"
 }
 
+# lost — 이 세션이 맡은 행이 작업중이면 사람 차례로 돌린다.
+lost() {
+  local key slug
+  key="$(jq -r '.keys[-1] // empty' "$F" 2>/dev/null)"; slug="$(jq -r '.slug // empty' "$F" 2>/dev/null)"
+  [ -n "$key" ] && [ -n "$slug" ] || return 0
+  export ORCHESTRATION_META="$META"
+  # shellcheck disable=SC1091
+  . "$(dirname "$0")/../reference/dobby-lib.sh" >/dev/null 2>&1 || return 0
+  [ "$(_v2_state "$key" "$slug")" = 작업중 ] || return 0
+  dobby_agent_state "$key" "$slug" "사람 차례" "" "세션 끊김 — 이어서 진행하기" "/do $key 또는 claude --resume $SID" >/dev/null 2>&1
+  dobby_event "$key" "$slug 세션이 끝을 적지 않고 멈춤 — 사람 차례로 돌림(세션 $SID)" 2>/dev/null
+}
+
 case "$(printf '%s' "$IN" | jq -r '.hook_event_name // empty')" in
   UserPromptSubmit) set_state working ;;
   Stop)
     if printf '%s' "$IN" | jq -r '.last_assistant_message // empty' | grep -q '이 세션을 닫아 주세요'; then
-      set_state done
+      lost; set_state done
     elif [ "$(printf '%s' "$IN" | jq '.background_tasks // [] | length')" -gt 0 ]; then
       set_state working   # 백그라운드 작업이 끝나면 세션이 다시 깨어난다
     else
       set_state waiting
     fi ;;
-  SessionEnd) rm -f "$F" ;;
+  SessionEnd) lost; rm -f "$F" ;;
 esac
 exit 0

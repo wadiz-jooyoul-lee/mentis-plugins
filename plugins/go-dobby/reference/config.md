@@ -43,7 +43,7 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 | `dobby_set_session KEY [CWD]` | 부트스트랩 미경유 흐름에서 | status.md `## 세션`에 세션 ID·작업 경로 기록(cwd 인코딩·최신 전사 탐색 포함 — 손 계산 금지). 대시보드 "이어가기" 근거 |
 | `dobby_set_kind KEY 종류` | (d) 종류 확인 진입 시 | status.md `- **종류**:` 기록/갱신(정본 개발·산출물·작업 정리로 자동 교정) |
 | `dobby_agent_add KEY 슬러그 이름 설명 상태 [라운드]` | 스폰 전(선갱신) | 상태표 행 추가(중복 무시, 활성이면 착수=now) |
-| `dobby_agent_state KEY 슬러그 상태 [라운드] [설명]` | 전이마다 | 그 행 상태/갱신을 수정. 라운드·설명을 주면 그 칸도 바꾼다(비활성→활성 진입 시 착수 갱신) |
+| `dobby_agent_state KEY 슬러그 상태 [라운드] [설명] [사람 할 일]` | 전이마다 | 그 행 상태/갱신을 수정. 라운드·설명을 주면 그 칸도 바꾼다. 상태가 바뀌면 착수를 지금으로 바꾼다. `사람 할 일` 칸은 `사람 차례`·`막힘` 일 때만 남기고 그 밖의 상태에서는 비운다. `/do` 세션은 직접 부르지 않는다(시작·끝 헬퍼가 부른다) |
 | `dobby_add_condition KEY "조건 한 줄"` | **P1 닫히는 조건 선언 직후(필수)·P8 범위 확장** | status.md `## 닫히는 조건 항목` 표에 `C{n}` 행 추가(번호 자동, stdout). 테스트 시나리오가 이 번호를 달고 대시보드가 "조건 N개 중 M개 확인"을 센다 |
 | `dobby_set_title KEY "제목"` | **이슈 조회 직후(필수)** | status.md 제목을 실제 요약으로 갱신(골격 임시 제목 덮어씀). dobby-start 경유 여부와 무관 |
 | `dobby_append KEY 파일 "블록"` | append 문서마다 | decisions.md 등 append-only 문서에 읽기 없이 블록 추가(토큰 0) |
@@ -57,7 +57,7 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 | `dobby_track_scan KEY [환경]` | dobby-ship 1단계 · dobby-test 2-1단계 | 변경 diff 로 **광고·데이터 수집 접촉**을 기계 판정해 `track-scan.md` 에 남긴다(보고 — 막지 않는다). ① 수집·광고 코드 자체(`packages/core/src/metrics/`·`packages/event-tracker/`·`react-ad-boundary`·`banner`·`winclude/tracking*.jsp`) ② 바뀐 줄의 심볼(`trackingEvent`·`trackingCustomTag`·`@wadiz/metrics`·`dataLayer`·`AdBoundary`·`_refer_section_st` 등) — **지워진 줄도 본다**(추적을 지운 것이 가장 조용한 사고다). 머지된 뒤에는 3점 diff 가 비므로 **그 환경 베이스의 PR diff** 로 떨어진다. 못 읽으면 `접촉 없음` 이 아니라 **`⚠ 확인 불가`** 로 적는다 |
 | `dobby_testrun_lint 결과폴더` | dobby-test 마감(정리 직전) | 근거 칸에 **파일 이름만** 적힌 행이 있으면 거부(관측한 사실을 적게 한다). **`track-scan` 이 보고한 `[수집]`·[광고]` 갈래가 result.md 에 없어도 거부** — 광고·수집은 화면에 안 보이게 깨져 다른 시나리오가 통과해도 따로 봐야 한다. 확인 불가면 시나리오를 넣고 `SKIP(…)` 으로 사유를 적는다(빼지 말 것). **이번 회차 대상(검증 범위 `검증함` + 같은 환경 마지막 판정이 PASS 가 아닌 것)인데 판정이 없어도 거부** |
 | `dobby_testrun_prune 결과폴더` | dobby-test 8단계(요약을 쓴 **뒤**) | 그 회차에서 `result.md`·`summary.html` 이 이름으로 가리키지 않는 그림만 지운다. 테스트 중 화면 확인하려고 찍은 것이 남는 문제. test-runs 폴더 안·그림 확장자만 |
-| `dobby_testrun_update KEY 폴더시각 상태 [성공/실패/skip]` | 시나리오마다·마감 | 이력 표의 그 회차 행만 상태·집계 수정(통독 없음). 개발 담당 행 상태도 함께 바꾼다 — 테스트중이면 `검증`, `완료` 면 `완료`, 그 밖이면 `대기` (`dobby_testrun_new` 도 회차를 열 때 `검증` 으로) |
+| `dobby_testrun_update KEY 폴더시각 상태 [성공/실패/skip]` | 시나리오마다·마감 | 이력 표의 그 회차 행만 상태·집계 수정(통독 없음). 테스터 행(`test-agent`, 없는 옛 오더는 개발 담당 행)도 함께 바꾼다 — 테스트중이면 `작업중` "N회차 시험 중 · 성공/실패/건너뜀", `완료` 면 `완료` "N회차 마감", 그 밖이면 `대기` (`dobby_testrun_new` 도 회차를 열 때 `작업중` 으로) |
 | `dobby_split_dev KEY [check]` | 기존 /do 오더 정리(사람이 승인한 뒤) | "분석/개발자" 한 행을 분석(`analysis-agent`)과 개발자로 나누고, 설계 쪽 세션 기록(`design`·`takeover`·`change-*`·`answer-*`)을 분석 행으로 옮긴다. 자동 실행 중이면 건너뜀. `check` 는 바꾸지 않고 할 일만 출력 |
 | `dobby_testrun_current KEY [전체시나리오수] [환경] [시험커밋]` | dobby-test 묶음 모드 시작 | 이력 표의 마지막 회차가 `테스트중` 이면 그 폴더, 아니면 `dobby_testrun_new` 로 새 회차(경로 stdout) |
 | `dobby_verify_next KEY` | /do 검증 세션 시작·끝 | 판정이 빈 시나리오가 든 첫 검증 묶음 `묶음<TAB>S1,S2`(빈 것만). 다 찼으면 `done`. 묶음은 테스트 계획의 `## 검증 묶음` 표를 따르고, 표에 없는 시나리오는 번호 순서로 4개씩 붙인다. `## 검증 범위` 밖 시나리오는 빼고, 비는 묶음은 내지 않는다 |
@@ -77,10 +77,16 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 | `dobby_conflict_evidence 임시워크트리 브랜치 환경브랜치` | 충돌을 풀기 전 | 충돌 파일마다 양쪽 이력·diff 를 한 번에. **근거 없이 한쪽을 고르지 않는다** |
 | `dobby_bridge_finish 임시워크트리 브랜치 환경브랜치` | 충돌을 푼 뒤 | 표시자·스테이지·저장소 규칙을 검사하고 커밋·푸시·임시 워크트리 정리 |
 | `dobby_ship_stage KEY 저장소 환경 단계 [PR] [빌드] [비고]` | dobby-ship 단계 전이마다 | status.md `## 배포` 표를 **(저장소, 환경)별 한 행**으로 upsert. **어휘 아홉 개·환경 네 개·저장소 둘 밖이면 거부.** 저장소 칸이 없는 옛 6칸 표는 이때 7칸으로 올린다. 다음 실행이 여기서 이어받는다 |
+| `dobby_v2_step KEY [변경\|light]` | 시작 헬퍼·run.sh·대시보드 | 이번에 할 일 한 줄: `단계<TAB>담당자 슬러그<TAB>설명<TAB>지시 문서`. 할 일이 없으면 `멈춤<TAB>이유`. 옛 규칙 오더는 이때 한 번 옮긴다(`- **단계 규칙**: 다섯 담당자`) |
+| `dobby_v2_begin KEY [인자…]` | `/do` 시작(입력 검사 훅이 부름) | 단계를 정하고 담당자 다섯 행을 맞추고, 단계값·세션 기록·작업 표시를 적고, 자기 행을 `작업중` 으로. 첫 줄 `시작함`·`이미 시작됨`·`시작 전(메타 없음)`·`멈춤`(반환 2)·`겹침`(반환 3, 다른 살아 있는 세션이 작업 중) |
+| `dobby_v2_end KEY 결과 [덧붙임]` | `/do` 각 지시 문서의 마지막 줄 | 결과가 사실(작업 폴더 변경, 문서 수정 시각, 리뷰 지적 수, 커밋·푸시, 배포 표, 회차)과 맞는지 확인하고 상태를 다음 차례로 옮긴다. 안 맞으면 `거부: 이유` 와 1. 결과 어휘는 `skills/do/SKILL.md` "시작과 끝" |
+| `dobby_v2_reconcile KEY [뺄 세션]` | 시작 헬퍼·run.sh | 이 오더를 잡은 살아 있는 세션이 없는데 `작업중` 인 행을 `대기` 로 돌린다 |
+| `dobby_v2_wait_mark KEY 저장소 wait-review\|wait-build PR또는run 경과분` | run.sh 기다리는 동안 | 배포담당 행을 `기다림` 으로, 설명에 무엇을 몇 분째 기다리는지 |
+| `dobby_v2_external_check [KEY…]` | 대시보드 다음 할 일 판정(10초 주기, 오더마다 60초 저장) | 배포담당이 `사람 차례` 인 오더의 PR 을 GitHub 에서 본다. 머지됐으면 `완료`, 머지 없이 닫혔으면 `막힘` |
 | `dobby_v2_autorun KEY` | `/do` 설계 확정 직후 | 대시보드 '자동 실행'(run.sh, 커밋·푸시 승인 포함)을 불러 띄운다. 0 시작 · 1 대시보드가 거부(이유 출력) · 2 대시보드에 닿지 못함(직접 실행 명령 출력). 대시보드가 띄워야 세션을 닫아도 실행이 살아 있다 |
 | `dobby_v2_reuse_ok KEY SID` | run.sh 다음 세션 띄우기 전 | 다음 일이 수정이고 SID 세션의 마지막 문맥 12만 이하·5분 안이면 "문맥<TAB>경과초" 출력 후 0, 아니면 출력 없이 1. 근거는 `skills/do/session-reuse.md` |
 | `dobby_v2_next_hint KEY` | `/do` 세션 마무리(대화형) | 이어 쓰는 쪽이 쌀 때만 `다음` 칸 안내 세 줄(기한 지금+4분)을 출력. 아니면 출력 없음. 헤드리스 세션에서는 늘 침묵 |
-| `dobby_v2_change_open KEY [check]` | `/do` 변경 접수 | 자동 실행 중이면 거부(1). `check` 면 그 확인만 한다. 아니면 해결 표시를 무르고, 다음 리뷰 차수 빈 폴더를 열고(마지막 폴더가 비었으면 재사용), 단계를 분석으로 바꾼 뒤 리뷰 시작 차수를 출력한다. 그다음 `dobby_design_ack` 를 부르면 새 세션이 그 변경을 구현한다 |
+| `dobby_v2_change_open KEY [check]` | `/do` 변경 접수 | 자동 실행 중이면 거부(1). `check` 면 그 확인만 한다. 아니면 해결 표시를 무르고, 다음 리뷰 차수 빈 폴더를 열고(마지막 폴더가 비었으면 재사용), 단계를 설계로 바꾼 뒤 리뷰 시작 차수를 출력한다. 그다음 `dobby_design_ack` 를 부르면 새 세션이 그 변경을 구현한다 |
 | `dobby_release_note KEY 배포일 저장소 브랜치 행번호 PR 머지 [페이지주소]` | dobby-release 기록 단계 | status.md `## 릴리즈 노트` 표를 **(배포일, 저장소)별 한 행**으로 upsert. 배포일은 `YYYY-MM-DD`, 머지 칸은 `머지됨·머지 안 함·충돌·건너뜀·확인 못 함` 밖이면 거부. 표가 없으면 `## 세션` 앞에 만든다. 대시보드 오더 화면이 이 표로 등록 여부를 보여 준다 |
 | `dobby_commit_push 워크트리 브랜치 "메시지"` | P6 통과 후 | commit --no-verify + push. **⛔ 메시지에 내부 용어(`round-N`·리뷰 반영·슬러그)·금지 서명(Co-Authored-By 등) 감지 시 거부**(코드 강제) |
 | `dobby_bootstrap_inline KEY "제목" 종류 슬러그 "이름" "설명" [상태] [CWD]` | P4-L·P4-C·P4-W 인라인 분기 | status 골격+제목+종류+세션+상태표 1행+agent-logs(메인 세션 전사)를 한 번에 |

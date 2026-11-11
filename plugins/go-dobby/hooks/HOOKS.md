@@ -184,8 +184,9 @@ v2.1.246에서 실측 확인: 설치본 스크립트를 수동 실행하면 deny
 | G18 | twg Jira 조회(`get`·`bulk-get`·`query`)에 결과를 줄이는 옵션(`--fields`·`--field`·`--select`·`--output-file`·`--output-summary`(none 제외)·파이프·파일 저장·query `--limit`/`--first` 20 이하)이 없으면 차단. 옵션 없는 get 2만 6천 자, bulk-get 2건 17만 자(2026-10-19 실측). `TWG_RAW=1` 우회. dobby 스코프와 무관한 전역 규칙 | PreToolUse·Bash | deny | settings.json(if: twg — dobby-init 등록) | 토큰 절감(`skills/do/token-diet.md`) |
 | G19 | 문맥 25만 토큰 이상 세션에서 `/do`·`/go-dobby:*`·`/dobby-*` 시작 금지(`/dobby-qa` 는 제외 — 예약으로 같은 세션에서 도는 폴링 루프). 기준 `DOBBY_PROMPT_GUARD_CTX`, 끄기 `DOBBY_PROMPT_GUARD=off`(config.env) | UserPromptSubmit | block | 플러그인 hooks.json(prompt-guard.sh) | 상동 |
 | G20 | `/do` 세션 닫기 안내("이 세션을 닫아 주세요") 뒤 일반 요청에 경고(막지 않음) | UserPromptSubmit | systemMessage + additionalContext | 플러그인 hooks.json(prompt-guard.sh) | 상동 |
+| — | `/do {키}` 시작 헬퍼 — G19 에 막히지 않으면 `dobby_v2_drift_apply` 와 `dobby_v2_begin` 을 불러 단계·담당자·지시 문서를 정하고 담당자 행을 `작업중` 으로 적는다. 결과를 세션 문맥에 붙인다. 새 세션(기록 파일 없음)에서도 돈다. 실패해도 막지 않고 이벤트 로그에 남긴다. `DOBBY_PROMPT_GUARD=off` 여도 돈다 | UserPromptSubmit | additionalContext(막지 않음) | 플러그인 hooks.json(prompt-guard.sh) | /do 시작과 끝 |
 | — | 안전 훅 미등록·구버전 감지 안내 | SessionStart | 안내 출력 | 플러그인 hooks.json(라이프사이클 훅은 정상 발화) | dobby-init |
-| — | 작업 표시 상태 갱신 — 질문 입력은 working, 응답 끝은 waiting(세션 닫기 안내면 done, 백그라운드 작업이 남으면 working), 세션 종료는 표시 삭제. 표시는 `_presence_claim`(기록 헬퍼)이 `$ORCHESTRATION_META/.presence/{세션}.json` 에 만들고 대시보드 판정·run.sh 가 읽는다 | UserPromptSubmit·Stop·SessionEnd | 상태 기록(막지 않음) | 플러그인 hooks.json(presence.sh) | /do 다음 할 일 판정 |
+| — | 작업 표시 상태 갱신 — 질문 입력은 working, 응답 끝은 waiting(세션 닫기 안내면 done, 백그라운드 작업이 남으면 working), 세션 종료는 표시 삭제. 세션이 닫히거나 닫기 안내로 멈췄는데 그 세션의 담당자 행이 아직 `작업중` 이면(끝 헬퍼를 부르지 않음) `사람 차례` "세션 끊김"으로 돌리고 `사람 할 일` 칸에 `/do {키}` 와 `claude --resume {세션}` 을 적는다. 표시는 `_presence_claim`(기록 헬퍼)이 `$ORCHESTRATION_META/.presence/{세션}.json` 에 만들고 대시보드 판정·run.sh 가 읽는다 | UserPromptSubmit·Stop·SessionEnd | 상태 기록(막지 않음) | 플러그인 hooks.json(presence.sh) | /do 다음 할 일 판정 |
 
 ## 로드맵 (다음 단계 후보 — 분석 완료, 미구현)
 
