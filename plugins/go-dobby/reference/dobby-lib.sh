@@ -5282,7 +5282,7 @@ _dobby_locked() {
 }
 
 dobby_agent_add()      { _dobby_locked "$1" _dobby_agent_add_u "$@"; }
-dobby_agent_state()    { _dobby_locked "$1" _dobby_agent_state_u "$@"; }
+dobby_agent_state()    { _dobby_locked "$1" _dobby_agent_state_one_u "$@"; }
 dobby_event()          { _dobby_locked "$1" _dobby_event_u "$@"; }
 dobby_phase()          { _dobby_locked "$1" _dobby_phase_u "$@"; }
 dobby_session_log()    { _dobby_locked "$1" _dobby_session_log_u "$@"; }
@@ -5339,6 +5339,19 @@ _v2_dev_slug() { _board_dev_slug "$(_order_dir "$1")/orchestration.md"; }
 
 # _v2_state KEY SLUG — 그 담당자의 지금 상태.
 _v2_state() { _board_cell "$(_order_dir "$1")/orchestration.md" "$2" 상태; }
+
+# 다섯 담당자 오더는 한 번에 한 명만 일한다. 누가 작업중이 되면 다른 살아 있는 세션이 잡지 않은 작업중 행을 대기로 돌린다
+_dobby_agent_state_one_u() {
+  _dobby_agent_state_u "$@" || return
+  [ "$(dobby_norm_state "$3")" = 작업중 ] && _v2_rule_ok "$1" || return 0
+  local s st r held
+  held="$(_v2_live_sessions "$1" "$(_session_id)" | cut -f2)"
+  while IFS=$'\t' read -r s st r; do
+    [ "$s" != "$2" ] && [ "$st" = 작업중 ] || continue
+    printf '%s\n' "$held" | grep -qxF -- "$s" && continue
+    _v2_set "$1" "$s" 대기 "" "다른 일로 넘어감"
+  done < <(_board_rows "$(_order_dir "$1")/orchestration.md")
+}
 
 # _v2_set KEY SLUG 상태 [라운드] [설명] [사람 할 일] — 상태가 그대로면 이벤트 없이 칸만 고친다.
 _v2_set() {
