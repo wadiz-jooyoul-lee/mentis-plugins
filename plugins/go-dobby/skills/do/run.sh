@@ -22,17 +22,23 @@
 #
 # MCP: 세션마다 크롬 도구 하나만 붙인다(--strict-mcp-config).
 #
+# 다음 할 일: 차례마다 dobby_v2_step 이 정한다(/do 세션·훅과 같은 판정). 설계·설계 확인·판단 답 차례면 사람이 할 일이라 멈춘다.
 # 단계 밖 변경: 차례마다 dobby_v2_drift_apply 로 /do 밖에서 바뀐 설계·코드를 먼저 본다. 설계가 바뀌었으면 멈추고,
 # 코드만 바뀌었으면 리뷰부터 잇는다. 이 셸이 띄운 세션이 끝나면 기준점을 남긴다(dobby_v2_checkpoint).
 #
+# 진행 표시: 상태 문서에 `- **자동 실행**:` 줄을 둔다. 실행 중에는 pid·시작 시각·세션 수를, 끝나면 "끝 — 이유" 또는
+# "멈춤 — 이유" 를 적는다. 세션이 상태를 정리하지 않고 끝나면 dobby_v2_reconcile 이 작업중 행을 대기로 돌린다.
+#
 # 멈추는 경우:
-#   dobby-order 가 만든 메타 · 설계 미확정 · 통합 완료(--with-test 없고 auto 배포 오더도 아닐 때, TASK- 작업은 언제나) · 검증 전부 통과
-#   · 배포 표의 막힘(⚠) · 리뷰봇 30분 · 빌드 30분
-#   · 해결/종료/완료/보류 단계 · 모르는 단계값 · 단계 밖 설계 변경
+#   dobby-order 가 만든 메타 · 설계 미확정 · 판단 답 차례(보류) · 통합 완료(--with-test 없고 auto 배포 오더도 아닐 때)
+#   · TASK- 작업의 PR 머지 차례 · 검증 전부 통과 · 배포 표의 막힘(⚠) · 리뷰봇 30분 · 빌드 30분
+#   · 끝난 오더 · 모르는 단계값 · 단계 밖 설계 변경
 #   · 세션이 끝났는데 아무것도 바뀌지 않음(사람 판단이 필요해 스킬이 멈춘 것) · 세션 오류 · 상한 도달
 set -uo pipefail
 
-die() { END_NOTE="자동 실행 중단: $1"; printf '%s\n' "$END_NOTE" >&2; exit "${2:-1}"; }
+die() { END_NOTE="자동 실행 중단: $1"; END_KIND=멈춤; printf '%s\n' "$END_NOTE" >&2; exit "${2:-1}"; }
+finish() { END_NOTE="$1"; END_KIND=끝; echo "$END_NOTE"; exit 0; }
+END_KIND=멈춤
 
 KEY="${1:-}"; [ -n "$KEY" ] && shift || die "오더 키를 주세요. 예: run.sh FE1-1234"
 MODE=auto; MAX=""; WITH_TEST=0; APPROVE=0
@@ -67,20 +73,12 @@ grep -q '^## 지난 세션' "$D/status.md" || [ "$(phase)" = 착수 ] \
 [ "$(_v2_presence "$KEY")" = working ] \
   && die "터미널 세션이 $KEY 를 작업 중입니다. 그 세션이 끝난 뒤 다시 실행하세요(작업 표시: $ORCHESTRATION_META/.presence)"
 
-design_approved() {
-  local rev; rev="$(dobby_design_rev "$KEY")"
-  _v2_takeover_pending "$KEY" && return 1   # dobby-order 에서 옮겨 와 이어받기 설계가 아직 확정 전
-  [ -n "$rev" ] && [ -f "$D/design-ack.json" ] &&
-    jq -r '.["사용자"] // empty, .auto // empty' "$D/design-ack.json" | grep -qx "$rev"
-}
-
-test_passed() { _v2_test_passed "$KEY"; }
-
 AUTO_ENV="$(dobby_v2_env "$KEY")"
 [ -n "$MAX" ] || { [ -n "$AUTO_ENV" ] && MAX=20 || MAX=10; }
 # auto 배포 오더는 멈출 때 사람에게 알린다. 사람이 지켜보지 않는 실행이기 때문이다.
 stop() {
-  [ -n "$AUTO_ENV" ] && dobby_v2_notify "$KEY" "자동 실행 멈춤 — $1" >/dev/null
+  if [ -n "$AUTO_ENV" ]; then dobby_v2_notify "$KEY" "자동 실행 멈춤 — $1" >/dev/null
+  else dobby_event "$KEY" "자동 실행 멈춤 — $1" 2>/dev/null; fi
   die "$1"
 }
 
@@ -113,7 +111,10 @@ PROFILE="$HOME/.cache/dobby-chrome/$KEY"
 # 사무실에 이 실행을 작업 단위 하나로 알린다. 끝날 때(멈춤·오류·완료 모두) 서류철이 캐비닛으로 간다
 UBY=auto; [ -n "$AUTO_ENV" ] && UBY=full
 dobby_unit_start "$KEY" "$UBY" "$UBY:$$"
-trap 'rm -rf "$PROFILE"; dobby_unit_end "$KEY" "$UBY" "${END_NOTE:-자동 실행이 끝났습니다}" "$UBY:$$"' EXIT
+STARTED="$(date '+%m-%d %H:%M')"
+mark() { _dobby_locked "$KEY" _v2_set_line "$KEY" "자동 실행" "실행 중 · pid $$ · 시작 $STARTED · 세션 $1"; }
+mark 0
+trap 'rm -rf "$PROFILE"; _dobby_locked "$KEY" _v2_set_line "$KEY" "자동 실행" "$END_KIND — ${END_NOTE:-자동 실행이 끝났습니다}"; dobby_v2_reconcile "$KEY"; dobby_unit_end "$KEY" "$UBY" "${END_NOTE:-자동 실행이 끝났습니다}" "$UBY:$$"' EXIT
 if jq -e '.mcpServers["chrome-devtools"]' ~/.claude.json >/dev/null 2>&1 \
    && jq --arg p "$PROFILE" '{mcpServers: {"chrome-devtools": (.mcpServers["chrome-devtools"]
         | .args = ([(.args // [])[] | select(. != "--isolated")] + ["--userDataDir", $p]))}}' ~/.claude.json >"$MCP_CFG" 2>/dev/null; then
@@ -139,59 +140,75 @@ while :; do
   [ "$(dobby_v2_drift_apply "$KEY")" = design ] \
     && stop "단계 밖에서 설계 문서가 바뀌었습니다. 터미널에서 /do $KEY 로 바뀐 설계를 확인해 주세요"
   ph="$(phase)"
-  case "$ph" in
-    해결|종료|완료) END_NOTE="$KEY 는 이미 $ph 단계입니다."; echo "$END_NOTE"; exit 0 ;;
-    보류)     [ -n "$AUTO_ENV" ] && die "$KEY 는 판단이 필요해 멈춰 있습니다. 설계 문서 '확인이 필요했던 것'을 보고 터미널에서 /do $KEY 로 답해 주세요"
-              die "$KEY 는 보류 중입니다. 다시 진행하려면 상태 문서의 단계를 되돌린 뒤 실행하세요" ;;
-    착수|"")  stop "설계가 끝나지 않았습니다. 터미널에서 /do $KEY 로 설계를 확정하세요" ;;
-    분석)     design_approved || stop "설계가 확정되지 않았습니다. 터미널에서 /do $KEY 로 설계를 보고 \"확정\"해 주세요" ;;
-    구현|리뷰) ;;
-    통합)
-      case "$KEY" in TASK-*) END_NOTE="통합에서 PR 까지 만들었습니다. PR 을 머지한 뒤 /dobby-resolve $KEY 로 해결 처리하세요."; echo "$END_NOTE"; exit 0 ;; esac
-      if [ -n "$AUTO_ENV" ]; then
-        dobby_ship_reopen "$KEY" >/dev/null
-        # 결과를 먼저 받고 나눈다. `IFS=… read <<<"$(…)"` 로 쓰면 괄호 안 함수까지 탭 구분자를 물려받는다.
-        nx="$(dobby_v2_ship_next "$KEY")"
-        IFS=$'\t' read -r what repo tgt since <<<"$nx"
-        el=$(( $(date +%s) - $(_v2_epoch "${since:-}" || date +%s) ))
-        case "$what" in
-          blocked) stop "배포가 막혔습니다($repo $AUTO_ENV): $tgt. 상태 문서 '## 배포' 표의 비고를 보고 처리한 뒤 /do $KEY 로 이어 가세요" ;;
-          wait-review)
-            [ "$el" -lt 1800 ] || stop "리뷰봇 리뷰가 30분 동안 오지 않았습니다($repo $AUTO_ENV PR $tgt). 리뷰어가 붙었는지 확인하고 /do $KEY 로 이어 가세요"
-            if [ "$el" -ge 600 ] && [ "$noted" != "$tgt" ]; then
-              dobby_v2_notify "$KEY" "리뷰 지연 — $repo $AUTO_ENV PR $tgt 에 리뷰봇 리뷰가 10분째 없습니다. 30분까지 기다립니다." >/dev/null
-              noted="$tgt"
-            fi
-            printf '리뷰봇 리뷰를 기다립니다(%s PR %s, %d분째) · %s\n' "$repo" "$tgt" $((el / 60)) "$(date '+%H:%M')"
-            sleep 120; continue ;;
-          wait-build)
-            [ "$el" -lt 1800 ] || stop "빌드가 30분 동안 끝나지 않았습니다($repo $AUTO_ENV run $tgt). gh run view $tgt 로 확인하고 /do $KEY 로 이어 가세요"
-            printf '빌드를 기다립니다(%s run %s, %d분째) · %s\n' "$repo" "$tgt" $((el / 60)) "$(date '+%H:%M')"
-            sleep 60; continue ;;
-          ship|verify) ;;
-          *) stop "배포 다음 일을 정하지 못했습니다: ${what:-빈 값}" ;;
-        esac
-      else
-        [ "$WITH_TEST" = 1 ] || { END_NOTE="통합까지 끝났습니다. 배포한 뒤 run.sh $KEY --with-test 또는 /do $KEY 로 검증하세요."; echo "$END_NOTE"; exit 0; }
-      fi ;;
-    검증)     test_passed && { END_NOTE="검증을 전부 통과했습니다. /dobby-resolve $KEY 로 해결 처리하세요."; echo "$END_NOTE"; exit 0; }
-              # 열린 회차를 잇는 세션은 다음 검증 묶음이다. 묶음마다 세션 하나라 상한에 하나씩 더해 센다.
-              _testrun_open "$KEY" >/dev/null && MAX=$((MAX + 1)) ;;
-    *)        stop "모르는 단계값입니다: $ph. 상태 문서를 확인하세요" ;;
+  # 자동 배포 오더의 배포 차례 — 리뷰봇·빌드는 세션이 아니라 이 셸이 기다린다.
+  if [ -n "$AUTO_ENV" ] && [ "$ph" = 배포 ]; then
+    dobby_ship_reopen "$KEY" >/dev/null
+    # 결과를 먼저 받고 나눈다. `IFS=… read <<<"$(…)"` 로 쓰면 괄호 안 함수까지 탭 구분자를 물려받는다.
+    nx="$(dobby_v2_ship_next "$KEY")"
+    IFS=$'\t' read -r what repo tgt since <<<"$nx"
+    el=$(( $(date +%s) - $(_v2_epoch "${since:-}" || date +%s) ))
+    case "$what" in
+      blocked)
+        dobby_agent_state "$KEY" deploy-agent 막힘 "" "배포 막힘 — $repo $AUTO_ENV: $tgt" "상태 문서 배포 표의 비고를 보고 처리한 뒤 /do $KEY" >/dev/null
+        stop "배포가 막혔습니다($repo $AUTO_ENV): $tgt. 상태 문서 '## 배포' 표의 비고를 보고 처리한 뒤 /do $KEY 로 이어 가세요" ;;
+      wait-review)
+        if [ "$el" -ge 1800 ]; then
+          dobby_agent_state "$KEY" deploy-agent 막힘 "" "리뷰봇 리뷰가 30분째 없음 — $repo PR $tgt" "리뷰어가 붙었는지 확인한 뒤 /do $KEY" >/dev/null
+          stop "리뷰봇 리뷰가 30분 동안 오지 않았습니다($repo $AUTO_ENV PR $tgt). 리뷰어가 붙었는지 확인하고 /do $KEY 로 이어 가세요"
+        fi
+        if [ "$el" -ge 600 ] && [ "$noted" != "$tgt" ]; then
+          dobby_v2_notify "$KEY" "리뷰 지연 — $repo $AUTO_ENV PR $tgt 에 리뷰봇 리뷰가 10분째 없습니다. 30분까지 기다립니다." >/dev/null
+          noted="$tgt"
+        fi
+        dobby_v2_wait_mark "$KEY" "$repo" wait-review "$tgt" $((el / 60))
+        printf '리뷰봇 리뷰를 기다립니다(%s PR %s, %d분째) · %s\n' "$repo" "$tgt" $((el / 60)) "$(date '+%H:%M')"
+        sleep 120; continue ;;
+      wait-build)
+        if [ "$el" -ge 1800 ]; then
+          dobby_agent_state "$KEY" deploy-agent 막힘 "" "빌드가 30분째 안 끝남 — $repo run $tgt" "gh run view $tgt 로 확인한 뒤 /do $KEY" >/dev/null
+          stop "빌드가 30분 동안 끝나지 않았습니다($repo $AUTO_ENV run $tgt). gh run view $tgt 로 확인하고 /do $KEY 로 이어 가세요"
+        fi
+        dobby_v2_wait_mark "$KEY" "$repo" wait-build "$tgt" $((el / 60))
+        printf '빌드를 기다립니다(%s run %s, %d분째) · %s\n' "$repo" "$tgt" $((el / 60)) "$(date '+%H:%M')"
+        sleep 60; continue ;;
+    esac
+  fi
+  st="$(dobby_v2_step "$KEY")"
+  IFS=$'\t' read -r stg slug desc _ <<<"$st"
+  case "$stg" in
+    멈춤)
+      case "$slug" in
+        검증을\ 전부\ 통과*|끝난\ 오더*|PR\ 이\ 머지*|PR\ 머지\ 차례*) finish "$slug" ;;
+      esac
+      stop "$slug" ;;
+    설계)
+      [ "$ph" = 보류 ] && stop "판단이 필요해 멈춰 있습니다. 설계 문서 '확인이 필요했던 것'을 보고 터미널에서 /do $KEY 로 답해 주세요"
+      stop "설계가 끝나지 않았습니다. 터미널에서 /do $KEY 로 설계를 확정하세요" ;;
+    설계확인) stop "설계가 확정되지 않았습니다. 터미널에서 /do $KEY 로 설계를 보고 답해 주세요" ;;
+    구현|리뷰|수정|통합|배포|실패분석) ;;
+    검증)
+      # 배포 확인 전(단계 배포)이면 검증은 배포 뒤에야 의미가 있다. 사람이 배포를 마쳐 단계가 검증이면 돈다.
+      if [ -z "$AUTO_ENV" ] && [ "$WITH_TEST" != 1 ] && [ "$ph" = 배포 ]; then
+        finish "통합까지 끝났습니다. 배포한 뒤 run.sh $KEY --with-test 또는 /do $KEY 로 검증하세요."
+      fi
+      # 열린 회차를 잇는 세션은 다음 검증 묶음이다. 묶음마다 세션 하나라 상한에 하나씩 더해 센다.
+      _testrun_open "$KEY" >/dev/null && MAX=$((MAX + 1)) ;;
+    *) stop "다음 할 일을 정하지 못했습니다: ${st:-빈 값}" ;;
   esac
   [ "$n" -lt "$MAX" ] || stop "세션 상한(${MAX}개)에 닿았습니다. 상태 문서를 확인하세요"
 
   n=$((n + 1))
   before="$(fingerprint)"
   resume=(); how="새 세션"
-  if [ -n "$sid" ] && _v2_next_is_fix "$KEY"; then
+  if [ -n "$sid" ] && [ "$stg" = 수정 ]; then
     if r="$(dobby_v2_reuse_ok "$KEY" "$sid")"; then
       resume=(--resume "$sid"); how="직전 세션 이어 쓰기(문맥 ${r%%$'\t'*}, ${r##*$'\t'}초 전)"
     else
       how="새 세션(직전 세션이 이어 쓰기 기준을 넘음)"
     fi
   fi
-  printf '\n━━ %s · 세션 %d · 시작 단계 %s · %s · %s\n' "$KEY" "$n" "$ph" "$how" "$(date '+%H:%M')"
+  mark "$n"
+  printf '\n━━ %s · 세션 %d · %s 차례(%s) · %s · %s\n' "$KEY" "$n" "$stg" "$desc" "$how" "$(date '+%H:%M')"
   out="$(cd "$WT" && claude -p ${resume[@]+"${resume[@]}"} "/do $KEY" ${extra[@]+"${extra[@]}"} ${mcp[@]+"${mcp[@]}"} --permission-mode "$MODE" --output-format json 2>/dev/null)"
   code=$?
   sid="$(printf '%s' "$out" | jq -r '.session_id // empty' 2>/dev/null)"
@@ -200,7 +217,8 @@ while :; do
   denied="$(printf '%s' "$out" | jq -r '.permission_denials[]?.tool_input.command // empty' 2>/dev/null)"
   [ -n "$denied" ] && printf '권한이 막혀 실행하지 못한 명령:\n%s\n' "$denied"
 
-  dobby_event "$KEY" "자동 실행 세션 $n 종료 — 시작 단계 $ph → 지금 $(phase), ${how}, 세션 ${sid:-알 수 없음}" 2>/dev/null
+  dobby_v2_reconcile "$KEY"
+  dobby_event "$KEY" "자동 실행 세션 $n 종료 — $stg 차례, 지금 단계 $(phase), ${how}, 세션 ${sid:-알 수 없음}" 2>/dev/null
   printf '━━ 세션 %d 끝 · 세션 아이디 %s · 지금 단계 %s\n' "$n" "${sid:-알 수 없음}" "$(phase)"
 
   [ "$code" -eq 0 ] && [ "$err" != "true" ] || stop "세션이 오류로 끝났습니다(종료 코드 $code). 복기: claude --resume ${sid:-?}"

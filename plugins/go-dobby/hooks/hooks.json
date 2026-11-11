@@ -138,7 +138,7 @@
             "args": [
               "${CLAUDE_PLUGIN_ROOT}/hooks/prompt-guard.sh"
             ],
-            "timeout": 5,
+            "timeout": 15,
             "statusMessage": "go-dobby 입력 검사"
           },
           {
@@ -147,7 +147,7 @@
             "args": [
               "${CLAUDE_PLUGIN_ROOT}/hooks/presence.sh"
             ],
-            "timeout": 3
+            "timeout": 5
           }
         ]
       }
@@ -169,7 +169,7 @@
             "args": [
               "${CLAUDE_PLUGIN_ROOT}/hooks/presence.sh"
             ],
-            "timeout": 3
+            "timeout": 5
           }
         ]
       }
@@ -183,7 +183,7 @@
             "args": [
               "${CLAUDE_PLUGIN_ROOT}/hooks/presence.sh"
             ],
-            "timeout": 3
+            "timeout": 5
           }
         ]
       }
