@@ -3699,6 +3699,29 @@ dobby_ship_resubmit() {
   printf '%s' "$n"
 }
 
+# dobby_ship_review_wait 워크트리 PR번호 [초] — 리뷰가 하나라도 달릴 때까지 30초 간격으로 기다린다.
+# 한 줄 stdout: "arrived<TAB>리뷰결정" 또는 "timeout<TAB>리뷰요청수". 기본 540초(도구 호출 상한 10분 안).
+#
+# 조회 결과는 gh 의 --jq 로 숫자만 뽑는다. 본문을 셸 echo 로 넘기면 줄바꿈 표시가 풀려 JSON 이 깨지고,
+# 그 실패가 "리뷰 없음"으로 읽혀 리뷰가 달렸는데도 10분을 기다렸다(실측 FE1-2362 #31065).
+# 그래서 조회에 실패하면 "없음"으로 보지 않고 바로 거부한다.
+dobby_ship_review_wait() {
+  local wt="$1" pr="${2#\#}" max="${3:-540}" rp t0 row n dec req
+  [ -n "$pr" ] || { _die "PR 번호가 비었다"; return 1; }
+  rp="$(_ship_repo "$wt")"; [ -n "$rp" ] || { _die "워크트리의 저장소를 모른다: $wt"; return 1; }
+  t0=$(date +%s)
+  while :; do
+    row="$(gh pr view "$pr" --repo "$rp" --json reviews,reviewDecision,reviewRequests \
+           --jq '[(.reviews|length), (if (.reviewDecision // "") == "" then "-" else .reviewDecision end), (.reviewRequests|length)] | map(tostring) | join("|")')" \
+      || { _die "PR #$pr 조회 실패 — 리뷰 없음으로 보지 않고 멈춘다"; return 1; }
+    IFS='|' read -r n dec req <<<"$row"
+    case "$n" in ''|*[!0-9]*) _die "PR #$pr 리뷰 수를 읽지 못했다: '$row'"; return 1 ;; esac
+    [ "$n" -gt 0 ] && { printf 'arrived\t%s\n' "${dec:--}"; return 0; }
+    [ $(( $(date +%s) - t0 )) -lt "$max" ] || { printf 'timeout\t%s\n' "$req"; return 0; }
+    sleep 30
+  done
+}
+
 # 워크트리의 저장소(owner/repo).
 _ship_repo() { git -C "$1" remote get-url origin 2>/dev/null | sed -E 's#.*github\.com[:/]##; s#\.git$##'; }
 
