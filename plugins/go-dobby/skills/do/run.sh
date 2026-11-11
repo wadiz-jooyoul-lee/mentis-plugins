@@ -22,6 +22,10 @@
 #
 # MCP: 세션마다 크롬 도구 하나만 붙인다(--strict-mcp-config).
 #
+# 역할별 모델: ~/.config/go-dobby/role-models.json 에 {"developer": "claude-opus-5-5", ...} 가 있으면 차례 담당자의 역할 모델을
+# `claude -p --model` 로 넘긴다. 담당자 슬러그로 역할을 가른다(analysis-agent 기획자, review-agent 리뷰어, deploy-agent 배포담당,
+# test-agent 테스터, 나머지 개발자). 파일이 없거나 그 역할 값이 없으면 --model 없이 기본 모델로 돈다.
+#
 # 다음 할 일: 차례마다 dobby_v2_step 이 정한다(/do 세션·훅과 같은 판정). 설계·설계 확인·판단 답 차례면 사람이 할 일이라 멈춘다.
 # 단계 밖 변경: 차례마다 dobby_v2_drift_apply 로 /do 밖에서 바뀐 설계·코드를 먼저 본다. 설계가 바뀌었으면 멈추고,
 # 코드만 바뀌었으면 리뷰부터 잇는다. 이 셸이 띄운 세션이 끝나면 기준점을 남긴다(dobby_v2_checkpoint).
@@ -135,6 +139,13 @@ sys=""
 }$SHIP_CONSENT"
 extra=(); [ -n "$sys" ] && extra=(--append-system-prompt "$sys")
 
+ROLE_MODELS="$HOME/.config/go-dobby/role-models.json"
+role_model() {
+  local role=developer
+  case "$1" in analysis-agent) role=planner ;; review-agent) role=reviewer ;; deploy-agent) role=deployer ;; test-agent) role=tester ;; esac
+  [ -f "$ROLE_MODELS" ] && jq -r --arg r "$role" '.[$r] // empty | strings | select(test("^claude-[a-z0-9-]+$"))' "$ROLE_MODELS" 2>/dev/null
+}
+
 n=0; sid=""; noted=""
 while :; do
   [ "$(dobby_v2_drift_apply "$KEY")" = design ] \
@@ -207,9 +218,10 @@ while :; do
       how="새 세션(직전 세션이 이어 쓰기 기준을 넘음)"
     fi
   fi
+  model=(); m="$(role_model "$slug")"; [ -n "$m" ] && model=(--model "$m")
   mark "$n"
-  printf '\n━━ %s · 세션 %d · %s 차례(%s) · %s · %s\n' "$KEY" "$n" "$stg" "$desc" "$how" "$(date '+%H:%M')"
-  out="$(cd "$WT" && claude -p ${resume[@]+"${resume[@]}"} "/do $KEY" ${extra[@]+"${extra[@]}"} ${mcp[@]+"${mcp[@]}"} --permission-mode "$MODE" --output-format json 2>/dev/null)"
+  printf '\n━━ %s · 세션 %d · %s 차례(%s) · %s · 모델 %s · %s\n' "$KEY" "$n" "$stg" "$desc" "$how" "${m:-기본}" "$(date '+%H:%M')"
+  out="$(cd "$WT" && claude -p ${resume[@]+"${resume[@]}"} "/do $KEY" ${extra[@]+"${extra[@]}"} ${mcp[@]+"${mcp[@]}"} ${model[@]+"${model[@]}"} --permission-mode "$MODE" --output-format json 2>/dev/null)"
   code=$?
   sid="$(printf '%s' "$out" | jq -r '.session_id // empty' 2>/dev/null)"
   err="$(printf '%s' "$out" | jq -r '.is_error // false' 2>/dev/null)"
