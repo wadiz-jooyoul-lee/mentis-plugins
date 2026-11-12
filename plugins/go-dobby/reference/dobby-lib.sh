@@ -508,6 +508,37 @@ dobby_blocking() {
   printf '%s' "$n"
 }
 
+# _review_item_count DESIGN [변경번호] — 설계 리뷰 항목의 표 줄과 맨 앞 목록 줄 수. 변경 번호를 주면 그 절의 `### 리뷰 항목` 만 센다.
+_review_item_count() {
+  awk -v m="${2:-}" '
+    function row() { return $0 ~ /^\|/ && $0 !~ /^\|[ \t:|-]*$/ }
+    m == "" && /^## /  { ins = ($0 ~ /^## 리뷰 항목/); hd = 0; next }
+    m != "" && /^## /  { inc = ($0 ~ ("^## 변경 " m "([^0-9]|$)")); ins = 0; next }
+    m != "" && /^### / { ins = inc && ($0 ~ /^### 리뷰 항목/); hd = 0; next }
+    ins && row() { if (hd) n++; else hd = 1; next }
+    ins && /^- / { n++ }
+    ins && !/^\|/ { hd = 0 }
+    END { print n + 0 }' "$1" 2>/dev/null
+}
+
+# dobby_progress KEY 마친수 — 리뷰·수정 세션이 항목을 마칠 때마다 progress.json 에 진행을 적는다(사무실 진행 막대).
+# 전체 수는 직접 센다: 리뷰는 설계의 리뷰 항목 표 줄, 수정은 최신 차수 리뷰의 지적 카드. 다른 단계면 아무것도 안 한다.
+dobby_progress() {
+  local key="$1" n="$2" d ph rd total
+  d="$(_order_dir "$key")"
+  [ -f "$d/status.md" ] && [[ "$n" =~ ^[0-9]+$ ]] || { _die "쓰임: dobby_progress KEY 마친수"; return 1; }
+  ph="$(_order_phase "$key")"; rd="$(_v2_latest_round "$key")"
+  case "$ph" in
+    리뷰) total="$(_review_item_count "$d/design.md" "$(_v2_pending_change "$key")")" ;;
+    수정) total="$(cat "$d/reviews/round-${rd:-0}"/*.md 2>/dev/null | grep -cE '^## \[(blocker|major|minor|nit)\]')" ;;
+    *) return 0 ;;
+  esac
+  [ "${total:-0}" -gt 0 ] || return 0
+  [ "$n" -le "$total" ] || n="$total"
+  jq -nc --arg s "$ph" --argjson r "${rd:-0}" --argjson d "$n" --argjson t "$total" --arg at "$(_now)" \
+    '{stage:$s,round:$r,done:$d,total:$t,at:$at}' > "$d/progress.json.tmp" && mv "$d/progress.json.tmp" "$d/progress.json"
+}
+
 # _testrun_carry KEY 환경 시험커밋 새회차폴더 — 같은 환경의 앞 회차에서 마지막 판정이 PASS 이고, 그 회차
 # 시험 커밋부터 이번 시험 커밋까지 계획의 `- **관련 파일**:` 이 바뀌지 않은 시나리오를 "S1<TAB>행" 으로 낸다.
 # 관련 파일 줄이 없거나, 앞 회차에 시험 커밋이 없거나, 마지막 판정이 FAIL 이면 내지 않는다(다시 시험).
