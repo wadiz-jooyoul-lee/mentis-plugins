@@ -1576,12 +1576,18 @@ dobby_design_backup() {
 # dobby_artifact_share_path KEY — artifact-share.md 경로. 없으면 머리말만 만들어 둔다.
 dobby_artifact_share_path() {
   local key="$1" f
-  f="$(_order_dir "$key")/artifact-share.md"
-  [ -f "$f" ] || printf '# %s 아티팩트 공유\n' "$key" > "$f"
+  f="$(_artifact_file "$key")"
+  if [ ! -f "$f" ]; then
+    if [ "$key" = "-" ]; then printf '# 연결 없는 아티팩트\n' > "$f"; else printf '# %s 아티팩트 공유\n' "$key" > "$f"; fi
+  fi
   printf '%s' "$f"
 }
 
+# _artifact_file KEY — 아티팩트 표 파일 경로. KEY 가 - 이면 오더에 연결되지 않은 아티팩트 모음($META/artifact-share.md)
+_artifact_file() { if [ "$1" = "-" ]; then printf '%s/artifact-share.md' "$(_meta)"; else printf '%s/artifact-share.md' "$(_order_dir "$1")"; fi; }
+
 # dobby_artifact_add KEY SLUG TITLE URL — '## 아티팩트' 표에 행을 추가한다.
+# KEY 를 - 로 주면 오더에 연결되지 않은 아티팩트 모음 파일에 적는다(대시보드·에이전트 오피스가 함께 읽는다).
 # 같은 슬러그 행이 이미 있으면 **아무것도 하지 않고 1을 반환**한다(갱신은 dobby_artifact_touch).
 # ⛔ 슬러그가 다른 아티팩트를 기존 URL로 덮어쓰지 마라 — 이전 링크가 죽는다.
 dobby_artifact_add() {
@@ -1603,11 +1609,11 @@ dobby_artifact_add() {
     "| $slug | ${title:-$slug} | $url | $now |  |"
 }
 
-# dobby_artifact_touch KEY SLUG [NOTE] — 그 슬러그 행의 '갱신' 칸만 현재 시각으로 고친다.
+# dobby_artifact_touch KEY SLUG [NOTE] — 그 슬러그 행의 '갱신' 칸만 현재 시각으로 고친다. KEY - 는 모음 파일.
 # NOTE를 주면 `2026-09-07 10:40 (설명)` 형태로 적는다(기존 파일 관례와 동일).
 dobby_artifact_touch() {
   local key="$1" slug="$2" note="${3:-}" f now val
-  f="$(_order_dir "$key")/artifact-share.md"
+  f="$(_artifact_file "$key")"
   [ -f "$f" ] || { _die "dobby_artifact_touch: $f 없음"; return 2; }
   _artifact_row_exists "$f" "$slug" || {
     _die "dobby_artifact_touch: 슬러그 '$slug' 행이 없습니다 — 신규는 dobby_artifact_add"; return 1; }
