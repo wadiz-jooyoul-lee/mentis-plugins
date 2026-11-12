@@ -35,8 +35,10 @@
 #
 # 멈추는 경우:
 #   dobby-order 가 만든 메타 · 설계 미확정 · 판단 답 차례(보류) · 통합 완료(--with-test 없고 auto 배포 오더도 아닐 때)
-#   · TASK- 작업의 PR 머지 차례 · 검증 전부 통과 · 배포 표의 막힘(⚠) · 리뷰봇 30분 · 빌드 30분
+#   · TASK- 작업의 PR 머지 차례 · 검증 전부 통과 · 배포 표의 막힘(⚠)
 #   · 끝난 오더 · 모르는 단계값 · 단계 밖 설계 변경
+# 부탁(ask.json)이 열리면 끝내지 않고 셸에서 기다린다 — argocd 로그인 풀림, 리뷰봇·빌드 30분 지연, 세션이 남긴 부탁.
+#   대시보드 카드에서 답하면 이어 가고, "멈추기"·8시간 무응답·기다리는 사이 사람이 손대면 끝낸다.
 #   · 세션이 끝났는데 아무것도 바뀌지 않음(사람 판단이 필요해 스킬이 멈춘 것) · 세션 오류 · 상한 도달
 set -uo pipefail
 
@@ -84,6 +86,26 @@ stop() {
   if [ -n "$AUTO_ENV" ]; then dobby_v2_notify "$KEY" "자동 실행 멈춤 — $1" >/dev/null
   else dobby_event "$KEY" "자동 실행 멈춤 — $1" 2>/dev/null; fi
   die "$1"
+}
+
+ask_open() { [ -f "$D/ask.json" ] && [ -z "$(jq -r '.answer.value // empty' "$D/ask.json" 2>/dev/null)" ]; }
+# 열린 부탁에 답이 오거나 확인이 통과할 때까지 기다린다. 답이 오면 0 을 돌려주고, 아니면 여기서 끝낸다.
+wait_ask() {
+  printf '사람의 답을 기다립니다 — %s · %s\n' "$(jq -r .title "$D/ask.json")" "$(date '+%H:%M')"
+  case "$(dobby_v2_ask_wait "$KEY")" in
+    answered|passed) printf '답을 받아 이어 갑니다 · %s\n' "$(date '+%H:%M')"; return 0 ;;
+    stop)    die "부탁 카드에서 멈추기를 골랐습니다" ;;
+    changed) die "기다리는 사이 설계·코드가 바뀌었거나 터미널 세션이 이 오더를 잡아 끝냈습니다" ;;
+    *)       stop "부탁에 8시간 동안 답이 없었습니다. 대시보드 카드를 보고 /do $KEY 로 이어 가세요" ;;
+  esac
+}
+# 리뷰봇·빌드가 30분을 넘으면 더 기다릴지 묻는다. "30분 더 기다리기"면 그 대상의 한도를 30분 늘린다.
+ext_tgt=""; ext_lim=0
+ask_delay() {
+  dobby_v2_ask "$KEY" choice "$1" "$2" "$3" "30분 더 기다리기,멈추기" >/dev/null
+  wait_ask
+  dobby_v2_ask_close "$KEY" "30분 더"
+  ext_tgt="$tgt"; ext_lim=$(( el + 1800 ))
 }
 
 # 세션 한 번이 무엇이든 남겼는지 보는 지문 — 단계, 리뷰·검증 폴더 목록, 주요 문서의 수정 시각, 배포 표.
@@ -148,6 +170,7 @@ role_model() {
 
 n=0; sid=""; noted=""
 while :; do
+  ask_open && wait_ask
   [ "$(dobby_v2_drift_apply "$KEY")" = design ] \
     && stop "단계 밖에서 설계 문서가 바뀌었습니다. 터미널에서 /do $KEY 로 바뀐 설계를 확인해 주세요"
   ph="$(phase)"
@@ -160,13 +183,25 @@ while :; do
     el=$(( $(date +%s) - $(_v2_epoch "${since:-}" || date +%s) ))
     case "$what" in
       blocked)
+        # argocd 로그인이 풀려 막혔으면 사람에게 로그인을 부탁하고, 로그인되면 막힘 표시를 지우고 이어 간다.
+        asrv="$(_ship_argo_server "$AUTO_ENV")"
+        if [ "$repo" = com.wadiz.web ] && [ -n "$asrv" ] \
+           && ! argocd account get-user-info --server "$asrv" --grpc-web 2>/dev/null | grep -q 'Logged In: *true'; then
+          dobby_v2_ask "$KEY" action "argocd 로그인이 필요합니다 ($AUTO_ENV)" \
+            "com.wadiz.web 을 $AUTO_ENV 에 동기화하려는데 argocd 로그인이 풀려 있습니다. 회사 통합 로그인(SSO)이라 대신 할 수 없습니다" \
+            "터미널에서 실행: argocd login $asrv --sso --grpc-web" \
+            "argocd account get-user-info --server $asrv --grpc-web | grep -q 'Logged In: *true'" >/dev/null
+          wait_ask
+          bst="$(_v2_ship_row "$KEY" "$repo" "$AUTO_ENV" | cut -d$'\037' -f1)"
+          CLAUDE_CODE_SESSION_ID= dobby_ship_stage "$KEY" "$repo" "$AUTO_ENV" "${bst% ⚠}" >/dev/null   # 셸 기록이라 작업 표시를 잡지 않는다
+          continue
+        fi
         dobby_agent_state "$KEY" deploy-agent 막힘 "" "배포 막힘 — $repo $AUTO_ENV: $tgt" "상태 문서 배포 표의 비고를 보고 처리한 뒤 /do $KEY" >/dev/null
         stop "배포가 막혔습니다($repo $AUTO_ENV): $tgt. 상태 문서 '## 배포' 표의 비고를 보고 처리한 뒤 /do $KEY 로 이어 가세요" ;;
       wait-review)
-        if [ "$el" -ge 1800 ]; then
-          dobby_agent_state "$KEY" deploy-agent 막힘 "" "리뷰봇 리뷰가 30분째 없음 — $repo PR $tgt" "리뷰어가 붙었는지 확인한 뒤 /do $KEY" >/dev/null
-          stop "리뷰봇 리뷰가 30분 동안 오지 않았습니다($repo $AUTO_ENV PR $tgt). 리뷰어가 붙었는지 확인하고 /do $KEY 로 이어 가세요"
-        fi
+        lim=1800; [ "$ext_tgt" = "$tgt" ] && lim=$ext_lim
+        [ "$el" -lt "$lim" ] || { ask_delay "리뷰봇 리뷰가 $((el / 60))분째 없습니다 ($repo $AUTO_ENV PR $tgt)" \
+          "자동 코드리뷰가 와야 머지로 넘어갑니다" "PR 에 리뷰어(wadiz-fe/fe1-team)가 붙었는지 확인해 주세요"; continue; }
         if [ "$el" -ge 600 ] && [ "$noted" != "$tgt" ]; then
           dobby_v2_notify "$KEY" "리뷰 지연 — $repo $AUTO_ENV PR $tgt 에 리뷰봇 리뷰가 10분째 없습니다. 30분까지 기다립니다." >/dev/null
           noted="$tgt"
@@ -175,10 +210,9 @@ while :; do
         printf '리뷰봇 리뷰를 기다립니다(%s PR %s, %d분째) · %s\n' "$repo" "$tgt" $((el / 60)) "$(date '+%H:%M')"
         sleep 120; continue ;;
       wait-build)
-        if [ "$el" -ge 1800 ]; then
-          dobby_agent_state "$KEY" deploy-agent 막힘 "" "빌드가 30분째 안 끝남 — $repo run $tgt" "gh run view $tgt 로 확인한 뒤 /do $KEY" >/dev/null
-          stop "빌드가 30분 동안 끝나지 않았습니다($repo $AUTO_ENV run $tgt). gh run view $tgt 로 확인하고 /do $KEY 로 이어 가세요"
-        fi
+        lim=1800; [ "$ext_tgt" = "$tgt" ] && lim=$ext_lim
+        [ "$el" -lt "$lim" ] || { ask_delay "빌드가 $((el / 60))분째 끝나지 않았습니다 ($repo $AUTO_ENV run $tgt)" \
+          "빌드가 끝나야 배포 확인으로 넘어갑니다" "터미널에서 확인: gh run view $tgt"; continue; }
         dobby_v2_wait_mark "$KEY" "$repo" wait-build "$tgt" $((el / 60))
         printf '빌드를 기다립니다(%s run %s, %d분째) · %s\n' "$repo" "$tgt" $((el / 60)) "$(date '+%H:%M')"
         sleep 60; continue ;;
@@ -234,6 +268,8 @@ while :; do
   printf '━━ 세션 %d 끝 · 세션 아이디 %s · 지금 단계 %s\n' "$n" "${sid:-알 수 없음}" "$(phase)"
 
   [ "$code" -eq 0 ] && [ "$err" != "true" ] || stop "세션이 오류로 끝났습니다(종료 코드 $code). 복기: claude --resume ${sid:-?}"
+  # 세션이 부탁을 남기고 끝났으면 멈추지 않는다 — 다음 차례 맨 앞에서 답을 기다린다.
+  ask_open && { dobby_v2_checkpoint "$KEY" >/dev/null 2>&1; continue; }
   [ "$(fingerprint)" != "$before" ] || stop "세션이 아무것도 바꾸지 못했습니다. 사람 판단이 필요해 멈췄을 수 있습니다. 복기: cd $WT && claude --resume ${sid:-?}"
   dobby_v2_checkpoint "$KEY" >/dev/null 2>&1
 done

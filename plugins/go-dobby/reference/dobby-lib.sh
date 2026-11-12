@@ -3287,6 +3287,86 @@ dobby_v2_wait() {
   done
 }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 부탁 — 자동 실행이 사람 손(로그인·값·선택)을 받으면 이어 갈 수 있을 때 끝내지 않고 셸에서 기다린다.
+# 오더 폴더의 ask.json 하나가 열린 부탁이다. 대시보드 '다음 할 일'이 카드로 띄우고 답을 적는다.
+#   종류 action : 사람이 무언가 하고 온다. 확인 명령(check)이 통과하면 답 없이도 이어 간다
+#        choice : 선택지(쉼표로 구분) 중 하나를 고른다
+#        input  : 값을 적는다
+# 답이 "멈추기" 면 run.sh 가 끝낸다. 비밀번호는 받지 않는다(시험 계정은 config.env 에 있다).
+# ─────────────────────────────────────────────────────────────────────────────
+
+# dobby_v2_ask KEY 종류 제목 이유 할일 [확인명령|선택지]
+dobby_v2_ask() {
+  local key="$1" kind="$2" title="$3" why="$4" todo="$5" extra="${6:-}" f
+  case "$kind" in action|choice|input) ;; *) _die "부탁 종류는 action·choice·input: '$kind'"; return 1 ;; esac
+  [ -n "$key" ] && [ -n "$title" ] || { _die "쓰임: dobby_v2_ask KEY 종류 제목 이유 할일 [확인명령|선택지]"; return 1; }
+  f="$(_order_dir "$key")/ask.json"
+  jq -n --arg id "$(date '+%Y%m%d-%H%M%S')" --arg kind "$kind" --arg title "$title" --arg why "$why" --arg todo "$todo" \
+     --arg extra "$extra" --arg at "$(date '+%Y-%m-%d %H:%M')" '
+    {id:$id, kind:$kind, title:$title, why:$why, todo:$todo, created:$at, answer:null, note:""}
+    + (if $kind == "action" then {check:$extra}
+       elif $kind == "choice" then {choices:($extra | split(",") | map(gsub("^ +| +$";"")) | map(select(. != "")))}
+       else {} end)' > "$f.tmp" && mv "$f.tmp" "$f"
+  dobby_v2_notify "$key" "부탁 — $title"
+}
+
+# dobby_v2_ask_get KEY — 열린 부탁(ask.json)을 낸다. 없으면 아무것도 내지 않고 1.
+dobby_v2_ask_get() { local f; f="$(_order_dir "$1")/ask.json"; [ -f "$f" ] && cat "$f"; }
+
+# dobby_v2_ask_answer KEY 답 — 대시보드가 부른다. choice 는 선택지 안의 값이나 "멈추기"만 받는다.
+dobby_v2_ask_answer() {
+  local key="$1" ans="$2" f
+  f="$(_order_dir "$key")/ask.json"; [ -f "$f" ] || { _die "열린 부탁이 없습니다: $key"; return 1; }
+  [ -n "$ans" ] || { _die "답이 비었습니다"; return 1; }
+  if [ "$ans" != 멈추기 ] && [ "$(jq -r .kind "$f")" = choice ]; then
+    jq -e --arg a "$ans" '.choices | index($a)' "$f" >/dev/null || { _die "선택지에 없는 답입니다: $ans"; return 1; }
+  fi
+  jq --arg a "$ans" --arg at "$(date '+%Y-%m-%d %H:%M')" '.answer = {value:$a, at:$at} | .note = ""' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  dobby_event "$key" "부탁에 답함 — $(jq -r .title "$f"): $ans" 2>/dev/null
+}
+
+# dobby_v2_ask_close KEY [결과] — 부탁을 닫아 asks/ 에 남긴다. 답을 쓴 세션이나 run.sh 가 부른다.
+dobby_v2_ask_close() {
+  local key="$1" res="${2:-닫음}" d f
+  d="$(_order_dir "$key")"; f="$d/ask.json"; [ -f "$f" ] || return 0
+  mkdir -p "$d/asks"
+  jq --arg r "$res" --arg at "$(date '+%Y-%m-%d %H:%M')" '.closed = {result:$r, at:$at}' "$f" > "$d/asks/$(jq -r .id "$f").json" \
+    && rm -f "$f"
+}
+
+# dobby_v2_ask_wait KEY [최대초] — run.sh 용. 열린 부탁이 풀릴 때까지 셸에서 기다리고 결과 한 단어를 낸다.
+#   answered : 답이 왔다(choice·input) — 다음 세션이 ask.json 의 답을 읽는다
+#   passed   : action 의 확인 명령이 통과했다 — 부탁은 닫혔다
+#   stop     : 답이 "멈추기"
+#   changed  : 기다리는 사이 사람이 손댔다(설계·코드 변경, 터미널 세션, 단계 바뀜) — 부탁을 닫고 끝낸다
+#   timeout  : 최대 시간(기본 8시간)이 지났다
+# 1분마다 본다. 셸 명령만 쓰므로 기다리는 동안 토큰이 들지 않는다.
+dobby_v2_ask_wait() {
+  local key="$1" max="${2:-${DOBBY_ASK_MAX:-28800}}" f t0 ph0 kind chk ans drk
+  f="$(_order_dir "$key")/ask.json"; [ -f "$f" ] || { echo answered; return 0; }
+  t0=$(date +%s); ph0="$(_order_phase "$key")"
+  while :; do
+    [ -f "$f" ] || { echo answered; return 0; }
+    kind="$(jq -r .kind "$f")"; chk="$(jq -r '.check // ""' "$f")"; ans="$(jq -r '.answer.value // ""' "$f")"
+    [ "$ans" = 멈추기 ] && { dobby_v2_ask_close "$key" 멈춤; echo stop; return 0; }
+    if [ "$kind" = action ]; then
+      if [ -n "$chk" ] && bash -c "$chk" >/dev/null 2>&1; then dobby_v2_ask_close "$key" 통과; echo passed; return 0; fi
+      if [ -n "$ans" ]; then   # 했다고 답했는데 확인이 안 된다 — 답을 지우고 카드에 알린다
+        jq --arg n "$(date '+%H:%M') 확인해 봤지만 아직 안 됐습니다" '.answer = null | .note = $n' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+      fi
+    elif [ -n "$ans" ]; then echo answered; return 0
+    fi
+    drk="$(dobby_v2_drift "$key" 2>/dev/null | head -1 | cut -f1)"
+    if { [ -n "$drk" ] && [ "$drk" != none ] && [ "$drk" != nobase ]; } \
+       || [ "$(_v2_presence "$key")" = working ] || [ "$(_order_phase "$key")" != "$ph0" ]; then
+      dobby_v2_ask_close "$key" "사람이 손대 중단"; echo changed; return 0
+    fi
+    [ $(( $(date +%s) - t0 )) -lt "$max" ] || { echo timeout; return 0; }
+    sleep 60
+  done
+}
+
 # dobby_v2_ctx — 지금 세션의 마지막 호출 문맥 크기(토큰). 기록을 못 찾으면 0. light 가 일반 실행으로 넘길지 가를 때 쓴다.
 dobby_v2_ctx() {
   local r; r="$(_v2_last_call "$(_session_id)")"
@@ -5113,6 +5193,10 @@ dobby_v2_next_all() {
     grp=mine; kind=""; text=""; since="$upd"; cmd=""; link=""; act=""; pst="$(_v2_presence "$k")"
 
     if printf '%s\n' "$ps" | grep -Eq "run\.sh'? '?$k'?( |$)"; then
+      if [ -f "$d/ask.json" ] && [ -z "$(jq -r '.answer.value // empty' "$d/ask.json" 2>/dev/null)" ]; then
+        kind=ask; act=ask; text="자동 실행이 답을 기다립니다 — $(jq -r .title "$d/ask.json")"
+        since="$(jq -r .created "$d/ask.json")"; _v2_emit; continue
+      fi
       grp=auto; kind=running; text="자동 실행 중 — $ph 단계"; _v2_emit; continue
     fi
     # 옛 규칙("방금 끝난 일")으로 적힌 단계는 한 번 옮겨 적는다. 자동 실행이 도는 오더는 건드리지 않는다(위에서 넘김).
