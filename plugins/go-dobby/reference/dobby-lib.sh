@@ -4834,6 +4834,9 @@ _presence_dir() {
 }
 
 # _presence_pid — 이 셸을 띄운 claude 프로세스 번호. 못 찾으면 빈 값.
+# _pstart PID — 프로세스 시작 시각. 서버(LANG=ko_KR)와 세션 셸이 같은 글자로 비교하도록 언어를 고정한다
+_pstart() { LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null; }
+
 _presence_pid() {
   local p="$$" c i
   for i in 1 2 3 4 5 6 7 8; do
@@ -4856,7 +4859,7 @@ _presence_claim() {
     return 0
   fi
   pid="$(_presence_pid)"; [ -n "$pid" ] || return 0
-  jq -nc --arg s "$sid" --argjson p "$pid" --arg ps "$(ps -o lstart= -p "$pid" 2>/dev/null)" --arg k "$key" \
+  jq -nc --arg s "$sid" --argjson p "$pid" --arg ps "$(_pstart "$pid")" --arg k "$key" \
     --arg t "$(_now)" --arg tr "$(_session_transcript "$sid")" \
     '{session:$s,pid:$p,pstart:$ps,keys:[$k],state:"working",since:$t,transcript:$tr}' > "$f.tmp" && mv "$f.tmp" "$f"
   [ -z "$sl" ] || { jq --arg sl "$sl" '.slug = $sl' "$f" > "$f.tmp" 2>/dev/null && mv "$f.tmp" "$f"; }
@@ -4876,7 +4879,7 @@ _v2_presence() {
   d="$(_meta)/.presence"; [ -d "$d" ] || return 0
   while IFS=$'\t' read -r f pid ps st tr; do
     [ -n "$f" ] || continue
-    if [ "$(ps -o lstart= -p "$pid" 2>/dev/null)" != "$ps" ] || [ -z "$ps" ]; then rm -f "$f"; continue; fi
+    if [ "$(_pstart "$pid")" != "$ps" ] || [ -z "$ps" ]; then rm -f "$f"; continue; fi
     if [ "$st" = working ] && [ -f "$tr" ] && tail -n 40 "$tr" \
       | jq -rs '[.[] | select(.type == "user" or .type == "assistant")] | last | .message.content
           | if type == "array" then (.[0].text // "") else (. // "") end' 2>/dev/null \
@@ -5590,7 +5593,7 @@ _v2_live_sessions() {
     IFS=$'\t' read -r sid pid ps st sl < <(jq -r --arg k "$key" \
       'select(.keys | index($k)) | [.session, .pid, .pstart, .state, (.slug // "")] | @tsv' "$f" 2>/dev/null)
     [ -n "${sid:-}" ] && [ "$sid" != "$ex" ] || continue
-    [ -n "$ps" ] && [ "$(ps -o lstart= -p "$pid" 2>/dev/null)" = "$ps" ] || continue
+    [ -n "$ps" ] && [ "$(_pstart "$pid")" = "$ps" ] || continue
     [ "$st" = done ] && continue
     printf '%s\t%s\t%s\n' "$sid" "$sl" "$st"
   done
