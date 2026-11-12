@@ -25,14 +25,19 @@ set_state() {
 
 # lost — 이 세션이 맡은 행이 작업중이면 사람 차례로 돌린다.
 lost() {
-  local key slug
+  local key slug qa
   key="$(jq -r '.keys[-1] // empty' "$F" 2>/dev/null)"; slug="$(jq -r '.slug // empty' "$F" 2>/dev/null)"
+  qa="$(jq -r '.qa // false' "$F" 2>/dev/null)"
   [ -n "$key" ] && [ -n "$slug" ] || return 0
   export ORCHESTRATION_META="$META"
   # shellcheck disable=SC1091
   . "$(dirname "$0")/../reference/dobby-lib.sh" >/dev/null 2>&1 || return 0
   [ "$(_v2_state "$key" "$slug")" = 작업중 ] || return 0
-  dobby_agent_state "$key" "$slug" "사람 차례" "" "세션 끊김 — 이어서 진행하기" "/do $key 또는 claude --resume $SID" >/dev/null 2>&1
+  if [ "$qa" = true ]; then
+    dobby_agent_state "$key" "$slug" "사람 차례" "" "QA 세션 끊김 — 다시 시작하기" "/dobby-qa $key" >/dev/null 2>&1
+  else
+    dobby_agent_state "$key" "$slug" "사람 차례" "" "세션 끊김 — 이어서 진행하기" "/do $key 또는 claude --resume $SID" >/dev/null 2>&1
+  fi
   dobby_event "$key" "$slug 세션이 끝을 적지 않고 멈춤 — 사람 차례로 돌림(세션 $SID)" 2>/dev/null
 }
 

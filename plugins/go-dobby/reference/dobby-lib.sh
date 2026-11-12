@@ -4989,6 +4989,65 @@ _presence_claim() {
   [ -z "$sl" ] || { jq --arg sl "$sl" '.slug = $sl' "$f" > "$f.tmp" 2>/dev/null && mv "$f.tmp" "$f"; }
 }
 
+# ── QA 진행 표시 (dobby-qa) ──
+# _qa_active KEY — QA 감시가 진행 중이면 0. qa-watch.md 상태 줄이 '감시 중'이고, 작업 세션(qa/work.pid)이나 QA 표시가 붙은 세션이 살아 있을 때.
+_qa_active() {
+  local d pid f
+  d="$(_order_dir "$1")"
+  grep -qE '^- \*\*상태\*\*:[ \t]*감시 중' "$d/qa-watch.md" 2>/dev/null || return 1
+  pid="$(cat "$d/qa/work.pid" 2>/dev/null)"
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && return 0
+  for f in "$(_meta)/.presence"/*.json; do
+    [ -f "$f" ] && jq -e --arg k "$1" '.qa == true and .state != "done" and (.keys | index($k))' "$f" >/dev/null 2>&1 || continue
+    [ "$(_pstart "$(jq -r .pid "$f")")" = "$(jq -r .pstart "$f")" ] && return 0
+  done
+  return 1
+}
+
+# dobby_qa_watch_state KEY 감시중|종료 [이유] — qa-watch.md 폴링 절의 상태 줄을 쓴다. 대시보드·사무실이 QA 진행을 이 줄로 가린다.
+dobby_qa_watch_state() {
+  local key="$1" st="$2" why="${3:-}" w line
+  w="$(_order_dir "$key")/qa-watch.md"
+  [ -f "$w" ] || { _die "qa-watch.md 가 없다: $key"; return 1; }
+  case "$st" in
+    감시중|"감시 중") line="- **상태**: 감시 중 · $(_now) 시작" ;;
+    종료) line="- **상태**: 종료 · $(_now)${why:+ · $why}" ;;
+    *) _die "쓰임: dobby_qa_watch_state KEY 감시중|종료 [이유]"; return 1 ;;
+  esac
+  if grep -qE '^- \*\*상태\*\*:' "$w"; then
+    awk -v l="$line" '/^- \*\*상태\*\*:/ && !d { print l; d = 1; next } { print }' "$w" > "$w.tmp"
+  elif grep -q '^## 폴링' "$w"; then
+    awk -v l="$line" '{ print } /^## 폴링/ && !d { print l; d = 1 }' "$w" > "$w.tmp"
+  else
+    { cat "$w"; printf '\n## 폴링\n%s\n' "$line"; } > "$w.tmp"
+  fi && mv "$w.tmp" "$w"
+}
+
+# dobby_qa_role KEY SLUG 상태 [설명] [라운드] — QA 세션이 담당자 행을 바꾼다. 작업중이면 이 세션 표시에 담당자와 QA 표시를 먼저 적는다.
+# 행이 없는 옛 오더나 사람이 이미 해결 처리한 오더(단계 해결)는 건드리지 않는다.
+dobby_qa_role() {
+  local key="$1" slug="$2" st="$3" desc="${4:-}" rd="${5:-}" f
+  [ -n "$(_board_role "$(_order_dir "$key")/orchestration.md" "$slug")" ] || return 0
+  [ "$(_order_phase "$key")" = 해결 ] && return 0
+  if [ "$(dobby_norm_state "$st")" = 작업중 ]; then
+    _presence_claim "$key" "$slug"
+    f="$(_presence_dir)/${CLAUDE_CODE_SESSION_ID:-}.json"
+    [ -f "$f" ] && jq '.qa = true' "$f" > "$f.tmp" 2>/dev/null && mv "$f.tmp" "$f"
+  fi
+  _v2_set "$key" "$slug" "$st" "$rd" "$desc"
+}
+
+# dobby_qa_progress KEY 수정|리뷰 마친수 전체수 — QA 작업 세션의 진행을 progress.json 에 적는다(단계 칸 'QA 수정'·'QA 리뷰').
+dobby_qa_progress() {
+  local key="$1" k="$2" n="$3" t="$4" d
+  d="$(_order_dir "$key")"
+  case "$k" in 수정|리뷰) ;; *) _die "쓰임: dobby_qa_progress KEY 수정|리뷰 마친수 전체수"; return 1 ;; esac
+  [[ "$n" =~ ^[0-9]+$ && "$t" =~ ^[1-9][0-9]*$ ]] || { _die "쓰임: dobby_qa_progress KEY 수정|리뷰 마친수 전체수"; return 1; }
+  [ "$n" -le "$t" ] || n="$t"
+  jq -nc --arg s "QA $k" --argjson d "$n" --argjson t "$t" --arg at "$(_now)" \
+    '{stage:$s,round:0,done:$d,total:$t,at:$at}' > "$d/progress.json.tmp" && mv "$d/progress.json.tmp" "$d/progress.json"
+}
+
 # _presence_done — 지금 세션의 표시를 끝남으로 바꾼다(자동 실행에 넘길 때).
 _presence_done() {
   local f; [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] || return 0
@@ -5475,6 +5534,7 @@ _v2_state() { _board_cell "$(_order_dir "$1")/orchestration.md" "$2" 상태; }
 _dobby_agent_state_one_u() {
   _dobby_agent_state_u "$@" || return
   [ "$(dobby_norm_state "$3")" = 작업중 ] && _v2_rule_ok "$1" || return 0
+  _qa_active "$1" && return 0   # QA 중에는 감시(기획자)와 작업 세션 담당자가 함께 일한다
   local s st r held
   held="$(_v2_live_sessions "$1" "$(_session_id)" | cut -f2)"
   while IFS=$'\t' read -r s st r; do
@@ -5637,6 +5697,9 @@ dobby_v2_step() {
   local key="$1" first="${2:-}" d f ph dev rd k env nx what repo tgt pr
   d="$(_order_dir "$key")"; f="$d/status.md"
   _out() { printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$(_v2_step_doc "$4")"; }
+  if _qa_active "$key"; then
+    printf '멈춤\tQA 감시가 진행 중입니다. QA 가 끝난 뒤(/dobby-qa stop %s 또는 해결 처리) 이어 가세요\n' "$key"; return 0
+  fi
   case "$first" in
     변경)
       [ -f "$f" ] || { printf '멈춤\t메타가 없는 오더에는 변경을 접수할 수 없습니다. /do %s 로 설계부터 해 주세요\n' "$key"; return 0; }
