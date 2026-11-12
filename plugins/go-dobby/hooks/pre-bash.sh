@@ -164,12 +164,14 @@ esac
 
 # ── G5. subtree 밖 파괴 금지 (dobby-end 안전 경계) ──────────────────────
 # 워크트리 정리는 $ORCHESTRATION_WORKSPACE/subtree/ 하위만 대상이다.
+# dashboard-subtree/ 는 도구 저장소(대시보드·플러그인·오피스) 작업 폴더 자리라 같이 허용한다.
 # (1) git worktree remove 대상이 워크스페이스 안인데 subtree/ 밖이면 차단
 # (2) rm -r(f) 대상이 워크스페이스 안인데 subtree/ 밖이거나, 원본 소스 루트를 노리면 차단
 case "$CMD" in
   *worktree\ remove*)
     if printf '%s' "$CMDX" | grep -qF "$ORCHESTRATION_WORKSPACE" \
-       && ! printf '%s' "$CMDX" | grep -qF "$ORCHESTRATION_WORKSPACE/subtree/"; then
+       && ! printf '%s' "$CMDX" | grep -qF "$ORCHESTRATION_WORKSPACE/subtree/" \
+       && ! printf '%s' "$CMDX" | grep -qF "$ORCHESTRATION_WORKSPACE/dashboard-subtree/"; then
       deny G5 "워크트리 제거는 $ORCHESTRATION_WORKSPACE/subtree/ 하위만 허용된다(dobby-end 안전 경계). 대상 경로를 확인하라."
     fi
     ;;
@@ -179,6 +181,7 @@ case "$CMD" in
     # "전부 휴지통 아래일 때만" 통과시키는 좁은 예외를 검사했으므로 여기서도 허용한다.
     if printf '%s' "$RM_TARGETS" | grep -qF "$ORCHESTRATION_WORKSPACE" \
        && ! printf '%s' "$RM_TARGETS" | grep -qF "$ORCHESTRATION_WORKSPACE/subtree/" \
+       && ! printf '%s' "$RM_TARGETS" | grep -qF "$ORCHESTRATION_WORKSPACE/dashboard-subtree/" \
        && ! printf '%s' "$RM_TARGETS" | grep -qF "$ORCHESTRATION_META/.discarded/"; then
       deny G5 "rm 대상이 dobby 워크스페이스 안인데 subtree/ 밖이다. 워크스페이스 정리는 subtree/ 하위만 허용된다(dobby-end 안전 경계)."
     fi

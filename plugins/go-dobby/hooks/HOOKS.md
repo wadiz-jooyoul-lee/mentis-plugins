@@ -171,7 +171,7 @@ v2.1.246에서 실측 확인: 설치본 스크립트를 수동 실행하면 deny
 | ID | 규칙 | 이벤트 | 처리 | 전달 경로 | 근거 스킬 |
 |----|------|--------|------|-----------|-----------|
 | G1 | 정식 배포 베이스(master)로 push·merge·PR 금지 | PreToolUse·Bash | deny | settings.json(dobby-init 등록 — #34573 우회) | dobby-order C1 |
-| G5 | subtree 밖 워크트리 제거·rm 금지 (예외: `$ORCHESTRATION_META/.discarded/` — 메타가 워크스페이스 안에 있는 설정이면 폐기 휴지통이 이 규칙 관할에도 들어오기 때문). rm 판정은 `$RM_TARGETS`(삭제 대상 구간)로 — 공통 규율 8 | PreToolUse·Bash | deny | settings.json(상동) | dobby-end 안전 경계 |
+| G5 | subtree 밖 워크트리 제거·rm 금지 (예외: `$ORCHESTRATION_WORKSPACE/dashboard-subtree/` — 도구 저장소 작업 폴더 자리, `$ORCHESTRATION_META/.discarded/` — 메타가 워크스페이스 안에 있는 설정이면 폐기 휴지통이 이 규칙 관할에도 들어오기 때문). rm 판정은 `$RM_TARGETS`(삭제 대상 구간)로 — 공통 규율 8 | PreToolUse·Bash | deny | settings.json(상동) | dobby-end 안전 경계 |
 | G6 | 메타 폴더($ORCHESTRATION_META) 삭제 금지. cwd가 메타 안일 때의 상대경로 rm도 차단. 예외 하나: 폐기 휴지통(`.discarded/`) 아래만 허용하며, 메타 경로가 여럿이면 **전부** 휴지통 아래일 때만 통과. 판정은 `$RM_TARGETS`로 — 공통 규율 8 | PreToolUse·Bash | deny | settings.json(상동) | 비파괴 원칙 · dobby-discard |
 | G10 | 스폰 시 상태표 자동 등록 + 로그 자동 기록 (유령 에이전트 차단) | PreToolUse·PostToolUse·Agent\|Task | 자동등록/자동기록(형식 없으면 deny) | settings.json(dobby-init 등록) | dobby-order C4 |
 | G11 | 설계 문서(design.md) 없이 구현 스폰 금지 — 단계가 구현 이후 + 종류 개발 + 역할 개발자일 때만 | PreToolUse·Agent\|Task | deny | settings.json(상동 — pre-agent.sh에 포함) | dobby-order P3.5 |
