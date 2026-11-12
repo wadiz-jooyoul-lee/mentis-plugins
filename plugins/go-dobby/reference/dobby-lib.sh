@@ -581,6 +581,19 @@ dobby_precheck() {
     else echo "argocd=로그인필요 — argocd login $srv --sso --grpc-web"; fi
   fi
   gh auth status >/dev/null 2>&1 && echo "gh=로그인됨" || echo "gh=로그인필요 — gh auth login"
+  # 브라우저 연결이 시작 스크립트 수정보다 먼저 켜졌으면 옛 설정(창 없이 띄우기 전 등)으로 돈다
+  local sh="$HOME/.claude/chrome-devtools-mcp.sh" p=$$ cpid="" mt st c
+  if [ -f "$sh" ]; then
+    while [ "${p:-1}" -gt 1 ]; do
+      [ "$(basename "$(ps -o comm= -p "$p" 2>/dev/null)" 2>/dev/null)" = claude ] && { cpid=$p; break; }
+      p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')"
+    done
+    mt="$(stat -f %m "$sh" 2>/dev/null || stat -c %Y "$sh")"
+    for c in $(pgrep -P "${cpid:-0}" -f chrome-devtools-mcp.sh 2>/dev/null); do
+      st="$(date -j -f '%a %b %d %T %Y' "$(LC_ALL=C ps -o lstart= -p "$c" | xargs)" +%s 2>/dev/null)"
+      [ -n "$st" ] && [ "$st" -lt "$mt" ] && { echo "브라우저연결=다시연결필요 — 시작 스크립트가 바뀐 뒤 켜지지 않음(/mcp 에서 다시 연결)"; break; }
+    done
+  fi
 }
 
 # dobby_testrun_new KEY [총시나리오수] [환경] [시험커밋] — 회차를 자동 계산(기존 test-runs/ 폴더 수 + 1)하고
