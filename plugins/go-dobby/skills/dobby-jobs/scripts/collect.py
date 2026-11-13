@@ -136,9 +136,10 @@ def live_branch(repo):
     return next((b for b in ("origin/cloud_live", "origin/master", "origin/main") if b in names), None)
 
 
-def key_files(cwd, base, tip, key):
+def key_files(cwd, base, tip, keys):
     """그 이슈 키가 붙은 커밋이 바꾼 파일만 본다. 병합해 들어온 남의 변경을 빼기 위함."""
-    out = sh(["git", "log", f"{base}..{tip}", "--no-merges", "-i", f"--grep={key}", "--name-only", "--format="], cwd=cwd)
+    greps = [f"--grep={k}" for k in ([keys] if isinstance(keys, str) else keys)]
+    out = sh(["git", "log", f"{base}..{tip}", "--no-merges", "-i", *greps, "--name-only", "--format="], cwd=cwd)
     return sorted({f for f in out.split() if not IGNORE.search(f)})
 
 
@@ -228,6 +229,13 @@ for d in sorted(glob.glob(f"{META}/*/status.md")):
     if o["stage"] and o["stage"] not in ("종료", "해결", "완료") and not o["key"].startswith("RELEASE"):
         orders.append(o)
 
+okeys = [o["key"] for o in orders if ANY_KEY.fullmatch(o["key"])]
+oinfo = {n["key"]: n for n in map(norm, query_all(f"key in ({','.join(okeys)})"))} if okeys else {}
+# 하위 이슈 키로 커밋한 오더도 있어 하위 이슈 키가 붙은 커밋까지 센다
+subs = {}
+for n in map(norm, query_all(f"parent in ({','.join(okeys)})") if okeys else []):
+    subs.setdefault(n["parent"], []).append(n["key"])
+
 for o in orders:
     files = set()
     for r in o["rows"]:
@@ -238,18 +246,20 @@ for o in orders:
         tip = f"origin/{r['branch']}"
         if not sh(["git", "rev-parse", "--verify", "-q", tip], cwd=cwd).strip() and os.path.isdir(r["path"]):
             cwd, tip = r["path"], "HEAD"
-        files |= {f"{r['repo']}:{f}" for f in key_files(cwd, lb, tip, o["key"])}
+        files |= {f"{r['repo']}:{f}" for f in key_files(cwd, lb, tip, [o["key"], *subs.get(o["key"], [])])}
     o["files"] = files
 
-okeys = [o["key"] for o in orders if ANY_KEY.fullmatch(o["key"])]
-oinfo = {n["key"]: n for n in map(norm, query_all(f"key in ({','.join(okeys)})"))} if okeys else {}
+# 라이브에 없는 내 커밋이 없는 오더(라이브 배포됨, 작업 시작 전)와 Jira 가 끝난 오더는 비교하지 않는다
+orders = [o for o in orders if o["files"] and not (oinfo.get(o["key"]) or {}).get("done")]
+# 내 이슈끼리는 비교하지 않는다
+mine = set(okeys) | {k for v in subs.values() for k in v}
 overlaps = []
 for o in orders:
     o["parent"] = (oinfo.get(o["key"]) or {}).get("parent")
     o["title"] = o["title"] or (oinfo.get(o["key"]) or {}).get("summary") or o["key"]
     odirs = {f.rsplit("/", 1)[0] for f in o["files"]}
     for k, it in issues.items():
-        if k == o["key"]:
+        if k in mine or (me and it["assignee"] == me):
             continue
         bfiles = {f"{b['repo']}:{f}" for b in branches.get(k, []) for f in b["files"]}
         same = sorted(o["files"] & bfiles)
