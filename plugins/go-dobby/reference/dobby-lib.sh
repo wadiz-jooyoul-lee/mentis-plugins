@@ -6193,4 +6193,215 @@ _dobby_v2_end_external_u() {
   dobby_event "$key" "바깥 확인 — $desc" 2>/dev/null
 }
 
+# ── 회고 (dobby-retro) ──
+# 반대 선택과 비용 차이가 이 퍼센트보다 작으면 시간이 짧은 쪽을 낫다고 본다
+DOBBY_RETRO_FAST_PCT=10
+
+# dobby_retro_gate KEY — 멈춘 오더면 0. 아니면 "거부: 이유" 를 내고 1. 진행 중에 만든 회고는 곧 낡고 측정 중인 세션을 잘못 센다.
+dobby_retro_gate() {
+  local key="$1" d pid f busy
+  d="$(_order_dir "$key")"
+  [ -f "$d/status.md" ] || { echo "거부: $key 상태 문서가 없습니다"; return 1; }
+  pid="$(sed -n 's/^- \*\*자동 실행\*\*:.*실행 중 · pid \([0-9][0-9]*\).*/\1/p' "$d/status.md" | head -1)"
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    echo "거부: 자동 실행 중입니다(pid $pid). 자동 실행이 끝난 뒤 회고하세요"; return 1
+  fi
+  busy="$(awk -F'|' 'function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);gsub(/\*/,"",x);return x}
+    /^## /{ins=($0 ~ /에이전트 상태표/); hdr=0; next}
+    ins && /^\|/{
+      if(!hdr){for(i=1;i<=NF;i++){c=t($i); if(c=="이름")cn=i; if(c=="상태")cs=i} hdr=1; next}
+      if(t($2) ~ /^-+$/) next
+      s=t($cs); if(s=="작업중"||s=="기다림") printf "%s%s(%s)", (n++?", ":""), t($cn), s
+    }' "$d/orchestration.md" 2>/dev/null)"
+  [ -z "$busy" ] || { echo "거부: 일하는 담당자가 있습니다 — $busy"; return 1; }
+  for f in "$(_meta)/.presence"/*.json; do
+    [ -f "$f" ] || continue
+    jq -e --arg k "$key" --arg me "${CLAUDE_CODE_SESSION_ID:-}" \
+      '.state == "working" and .session != $me and ((.keys // []) | index($k))' "$f" >/dev/null 2>&1 || continue
+    pid="$(jq -r '.pid // empty' "$f")"
+    if [ -n "$pid" ] && [ "$(_pstart "$pid")" = "$(jq -r '.pstart // empty' "$f")" ]; then
+      echo "거부: 이 오더를 잡은 세션이 일하는 중입니다(세션 $(jq -r .session "$f"))"; return 1
+    fi
+  done
+  if _qa_active "$key"; then echo "거부: QA 감시가 도는 중입니다"; return 1; fi
+  return 0
+}
+
+# dobby_retro_measure KEY — 세션 전환 손익을 세션 기록으로 재서 retro.json 을 새로 쓴다(basis·measure). 요약 표를 출력한다.
+#   같은 응답이 기록에 여러 줄로 나뉘어 남으므로 message.id 로 하나만 센다. 비용은 캐시 안 쓴 입력 1 기준 환산
+#   (캐시 쓰기 5분 1.25·1시간 2, 캐시 읽기 0.1, 출력 5 — skills/do/session-reuse.md 와 같은 비율).
+dobby_retro_measure() {
+  local key="$1" d rows calls sid f off out nchg
+  d="$(_order_dir "$key")"
+  rows="$(awk -F'|' 'function t(x){gsub(/^[ \t`]+|[ \t`]+$/,"",x);return x}
+    /^## /{ins=($0 ~ /^## 지난 세션/); next}
+    ins && /^\| *[0-9][0-9][0-9][0-9]-/{print t($2) "\t" t($3) "\t" t($4)}' "$d/status.md" 2>/dev/null)"
+  [ -n "$rows" ] || { echo "측정 불가: 지난 세션 표가 없습니다(/do 오더가 아님)"; return 1; }
+  off="$(date +%z | awk '{s=substr($0,1,1)=="-"?-1:1; print s*(substr($0,2,2)*3600+substr($0,4,2)*60)}')"
+  calls="$(mktemp)"
+  printf '%s\n' "$rows" | cut -f3 | awk 'NF && !s[$0]++' | while read -r sid; do
+    f="$(ls ~/.claude/projects/*/"$sid".jsonl 2>/dev/null | head -1)"
+    if [ -z "$f" ]; then jq -nc --arg s "$sid" '{sid:$s, missing:true}'; continue; fi
+    jq -sc --arg s "$sid" '
+      def ts: sub("\\.[0-9]+Z$";"Z") | fromdateiso8601;
+      ([.[] | select(.type=="user" and (.isSidechain|not))][0].timestamp) as $u0
+      | {sid:$s, start:(if $u0 == null then null else ($u0|ts) end),
+         calls:[.[] | select(.type=="assistant" and .message.usage != null and (.isSidechain|not))]
+           | unique_by(.message.id) | sort_by(.timestamp)
+           | map(.message.usage as $x | {t:(.timestamp|ts),
+               ctx:(($x.input_tokens//0)+($x.cache_creation_input_tokens//0)+($x.cache_read_input_tokens//0)),
+               w1h:($x.cache_creation.ephemeral_1h_input_tokens//0),
+               cost:(($x.input_tokens//0)
+                 + 1.25*($x.cache_creation.ephemeral_5m_input_tokens // (if $x.cache_creation == null then ($x.cache_creation_input_tokens//0) else 0 end))
+                 + 2*($x.cache_creation.ephemeral_1h_input_tokens//0)
+                 + 0.1*($x.cache_read_input_tokens//0) + 5*($x.output_tokens//0))})}' "$f"
+  done > "$calls"
+  out="$d/retro.json" nchg="$(grep -cE '^## 변경 [0-9]+ — ' "$d/design.md" 2>/dev/null)"
+  jq -n --slurpfile C "$calls" --arg rows "$rows" --argjson off "${off:-0}" \
+    --arg phase "$(_order_phase "$key")" \
+    --argjson changes "${nchg:-0}" \
+    --argjson rounds "$(awk '/^## /{i=($0 ~ /테스트 실행 이력/);next} i && /^\| *[0-9]/{n++} END{print n+0}' "$d/status.md")" \
+    --argjson fast "$DOBBY_RETRO_FAST_PCT" --argjson maxctx "$DOBBY_REUSE_MAX_CTX" --argjson maxgap "$DOBBY_REUSE_MAX_GAP" '
+    def med: map(select(. != null)) | sort | if length == 0 then null else .[(length/2|floor)] end;
+    def pos: if . < 0 then 0 else . end;
+    def grp: sub("^[0-9]+차 ";"") | sub(" V[0-9]+$";"") | sub("^변경 [0-9]+ ";"변경 ");
+    ($C | map({key:.sid, value:.}) | from_entries) as $S
+    | [$rows | split("\n")[] | select(length > 0) | split("\t")
+        | {at:((.[0] | strptime("%Y-%m-%d %H:%M") | mktime) - $off), when:.[0], stage:.[1], sid:.[2]}] as $R
+    | [range(0; $R|length) as $i | $R[$i] as $r
+        | ([range($i+1; $R|length) | select($R[.].sid == $r.sid) | $R[.].at] | first // 1e12) as $until
+        | ($S[$r.sid] // {missing:true}) as $s
+        | ([range(0; $i) | select($R[.].sid == $r.sid)] | length > 0) as $resumed
+        | (if $s.missing then [] else [$s.calls[] | select(.t >= $r.at and .t < $until)] end) as $c
+        | ([range(1; $c|length) as $k | $c[$k].t - $c[$k-1].t | select(. < 300)]) as $gaps
+        | (if $resumed or ($c|length) == 0 or $s.start == null then null else ($c[0].t - $s.start | floor) end
+           | if . != null and . >= 300 then null else . end) as $startup
+        | {when:$r.when, stage:$r.stage, group:($r.stage|grp), sid:$r.sid,
+           mode:(if $resumed then "이어 씀" else "새로" end), missing:($s.missing // false), calls:($c|length),
+           ctxStart:($c[0].ctx // null), ctxEnd:($c[-1].ctx // null),
+           cost:(($c | map(.cost) | add // 0) | floor), costFirst:(($c[0].cost // 0) | floor),
+           w1h:(($c | map(.w1h) | add // 0) > 0), tFirst:($c[0].t // null), tLast:($c[-1].t // null),
+           startup:$startup, callSec:($gaps | med), active:((($gaps | add) // 0) + ($startup // 0) | floor)}] as $G
+    | ([$G[] | select(.mode == "새로" and .calls > 0)]) as $N
+    | {start:($N | map(.ctxStart) | med), first:($N | map(.costFirst) | med), startup:($N | map(.startup) | med)} as $M
+    | [$G[0] + {judge:"첫 세션"}] + [range(1; $G|length) as $i | $G[$i] as $g
+        | (if $g.mode == "이어 씀" then $G[[range(0; $i) | select($G[.].sid == $g.sid)] | last] else $G[$i-1] end) as $p
+        | if $g.calls == 0 or $p.calls == 0 then $g + {judge:"측정 불가"}
+          elif $g.tFirst < $p.tLast then $g + {gap:($g.tFirst - $p.tLast | floor), judge:"앞 세션 진행 중", best:$g.mode, ruleChoice:$g.mode}
+          else
+            ($g.tFirst - $p.tLast | floor) as $gap
+            | (if $p.w1h then 3600 else 300 end) as $ttl | (if $p.w1h then 2 else 1.25 end) as $rw
+            | (if $g.mode == "새로" then
+                 {cost:($g.cost - (($g.costFirst - 0.1*$g.ctxStart) | pos) + $g.calls*0.1*(($p.ctxEnd - $g.ctxStart) | pos)
+                        + (if $gap > $ttl then ($rw - 0.1)*$p.ctxEnd else 0 end)),
+                  time:($g.active - ($g.startup // 0) + ($p.callSec // 0))}
+               else
+                 {cost:($g.cost - $g.calls*0.1*(($g.ctxStart - ($M.start // $g.ctxStart)) | pos) + ((($M.first // 0) - $g.costFirst) | pos)),
+                  time:($g.active + ($M.startup // 0) - ($g.callSec // 0))}
+               end) as $a
+            | (if $g.mode == "새로" then "이어 씀" else "새로" end) as $other
+            | (if $g.group == "수정" and $p.ctxEnd <= $maxctx and $gap <= $maxgap then "이어 씀" else "새로" end) as $rule
+            | (($g.cost - $a.cost) / ([$a.cost, 1] | max) * 100) as $dp
+            | (if $g.group == "리뷰" and $g.mode == "새로" then "리뷰는 새로(독립)"
+               elif $dp >= $fast then "틀림" elif ($dp | fabs) < $fast and $a.time < $g.active then "속도 손해" else "맞음" end) as $j
+            | $g + {gap:$gap, ttl:$ttl, altCost:($a.cost | floor), altTime:($a.time | floor), diffPct:($dp*10 | round / 10),
+                    judge:$j, ruleChoice:$rule, best:(if $j == "틀림" or $j == "속도 손해" then $other else $g.mode end)}
+          end] as $T
+    | def total(f): reduce $T[] as $t ({cost:0, time:0}; ($t | f) as $ch
+        | if $t.altCost == null or $ch == $t.mode then .cost += $t.cost | .time += $t.active
+          else .cost += $t.altCost | .time += $t.altTime end);
+    {basis:{phase:$phase, lastSession:$R[-1].when, changes:$changes, testRounds:$rounds, madeAt:(now | strflocaltime("%Y-%m-%d %H:%M"))},
+     measure:{rates:{input:1, cacheWrite5m:1.25, cacheWrite1h:2, cacheRead:0.1, output:5}, fastPct:$fast,
+              reuseRule:{maxCtx:$maxctx, maxGap:$maxgap}, sessions:($S | length), missing:([$C[] | select(.missing)] | length),
+              medians:$M,
+              totals:{actual:total(.mode), allNew:total("새로"), rule:total(.ruleChoice), best:total(.best)},
+              byStage:($G | group_by(.group) | map({group:.[0].group, sessions:(map(.sid) | unique | length), calls:(map(.calls) | add),
+                                                   cost:(map(.cost) | add), active:(map(.active) | add)}) | sort_by(-.cost)),
+              segments:$T}}' > "$out.tmp" && mv "$out.tmp" "$out"
+  rm -f "$calls"
+  [ -s "$out" ] || { echo "측정 실패: retro.json 을 쓰지 못했습니다"; return 1; }
+  jq -r '.measure as $m | .basis as $b
+    | "기준점: 단계 \($b.phase) · 변경 \($b.changes)개 · 검증 \($b.testRounds)회차 · 마지막 세션 \($b.lastSession)",
+      "세션 \($m.sessions)개(기록 없음 \($m.missing)) · 새 세션 중앙값: 시작 문맥 \($m.medians.start) · 첫 호출 \($m.medians.first) · 첫 응답 \($m.medians.startup)초",
+      "합계(환산 토큰 · 작업 초): 실제 \($m.totals.actual.cost) · \($m.totals.actual.time) / 모두 새로 \($m.totals.allNew.cost) · \($m.totals.allNew.time) / 규칙대로 \($m.totals.rule.cost) · \($m.totals.rule.time) / 가장 좋은 선택 \($m.totals.best.cost) · \($m.totals.best.time)",
+      "단계별: " + ([$m.byStage[] | "\(.group) \(.cost)(\(.sessions)세션)"] | join(" · ")),
+      "판정: " + ([$m.segments | group_by(.judge)[] | "\(.[0].judge) \(length)"] | join(" · ")),
+      "틀림·속도 손해 전환:",
+      ($m.segments[] | select(.judge == "틀림" or .judge == "속도 손해")
+        | "  \(.when) \(.stage) [\(.mode)] 실제 \(.cost) · \(.active)초 / 반대 \(.altCost) · \(.altTime)초 (\(.diffPct)%) 간격 \(.gap)초 직전 끝 문맥→시작 \(.ctxStart) \(.judge)")' "$out"
+}
+
+# dobby_retro_digest KEY — 판단 실수 갈래에 필요한 부분만 뽑는다. 큰 설계 문서·검증 결과를 통째로 읽지 않기 위해서다.
+#   추가 설계·이어받기 변경은 요구 변경이라 뺀다(버그가 섞인 것은 남긴다).
+dobby_retro_digest() {
+  local key="$1" d f
+  d="$(_order_dir "$key")"
+  echo "## 변경 절 머리(추가 설계·이어받기 제외)"
+  awk '/^## 변경 [0-9]+ — /{h=$0; k=""; r=""; next}
+       h != "" && /^- \*\*종류\*\*:/{k=$0}
+       h != "" && /^- \*\*요청\*\*:/{r=substr($0, 1, 400)}
+       h != "" && /^### /{ if (k ~ /버그/ || k !~ /추가 설계|이어받기/) print h "\n" k "\n" r "\n"; h=""}' "$d/design.md" 2>/dev/null
+  echo "## 리뷰 지적 [blocker]·[major]"
+  for f in "$d"/reviews/round-*/*.md; do [ -f "$f" ] && grep -H '^## \[\(blocker\|major\)\]' "$f"; done | sed "s|$d/||" | sort -V
+  echo "## 검증 이력"
+  awk '/^## /{i=($0 ~ /테스트 실행 이력/)} i' "$d/status.md"
+  echo "## 검증 실패 행"
+  for f in "$d"/test-runs/*/result.md; do [ -f "$f" ] && grep -H '| *FAIL' "$f" | cut -c1-400; done | sed "s|$d/||"
+  echo "## 계획 정정"
+  for f in "$d"/test-runs/*/result.md; do
+    [ -f "$f" ] && awk -v F="${f#$d/}" '/^## /{i=($0 ~ /계획 정정/); next} i && /^\|/ && $0 !~ /^\|[ -|]*$/ {print F ": " substr($0, 1, 400)}' "$f"
+  done
+  echo "## 구현 기록: 설계와 달라진 점"
+  awk '/^#+ /{i=($0 ~ /설계와 달라진 점/)} i' "$d/implementation.md" 2>/dev/null | cut -c1-400
+  echo "## QA"
+  awk '/^## /{i=($0 ~ /^## QA/)} i' "$d/status.md"
+  echo "## 사건 기록(판단에 닿는 줄)"
+  awk '/^## /{i=($0 ~ /이벤트 로그/); next} i' "$d/orchestration.md" 2>/dev/null \
+    | grep -E '설계 보완|변경 요청 접수|막힘|판단|검증 실패|실패 분석' | cut -c1-240
+}
+
+# dobby_retro_put KEY 파일 — 모델이 쓴 판단 부분을 retro.json 에 합친다. 측정 부분(basis·measure)은 덮어쓰지 못한다.
+dobby_retro_put() {
+  local key="$1" src="$2" f bad
+  f="$(_order_dir "$key")/retro.json"
+  [ -f "$f" ] || { echo "거부: retro.json 이 없습니다. dobby_retro_measure 를 먼저 부르세요"; return 1; }
+  jq -e 'type == "object"' "$src" >/dev/null 2>&1 || { echo "거부: $src 가 JSON 객체가 아닙니다"; return 1; }
+  bad="$(jq -r 'keys - ["summary","sessionFindings","ruleProposals","defects","proposals","evidence"] | join(", ")' "$src")"
+  [ -z "$bad" ] || { echo "거부: 쓸 수 없는 항목입니다 — $bad"; return 1; }
+  jq -s '.[0] * .[1]' "$f" "$src" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+
+# dobby_retro_lint KEY — 회고를 마칠 수 있는지 검사한다. 필수 항목·근거가 빠졌거나 근거 파일이 없으면 이유를 내고 1.
+dobby_retro_lint() {
+  local key="$1" d f errs p
+  d="$(_order_dir "$key")"; f="$d/retro.json"
+  [ -f "$f" ] || { echo "실패: retro.json 이 없습니다"; return 1; }
+  errs="$(jq -r '
+    (if (.basis | type) != "object" then "basis 없음" else empty end),
+    (if (.measure.segments | type) != "array" then "measure 없음 — dobby_retro_measure 를 먼저 부르세요" else empty end),
+    (if (.summary // "") == "" then "summary 비어 있음" else empty end),
+    (["sessionFindings","ruleProposals","defects","proposals","evidence"][] as $k
+      | if (.[$k] | type) != "array" then "\($k) 배열 없음" else empty end),
+    (.ruleProposals[]? | select((.target // "") == "" or (.value // "") == "" or ((.evidence // []) | length) == 0)
+      | "규칙 제안에 대상·값·근거가 빠짐: \(.title // "?")"),
+    (.defects[]? | select((.foundAt // "") == "" or ((.evidence // []) | length) == 0)
+      | "결함에 처음 잡힌 단계·근거가 빠짐: \(.title // "?")"),
+    (.proposals[]? | select(((.evidence // []) | length) == 0) | "제안에 근거가 빠짐: \(.title // "?")")' "$f" 2>&1)"
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    p="${p%%#*}"; case "$p" in /*|~*) p="${p/#\~/$HOME}" ;; *) p="$d/$p" ;; esac
+    [ -e "$p" ] || errs="${errs:+$errs
+}근거 파일 없음: ${p#$d/}"
+  done < <(jq -r '[.. | objects | .evidence? // empty | if type == "array" then .[] else . end]
+    | .[] | select(type == "string") | select(test("^[^ ]+\\.(md|json|jsonl|png|html)(#.*)?$"))' "$f")
+  [ -z "$errs" ] && return 0
+  printf '%s\n' "$errs"; return 1
+}
+
+# dobby_retro_office KEY start|end [결과] — 사무실에 회고 시작·끝을 알린다. 사무실이 꺼져 있어도 회고는 이어 간다.
+dobby_retro_office() {
+  [ -n "${1:-}" ] && [ -n "${2:-}" ] || return 0
+  _office_notify "$(_office_json kind retro op "$2" key "$1" result "${3:-}")"
+}
+
 echo "dobby-lib loaded" >&2
