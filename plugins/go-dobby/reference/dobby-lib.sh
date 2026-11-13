@@ -6386,6 +6386,18 @@ dobby_retro_lint() {
       | "규칙 제안에 대상·값·근거가 빠짐: \(.title // "?")"),
     (.defects[]? | select((.foundAt // "") == "" or ((.evidence // []) | length) == 0)
       | "결함에 처음 잡힌 단계·근거가 빠짐: \(.title // "?")"),
+    (["설계","구현","리뷰","통합","배포","검증","사람 확인"] as $st | .defects[]? as $x
+      | ((["what","why","prevent"][] | select(($x[.] // "") == "") | "잘못한 판단에 \(.) 가 빠짐: \($x.title // "?")"),
+         (if (($x.fixes // []) | length) == 0 then "잘못한 판단에 고칠 곳(fixes)이 빠짐: \($x.title // "?")" else empty end),
+         ($x.fixes[]? | select((.where | IN("스킬","서버","사람") | not) or (.change // "") == "")
+           | "고칠 곳의 where(스킬·서버·사람)·change 가 잘못됨: \($x.title // "?")"),
+         (if ($x.foundAt | IN($st[])) then empty else "foundAt 은 \($st | join("·")) 중 하나: \($x.title // "?")" end),
+         (if (($x.couldAt // "미확인") | IN($st[], "미확인")) then empty else "couldAt 은 단계 이름 또는 미확인: \($x.title // "?")" end))),
+    (if ((.summary // "") | [splits("(?<=[.!?])\\s+")] | map(select(length > 0)) | length) > 3
+      then "summary 는 세 문장 이하" else empty end),
+    ([.summary, (.defects[]? | .what, .why, .prevent, (.fixes[]?.change)), (.sessionFindings[]?.why), (.ruleProposals[]?.why)]
+      | .[] | select(type == "string") | splits("(?<=[.!?])\\s+") | select(length > 100)
+      | "100자 넘는 문장(60자 안팎으로 끊기): \(.[0:40])…"),
     (.proposals[]? | select(((.evidence // []) | length) == 0) | "제안에 근거가 빠짐: \(.title // "?")")' "$f" 2>&1)"
   while IFS= read -r p; do
     [ -n "$p" ] || continue
