@@ -65,7 +65,7 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 | `_testrun_last KEY 환경 [뺄회차폴더]` | 범위 헬퍼 안 | 같은 환경 회차를 최신순으로 훑어 시나리오마다 마지막 판정(SKIP 포함)을 `S1<TAB>판정` 으로 낸다 |
 | `dobby_testplan_scope_all KEY "사람 지시"` | `/do {키} 전체 테스트`, 변경 접수에서 전체 테스트 지시 | `## 검증 범위` 절을 `전체` 로 덮어쓰고, 열린 회차의 `SKIP(범위)` 행 판정·근거를 비운다 |
 | `dobby_testplan_slice KEY S1,S2` | /do 검증 세션 | 테스트 계획에서 제목·`## 사전 준비`·`## 영향 번들` 과 그 시나리오 절만 출력. 그 밖의 `##` 절은 나가지 않으므로 공통 지시는 `## 사전 준비` 아래에 둔다 |
-| `dobby_ship_pr KEY 워크트리 브랜치 환경 "제목" "본문"` | dobby-ship 2단계 | PR 생성(번호 stdout). **환경이 dev·rc1·rc4·stage 가 아니면·그 저장소에 그 환경이 없으면·미커밋이 남아 있으면 거부**, 이미 열린 PR 은 재사용. 저장소는 워크트리에서 읽고 **베이스 브랜치를 저장소에 맞게 옮긴다**(com.wadiz.web 의 dev → `cloud_dev`). 리뷰봇이 있는 저장소(wadiz-frontend)의 dev 외 환경에만 `--reviewer wadiz-fe/fe1-team` 자동 부착 |
+| `dobby_ship_pr KEY 워크트리 브랜치 환경 "제목" "본문" ["이전 PR 의 지적과 처리 표"]` | dobby-ship 2단계 | PR 생성(번호 stdout). **환경이 dev·rc1·rc4·stage 가 아니면·그 저장소에 그 환경이 없으면·미커밋이 남아 있으면 거부**, 이미 열린 PR 은 재사용. 저장소는 워크트리에서 읽고 **베이스 브랜치를 저장소에 맞게 옮긴다**(com.wadiz.web 의 dev → `cloud_dev`). 리뷰봇이 있는 저장소(wadiz-frontend)의 dev 외 환경에만 `--reviewer wadiz-fe/fe1-team` 자동 부착 |
 | `dobby_ship_build KEY 환경 번들...` | dobby-ship 6단계 | **wadiz-frontend 전용.** 번들마다 CI/CD 워크플로 실행(run id stdout). **static 은 `build_entry_all=true` 를 무조건 붙인다** — 없으면 `--since` 로 바뀐 엔트리만 빌드돼 공용 패키지 변경이 반영 안 된다. admin 은 static 빌드의 옵션(`build_admin`)으로 얹는다. 모르는 번들은 거부 |
 | `dobby_ship_web_ci KEY 환경 [머지시각]` | dobby-ship 6단계 | **com.wadiz.web 전용.** 머지 push 로 **자동 시작된** CI run 을 찾아 빌드 칸에 `web#{run id}` 로 적는다(run id stdout). ⛔ 빌드를 걸지 않는다 — 걸면 push 트리거와 겹쳐 두 번 돈다. 3분 안에 run 이 안 나타나면 거부 |
 | `dobby_ship_argo KEY 환경 [check]` | dobby-ship 8단계 | **com.wadiz.web 전용.** argocd `app sync` + `app wait --health`. **거부**: stage · **G-B** 같은 환경의 wadiz-frontend 가 `배포 확인` 전 · CI 가 success 아님 · argocd 세션 없음(브라우저 SSO 라 사람만 가능) · app list 에 없는 앱 · 라이브 앱. `check` 를 주면 sync 하지 않고 상태만 본다(테스트 실패 진단용) |
@@ -78,7 +78,7 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 | `dobby_bridge_finish 임시워크트리 브랜치 환경브랜치` | 충돌을 푼 뒤 | 표시자·스테이지·저장소 규칙을 검사하고 커밋·푸시·임시 워크트리 정리 |
 | `dobby_ship_stage KEY 저장소 환경 단계 [PR] [빌드] [비고]` | dobby-ship 단계 전이마다 | status.md `## 배포` 표를 **(저장소, 환경)별 한 행**으로 upsert. **어휘 아홉 개·환경 네 개·저장소 둘 밖이면 거부.** 저장소 칸이 없는 옛 6칸 표는 이때 7칸으로 올린다. 다음 실행이 여기서 이어받는다 |
 | `dobby_v2_step KEY [변경\|light]` | 시작 헬퍼·run.sh·대시보드 | 이번에 할 일 한 줄: `단계<TAB>담당자 슬러그<TAB>설명<TAB>지시 문서`. 할 일이 없으면 `멈춤<TAB>이유`. 옛 규칙 오더는 이때 한 번 옮긴다(`- **단계 규칙**: 다섯 담당자`) |
-| `dobby_v2_begin KEY [인자…]` | `/do` 시작(입력 검사 훅이 부름) | 단계를 정하고 담당자 다섯 행을 맞추고, 단계값·세션 기록·작업 표시를 적고, 자기 행을 `작업중` 으로. 첫 줄 `시작함`·`이미 시작됨`·`시작 전(메타 없음)`·`멈춤`(반환 2)·`겹침`(반환 3, 다른 살아 있는 세션이 작업 중) |
+| `dobby_v2_begin KEY [인자…]` | `/do` 시작(입력 검사 훅이 부름) | 단계를 정하고 켜진 담당자의 행을 맞추고(담당자 줄이 없으면 다섯), 단계값·세션 기록·작업 표시를 적고, 자기 행을 `작업중` 으로. 결과 끝에 그 담당자가 지킬 줄(`지킬 것:`, `role-personas.md` 의 `/do` 절. 담당자 줄이 있는 오더만)과, 답이 달린 질문이 있으면 `질문과 답:` 을 붙이고 그 질문을 닫는다. 첫 줄 `시작함`·`이미 시작됨`·`시작 전(메타 없음)`·`멈춤`(반환 2)·`겹침`(반환 3, 다른 살아 있는 세션이 작업 중) |
 | `dobby_v2_end KEY 결과 [덧붙임]` | `/do` 각 지시 문서의 마지막 줄 | 결과가 사실(작업 폴더 변경, 문서 수정 시각, 리뷰 지적 수, 커밋·푸시, 배포 표, 회차)과 맞는지 확인하고 상태를 다음 차례로 옮긴다. 안 맞으면 `거부: 이유` 와 1. 결과 어휘는 `skills/do/SKILL.md` "시작과 끝" |
 | `dobby_v2_reconcile KEY [뺄 세션]` | 시작 헬퍼·run.sh | 이 오더를 잡은 살아 있는 세션이 없는데 `작업중` 인 행을 `대기` 로 돌린다 |
 | `dobby_v2_wait_mark KEY 저장소 wait-review\|wait-build PR또는run 경과분` | run.sh 기다리는 동안 | 배포담당 행을 `기다림` 으로, 설명에 무엇을 몇 분째 기다리는지 |
@@ -87,6 +87,15 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 | `dobby_v2_reuse_ok KEY SID` | run.sh 다음 세션 띄우기 전 | 다음 일이 수정이고 SID 세션의 마지막 문맥 12만 이하·5분 안이면 "문맥<TAB>경과초" 출력 후 0, 아니면 출력 없이 1. 근거는 `skills/do/session-reuse.md` |
 | `dobby_v2_next_hint KEY` | `/do` 세션 마무리(대화형) | 이어 쓰는 쪽이 쌀 때만 `다음` 칸 안내 세 줄(기한 지금+4분)을 출력. 아니면 출력 없음. 헤드리스 세션에서는 늘 침묵 |
 | `dobby_v2_change_open KEY [check]` | `/do` 변경 접수 | 자동 실행 중이면 거부(1). `check` 면 그 확인만 한다. 아니면 해결 표시를 무르고, 다음 리뷰 차수 빈 폴더를 열고(마지막 폴더가 비었으면 재사용), 단계를 설계로 바꾼 뒤 리뷰 시작 차수를 출력한다. 그다음 `dobby_design_ack` 를 부르면 새 세션이 그 변경을 구현한다 |
+| `dobby_v2_roles KEY` | 단계 판정·대시보드 | 켜진 담당자를 한 줄에 하나씩(기획자·개발자·산출자·리뷰어·배포담당·테스터 순). 상태 문서에 `- **담당자**:` 줄이 없으면 산출자를 뺀 다섯 |
+| `dobby_v2_set_roles KEY "담당자, …" ["근거"]` | `/do` 설계 세션(이슈를 읽은 직후), 진행 중 담당자를 더 켤 때 | 담당자를 켠다(더하기만). `- **담당자**: 기획자, 산출자, 리뷰어` 줄을 적고 종류를 맞춘다(개발자가 켜지면 개발, 아니면 산출물). 개발자를 켜면 리뷰어·배포담당도 켠다. 테스터는 개발자가 있어야 한다. 상태표가 있으면 새 담당자의 행을 더한다 |
+| `dobby_v2_role_skip KEY 담당자 "이유"` | `/do` 기획자 세션 | 켠 담당자의 일이 없어졌을 때 그 행을 `완료`, 설명 "할 일 없음 — 이유"로 적는다. 단계 판정이 그 담당자의 단계를 건너뛴다 |
+| `dobby_v2_pr_fixes KEY` | 설계 다시 보기 세션 | PR 변경요청으로 설계를 바꾼 횟수(설계 문서의 `## 변경 N — PR 리뷰 지적` 절 수). 3번이 상한 |
+| `dobby_ship_close_pr KEY 워크트리 환경 PR번호 "지적 요약"` | `/do` 배포 세션(변경요청이 달렸을 때) | 변경요청(`CHANGES_REQUESTED`)인 PR 만 닫는다. 배포 표의 그 저장소·환경 줄을 지우고, 닫은 번호와 이유를 이벤트 기록에 남긴다. 그 뒤 `dobby_v2_end KEY 리뷰지적 "요약"` |
+| `dobby_v2_ask KEY file 질문파일` | `/do` 세션이 사람에게 물을 때 | 질문 초안(JSON)을 검사해 `ask.json` 으로 남긴다. 일곱 칸·답하는 방식 넷·방법마다 "고르면 어떻게 되는지"·내부 낱말을 본다. 어기면 `거부:`. 그 뒤 `dobby_v2_end KEY 질문`. 칸과 예시는 `skills/do/ask.md` |
+| `dobby_v2_ask_answer KEY 답` | 대시보드·오피스의 질문 창 | 답을 적는다. 예/아니오는 `예`·`아니오`, 하나 고르기는 방법 이름이나 적은 글, "멈추기"는 언제나 받는다 |
+| `dobby_v2_ask_verify KEY` | run.sh(차례마다 맨 앞) | 답이 달린 직접 해 주기 질문에 확인 명령이 있으면 돌린다. 통과하지 못하면 답을 지우고 질문 창에 알린 뒤 1 |
+| `dobby_v2_ask_resume KEY` | run.sh | 답이 달린 질문을 남긴 세션을 이어 띄울 때만 `세션<TAB>시작한 폴더<TAB>문맥` 을 내고 0. 테스터·배포담당의 질문이고 문맥이 12만 이하일 때다 |
 | `dobby_release_note KEY 배포일 저장소 브랜치 행번호 PR 머지 [페이지주소]` | dobby-release 기록 단계 | status.md `## 릴리즈 노트` 표를 **(배포일, 저장소)별 한 행**으로 upsert. 배포일은 `YYYY-MM-DD`, 머지 칸은 `머지됨·머지 안 함·충돌·건너뜀·확인 못 함` 밖이면 거부. 표가 없으면 `## 세션` 앞에 만든다. 대시보드 오더 화면이 이 표로 등록 여부를 보여 준다 |
 | `dobby_commit_push 워크트리 브랜치 "메시지"` | P6 통과 후 | commit --no-verify + push. **⛔ 메시지에 내부 용어(`round-N`·리뷰 반영·슬러그)·금지 서명(Co-Authored-By 등) 감지 시 거부**(코드 강제) |
 | `dobby_bootstrap_inline KEY "제목" 종류 슬러그 "이름" "설명" [상태] [CWD]` | P4-L·P4-C·P4-W 인라인 분기 | status 골격+제목+종류+세션+상태표 1행+agent-logs(메인 세션 전사)를 한 번에 |
