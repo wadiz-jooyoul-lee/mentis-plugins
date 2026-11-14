@@ -195,9 +195,20 @@ role_model() {
 
 # 이 셸이 띄운 세션은 자동 실행을 또 띄우지 않는다(설계 세션이 끝에 부르는 dobby_v2_autorun 이 아무것도 하지 않게).
 export DOBBY_V2_CHAINED=1
-n=0; sid=""; noted=""
+n=0; sid=""; noted=""; extend=""
 while :; do
+  # 자동 실행이 멈춘 뒤에 답한 "직접 해 주기" 질문 — 확인 명령이 통과하지 못하면 답을 지우고 다시 기다린다.
+  dobby_v2_ask_verify "$KEY" || true
   ask_open && wait_ask
+  # 답이 달린 채 남은 질문 가운데 셸이 남긴 것(자동 실행이 8시간 기다리다 멈춘 뒤에 답한 것)은 여기서 받아 닫는다.
+  if [ -f "$D/ask.json" ] && [ "$(jq -r '.from.role // empty' "$D/ask.json" 2>/dev/null)" = shell ]; then
+    case "$(jq -r '.answer.value // empty' "$D/ask.json")" in
+      멈추기) dobby_v2_ask_close "$KEY" 멈춤; die "질문 창에서 멈추기를 골랐습니다" ;;
+      "30분 더 기다리기") dobby_v2_ask_close "$KEY" "30분 더"; extend=1 ;;   # 아래 기다리는 자리에서 한도를 30분 늘린다
+      *) if [ "$(jq -r .kind "$D/ask.json")" = choice ]; then dobby_v2_ask_close "$KEY" 멈춤; die "질문 창에서 그만 기다리기를 골랐습니다"; fi
+         dobby_v2_ask_close "$KEY" 통과 ;;
+    esac
+  fi
   # 답이 달린 질문이 남아 있으면 세션이 남긴 질문이다. 이어 띄울지 먼저 정한다. 질문은 다음 세션의 시작 헬퍼가 전하고 닫는다.
   answered=""; ask_sid=""; ask_cwd=""; ask_role=""
   if [ -f "$D/ask.json" ]; then
@@ -235,6 +246,7 @@ while :; do
         dobby_agent_state "$KEY" deploy-agent 막힘 "" "배포 막힘 — $repo $AUTO_ENV: $tgt" "상태 문서 배포 표의 비고를 보고 처리한 뒤 /do $KEY" >/dev/null
         stop "배포가 막혔습니다($repo $AUTO_ENV): $tgt. 상태 문서 '## 배포' 표의 비고를 보고 처리한 뒤 /do $KEY 로 이어 가세요" ;;
       wait-review)
+        [ -z "$extend" ] || { ext_tgt="$tgt"; ext_lim=$(( el + 1800 )); extend=""; }
         lim=1800; [ "$ext_tgt" = "$tgt" ] && lim=$ext_lim
         [ "$el" -lt "$lim" ] || { ask_delay "리뷰봇 리뷰가 $((el / 60))분째 없습니다 ($repo $AUTO_ENV PR $tgt)" \
           "자동 코드리뷰가 와야 머지로 넘어갑니다" "PR 에 리뷰어(wadiz-fe/fe1-team)가 붙었는지 확인해 주세요"; continue; }
@@ -246,6 +258,7 @@ while :; do
         printf '리뷰봇 리뷰를 기다립니다(%s PR %s, %d분째) · %s\n' "$repo" "$tgt" $((el / 60)) "$(date '+%H:%M')"
         sleep 120; continue ;;
       wait-build)
+        [ -z "$extend" ] || { ext_tgt="$tgt"; ext_lim=$(( el + 1800 )); extend=""; }
         lim=1800; [ "$ext_tgt" = "$tgt" ] && lim=$ext_lim
         [ "$el" -lt "$lim" ] || { ask_delay "빌드가 $((el / 60))분째 끝나지 않았습니다 ($repo $AUTO_ENV run $tgt)" \
           "빌드가 끝나야 배포 확인으로 넘어갑니다" "터미널에서 확인: gh run view $tgt"; continue; }

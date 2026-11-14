@@ -94,6 +94,7 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 | `dobby_ship_close_pr KEY 워크트리 환경 PR번호 "지적 요약"` | `/do` 배포 세션(변경요청이 달렸을 때) | 변경요청(`CHANGES_REQUESTED`)인 PR 만 닫는다. 배포 표의 그 저장소·환경 줄을 지우고, 닫은 번호와 이유를 이벤트 기록에 남긴다. 그 뒤 `dobby_v2_end KEY 리뷰지적 "요약"` |
 | `dobby_v2_ask KEY file 질문파일` | `/do` 세션이 사람에게 물을 때 | 질문 초안(JSON)을 검사해 `ask.json` 으로 남긴다. 일곱 칸·답하는 방식 넷·방법마다 "고르면 어떻게 되는지"·내부 낱말을 본다. 어기면 `거부:`. 그 뒤 `dobby_v2_end KEY 질문`. 칸과 예시는 `skills/do/ask.md` |
 | `dobby_v2_ask_answer KEY 답` | 대시보드·오피스의 질문 창 | 답을 적는다. 예/아니오는 `예`·`아니오`, 하나 고르기는 방법 이름이나 적은 글, "멈추기"는 언제나 받는다 |
+| `dobby_v2_ask_verify KEY` | run.sh(차례마다 맨 앞) | 답이 달린 직접 해 주기 질문에 확인 명령이 있으면 돌린다. 통과하지 못하면 답을 지우고 질문 창에 알린 뒤 1 |
 | `dobby_v2_ask_resume KEY` | run.sh | 답이 달린 질문을 남긴 세션을 이어 띄울 때만 `세션<TAB>시작한 폴더<TAB>문맥` 을 내고 0. 테스터·배포담당의 질문이고 문맥이 12만 이하일 때다 |
 | `dobby_release_note KEY 배포일 저장소 브랜치 행번호 PR 머지 [페이지주소]` | dobby-release 기록 단계 | status.md `## 릴리즈 노트` 표를 **(배포일, 저장소)별 한 행**으로 upsert. 배포일은 `YYYY-MM-DD`, 머지 칸은 `머지됨·머지 안 함·충돌·건너뜀·확인 못 함` 밖이면 거부. 표가 없으면 `## 세션` 앞에 만든다. 대시보드 오더 화면이 이 표로 등록 여부를 보여 준다 |
 | `dobby_commit_push 워크트리 브랜치 "메시지"` | P6 통과 후 | commit --no-verify + push. **⛔ 메시지에 내부 용어(`round-N`·리뷰 반영·슬러그)·금지 서명(Co-Authored-By 등) 감지 시 거부**(코드 강제) |

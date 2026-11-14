@@ -3361,9 +3361,9 @@ dobby_v2_wait() {
 #   받아들이면 초안 파일은 지운다.
 # dobby_v2_ask KEY 종류 제목 이유 할일 [확인명령|선택지] — 옛 쓰임(종류 action·choice·input). 옛 형식으로 남긴다.
 dobby_v2_ask() {
-  local key="$1" kind="$2" title="$3" why="$4" todo="$5" extra="${6:-}" f
-  if [ "$kind" = file ]; then _v2_ask_file "$key" "$3"; return; fi
-  case "$kind" in action|choice|input) ;; *) _die "부탁 종류는 action·choice·input: '$kind'"; return 1 ;; esac
+  local key="${1:-}" kind="${2:-}" title="${3:-}" why="${4:-}" todo="${5:-}" extra="${6:-}" f   # run.sh 는 set -u 로 돈다
+  if [ "$kind" = file ]; then _v2_ask_file "$key" "$title"; return; fi
+  case "$kind" in action|choice|input) ;; *) _die "질문 종류는 action·choice·input(새 형식은 dobby_v2_ask KEY file 파일): '$kind'"; return 1 ;; esac
   [ -n "$key" ] && [ -n "$title" ] || { _die "쓰임: dobby_v2_ask KEY 종류 제목 이유 할일 [확인명령|선택지]"; return 1; }
   f="$(_order_dir "$key")/ask.json"
   jq -n --arg id "$(date '+%Y%m%d-%H%M%S')" --arg kind "$kind" --arg title "$title" --arg why "$why" --arg todo "$todo" \
@@ -3452,7 +3452,7 @@ dobby_v2_ask_get() { local f; f="$(_order_dir "$1")/ask.json"; [ -f "$f" ] && ca
 #   답을 적으면 질문한 담당자의 행을 사람 차례에서 대기로 돌린다.
 dobby_v2_ask_answer() {
   local key="$1" ans="$2" f role o
-  f="$(_order_dir "$key")/ask.json"; [ -f "$f" ] || { _die "열린 부탁이 없습니다: $key"; return 1; }
+  f="$(_order_dir "$key")/ask.json"; [ -f "$f" ] || { _die "열린 질문이 없습니다: $key"; return 1; }
   [ -n "$ans" ] || { _die "답이 비었습니다"; return 1; }
   if [ "$ans" != 멈추기 ]; then
     case "$(jq -r .kind "$f")" in
@@ -3464,7 +3464,7 @@ dobby_v2_ask_answer() {
     esac
   fi
   jq --arg a "$ans" --arg at "$(date '+%Y-%m-%d %H:%M')" '.answer = {value:$a, at:$at} | .note = ""' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
-  dobby_event "$key" "부탁에 답함 — $(jq -r .title "$f"): $ans" 2>/dev/null
+  dobby_event "$key" "질문에 답함 — $(jq -r .title "$f"): $ans" 2>/dev/null
   role="$(jq -r '.from.role // empty' "$f")"; o="$(_order_dir "$key")/orchestration.md"
   if [ -n "$role" ] && [ "$ans" != 멈추기 ] && [ "$(_board_cell "$o" "$role" 상태)" = "사람 차례" ]; then
     _v2_set "$key" "$role" 대기 "" "답을 받음 — 이어 갈 차례"
@@ -3479,6 +3479,20 @@ dobby_v2_ask_close() {
   mkdir -p "$d/asks"
   jq --arg r "$res" --arg at "$(date '+%Y-%m-%d %H:%M')" '.closed = {result:$r, at:$at}' "$f" > "$d/asks/$(jq -r .id "$f").json" \
     && rm -f "$f"
+}
+
+# dobby_v2_ask_verify KEY — run.sh 용. 답이 달린 "직접 해 주기" 질문에 확인 명령이 있으면 그 명령을 돌린다.
+#   통과하거나 볼 것이 없으면 0. 통과하지 못하면 답을 지우고 질문 창에 알린 뒤 1(질문이 다시 열려 run.sh 가 기다린다).
+#   자동 실행이 멈춘 뒤에 답한 질문은 기다리기(dobby_v2_ask_wait)를 거치지 않으므로 다시 뜬 run.sh 가 이것으로 확인한다.
+dobby_v2_ask_verify() {
+  local f chk ans
+  f="$(_order_dir "$1")/ask.json"; [ -f "$f" ] || return 0
+  [ "$(jq -r .kind "$f" 2>/dev/null)" = action ] || return 0
+  chk="$(jq -r '.check // ""' "$f")"; ans="$(jq -r '.answer.value // ""' "$f")"
+  [ -n "$chk" ] && [ -n "$ans" ] && [ "$ans" != 멈추기 ] || return 0
+  bash -c "$chk" >/dev/null 2>&1 && return 0
+  jq --arg n "$(date '+%H:%M') 확인해 봤지만 아직 안 됐습니다" '.answer = null | .note = $n' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  return 1
 }
 
 # dobby_v2_ask_resume KEY — run.sh 용. 답이 달린 질문을 남긴 세션을 이어 띄울지 정한다.
@@ -3498,12 +3512,12 @@ dobby_v2_ask_resume() {
   printf '%s\t%s\t%s\n' "$sid" "$cwd" "$ctx"
 }
 
-# dobby_v2_ask_wait KEY [최대초] — run.sh 용. 열린 부탁이 풀릴 때까지 셸에서 기다리고 결과 한 단어를 낸다.
+# dobby_v2_ask_wait KEY [최대초] — run.sh 용. 열린 질문이 풀릴 때까지 셸에서 기다리고 결과 한 단어를 낸다.
 #   answered : 답이 왔다(yesno·choice·input, 확인 명령이 없는 action, 세션이 남긴 action 의 확인 명령 통과)
 #              — 다음 세션의 시작 헬퍼가 질문과 답을 전하고 닫는다
 #   passed   : 셸이 남긴 action 의 확인 명령이 통과했다 — 질문은 닫혔다
 #   stop     : 답이 "멈추기"
-#   changed  : 기다리는 사이 사람이 손댔다(설계·코드 변경, 터미널 세션, 단계 바뀜) — 부탁을 닫고 끝낸다
+#   changed  : 기다리는 사이 사람이 손댔다(설계·코드 변경, 터미널 세션, 단계 바뀜) — 질문을 닫고 끝낸다
 #   timeout  : 최대 시간(기본 8시간)이 지났다
 # 1분마다 본다. 셸 명령만 쓰므로 기다리는 동안 토큰이 들지 않는다.
 dobby_v2_ask_wait() {
@@ -5448,13 +5462,13 @@ _v2_md_day() {
 }
 
 dobby_v2_next_all() {
-  local ps today d k f ph title upd env kind grp text since cmd link act dr drk drs rd row st ln dt stf tf pst bs bn bd bt
+  local ps today d k f ph phn title upd env kind grp text since cmd link act dr drk drs rd row st ln dt stf tf pst bs bn bd bt
   ps="$(ps -axo command 2>/dev/null)"; today="$(date '+%Y-%m-%d')"
   dobby_v2_external_check >/dev/null 2>&1
   _v2_emit() {
     # "멈췄다" 판정이어도 이 오더를 잡은 세션이 살아서 사람 답을 기다리면 그 사실을 알린다(자동 실행 버튼 없음).
     case "$kind" in verify-continue|resume|drift-design|drift-code)
-      [ "$pst" = waiting ] && { grp=mine; kind=answer-wait; text="터미널 세션이 답을 기다립니다 — $ph 단계"; cmd=""; link=""; act=""; } ;;
+      [ "$pst" = waiting ] && { grp=mine; kind=answer-wait; text="터미널 세션이 답을 기다립니다 — $phn 단계"; cmd=""; link=""; act=""; } ;;
     esac
     jq -nc --arg key "$k" --arg title "$title" --arg phase "$ph" --arg group "$grp" --arg kind "$kind" \
       --arg text "$text" --arg since "$since" --arg env "$env" --arg cmd "$cmd" --arg link "$link" --arg action "$act" \
@@ -5468,13 +5482,15 @@ dobby_v2_next_all() {
     upd="$(sed -nE 's/^- \*\*갱신\*\*:[ \t]*([0-9-]+ [0-9:]+).*/\1/p' "$f" | head -1)"
     env="$(dobby_v2_env "$k")"
     grp=mine; kind=""; text=""; since="$upd"; cmd=""; link=""; act=""; pst="$(_v2_presence "$k")"
+    # 문구에 쓰는 단계 이름. 담당자 줄이 있는 오더는 기획자에게 넘어간 상태를 "설계 다시 보기"로 부른다(옛 오더는 단계값 그대로)
+    phn="$ph"; [ "$ph" = 실패분석 ] && [ -n "$(_v2_roles_line "$k")" ] && phn="설계 다시 보기"
 
     if printf '%s\n' "$ps" | grep -Eq "run\.sh'? '?$k'?( |$)"; then
       if [ -f "$d/ask.json" ] && [ -z "$(jq -r '.answer.value // empty' "$d/ask.json" 2>/dev/null)" ]; then
         kind=ask; act=ask; text="자동 실행이 답을 기다립니다 — $(jq -r .title "$d/ask.json")"
         since="$(jq -r .created "$d/ask.json")"; _v2_emit; continue
       fi
-      grp=auto; kind=running; text="자동 실행 중 — $ph 단계"; _v2_emit; continue
+      grp=auto; kind=running; text="자동 실행 중 — $phn 단계"; _v2_emit; continue
     fi
     # 자동 실행이 죽어 있어도 답 없는 질문은 사람 차례로 낸다(8시간 넘게 답이 없어 멈춘 뒤, 또는 자동 실행 밖에서 남은 질문).
     if [ -f "$d/ask.json" ] && [ -z "$(jq -r '.answer.value // empty' "$d/ask.json" 2>/dev/null)" ]; then
@@ -5482,7 +5498,7 @@ dobby_v2_next_all() {
       since="$(jq -r .created "$d/ask.json")"; _v2_emit; continue
     fi
     # 옛 규칙("방금 끝난 일")으로 적힌 단계는 한 번 옮겨 적는다. 자동 실행이 도는 오더는 건드리지 않는다(위에서 넘김).
-    _v2_rule_ok "$k" || { _v2_phase_migrate "$k" >/dev/null 2>&1; ph="$(_order_phase "$k")"; }
+    _v2_rule_ok "$k" || { _v2_phase_migrate "$k" >/dev/null 2>&1; ph="$(_order_phase "$k")"; phn="$ph"; }
 
     # 막힘과 세션 끊김은 단계와 상관없이 먼저 알린다(담당자 행의 설명·사람 할 일 칸 그대로).
     IFS=$'\t' read -r bs bn bd bt < <(awk -F'|' '
@@ -5541,8 +5557,8 @@ dobby_v2_next_all() {
           kind=run-ready; text="설계 확정 — 자동 실행 대기"; act=autorun
         fi ;;
       구현|산출|리뷰|수정|실패분석)
-        if _v2_recent "$k"; then grp=work; kind=working; text="터미널에서 $ph 진행 중"
-        else kind=resume; text="$ph 차례입니다 — 자동 실행으로 이어 가기"; act=autorun
+        if _v2_recent "$k"; then grp=work; kind=working; text="터미널에서 $phn 진행 중"
+        else kind=resume; text="$phn 차례입니다 — 자동 실행으로 이어 가기"; act=autorun
         fi ;;
       통합)
         if [[ "$k" == TASK-* ]] && [ -n "$(_v2_pr_line "$k")" ] && [ "$(_v2_state "$k" deploy-agent)" != 작업중 ]; then
@@ -5814,12 +5830,13 @@ _v2_on() { _v2_has "$1" "$2" && ! _v2_idle "$1" "$2"; }
 #   · 개발자를 켜면 리뷰어와 배포담당도 켠다(구현은 리뷰를 받고 커밋·푸시로 나간다). 테스터는 개발자가 있어야 켤 수 있다.
 #   · 개발자나 산출자 가운데 하나는 있어야 한다.
 #   · 종류 줄도 맞춘다: 개발자가 켜지면 개발, 아니면 산출물.
-#   · 이미 시작한 옛 오더(담당자 줄 없음)에 부르면 지금의 다섯에 더한다.
+#   · 진행 중인 옛 오더(담당자 줄이 없고, 설계가 확정된 적이 있거나 구현 이후 단계)에 부르면 지금의 다섯에 더한다.
+#   · 설계가 아직 확정된 적 없는 오더는 새 오더다. 시작 헬퍼가 먼저 다섯 행을 깔았어도 켠 담당자만 남긴다.
 #   · "할 일 없음"으로 끝냈던 담당자를 다시 주면 대기로 되돌린다.
 #   출력: 적힌 담당자 줄의 값.
 dobby_v2_set_roles() { _dobby_locked "$1" _dobby_v2_set_roles_u "$@"; }
 _dobby_v2_set_roles_u() {
-  local key="$1" asked="$2" why="${3:-}" f cur want r out="" s
+  local key="$1" asked="$2" why="${3:-}" f cur want r out="" s fresh=""
   f="$(_order_dir "$key")/status.md"
   [ -f "$f" ] || { _die "$key 의 상태 문서가 없습니다"; return 1; }
   asked="$(printf '%s\n' "$asked" | tr ',' '\n' | sed 's/^[ \t]*//;s/[ \t]*$//' | sed '/^$/d')"
@@ -5827,8 +5844,20 @@ _dobby_v2_set_roles_u() {
     [ -n "$r" ] || continue
     case " $DOBBY_V2_ROLES " in *" $r "*) ;; *) _die "모르는 담당자입니다: '$r' (쓸 수 있는 이름: $DOBBY_V2_ROLES)"; return 1 ;; esac
   done < <(printf '%s\n' "$asked")
+  # 담당자 줄이 없는 오더는 둘이다. 설계 쪽 단계이고 설계가 한 번도 확정된 적이 없으면(승인 기록도 구현 기록도 없다)
+  # 지금 담당자를 처음 정하는 새 오더다 — 기획자부터 센다. 설계 세션이 시작 헬퍼를 먼저 불러 단계 규칙 줄과 다섯 행이
+  # 깔려 있어도 같다. 그 밖에는(설계가 확정된 적이 있거나 구현 이후 단계) 진행 중인 옛 오더라 지금의 다섯에 더한다.
   cur="$(_v2_roles_line "$key")"
-  if [ -n "$cur" ] || _v2_rule_ok "$key"; then cur="$(dobby_v2_roles "$key")"; else cur=기획자; fi
+  if [ -n "$cur" ]; then cur="$(dobby_v2_roles "$key")"
+  else
+    case "$(_order_phase "$key")" in
+      ''|착수|분석|설계|설계확인)
+        if [ -f "$(_order_dir "$key")/design-ack.json" ] || [ -f "$(_order_dir "$key")/implementation.md" ]; then cur="$(dobby_v2_roles "$key")"
+        else cur=기획자; fresh=1
+        fi ;;
+      *) cur="$(dobby_v2_roles "$key")" ;;
+    esac
+  fi
   want="$(printf '%s\n%s\n기획자\n' "$cur" "$asked")"
   printf '%s\n' "$want" | grep -qxF 개발자 && want="$(printf '%s\n리뷰어\n배포담당\n' "$want")"
   if printf '%s\n' "$want" | grep -qxF 테스터 && ! printf '%s\n' "$want" | grep -qxF 개발자; then
@@ -5844,10 +5873,31 @@ _dobby_v2_set_roles_u() {
   done < <(printf '%s\n' "$asked")
   _v2_set_line "$key" 담당자 "$out"
   if printf '%s\n' "$want" | grep -qxF 개발자; then dobby_set_kind "$key" 개발; else dobby_set_kind "$key" 산출물; fi
-  # 이미 상태표가 있는 오더면 새로 켠 담당자의 행을 바로 더한다
-  if grep -q '^## 에이전트 상태표' "$(_order_dir "$key")/orchestration.md" 2>/dev/null; then _v2_board_five "$key"; fi
+  # 이미 상태표가 있는 오더면 새로 켠 담당자의 행을 바로 더한다.
+  # 새 오더인데 시작 헬퍼가 먼저 다섯 행을 깔았으면 켜지 않은 담당자의 행(아직 일한 적 없는 대기 행)을 지운다.
+  if grep -q '^## 에이전트 상태표' "$(_order_dir "$key")/orchestration.md" 2>/dev/null; then
+    [ -z "$fresh" ] || _v2_board_prune "$key"
+    _v2_board_five "$key"
+  fi
   dobby_event "$key" "담당자 → $out${why:+ — $why}" 2>/dev/null
   printf '%s\n' "$out"
+}
+
+# _v2_board_prune KEY — 켜지지 않은 담당자의 대기 행을 상태표에서 지운다. 담당자를 처음 정하는 새 오더에만 부른다.
+_v2_board_prune() {
+  local key="$1" o r s drop=""
+  o="$(_order_dir "$key")/orchestration.md"; [ -f "$o" ] || return 0
+  for r in 개발자 산출자 리뷰어 배포담당 테스터; do
+    _v2_has "$key" "$r" && continue
+    s="$(_v2_role_slug "$key" "$r")"
+    [ -n "$s" ] && [ "$(_v2_state "$key" "$s")" = 대기 ] && drop="$drop $s"
+  done
+  [ -n "$drop" ] || return 0
+  awk -F'|' -v drop="$drop " '
+    function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
+    /^## /{ins=($0 ~ /에이전트 상태표/)}
+    ins && /^\|/ && index(drop, " " t($2) " ") { next }
+    { print }' "$o" > "$o.tmp" && mv "$o.tmp" "$o"
 }
 
 # dobby_v2_role_skip KEY 담당자 "이유" — 켠 담당자의 일이 없어졌을 때 "할 일 없음"과 이유를 남기고 완료로 끝낸다.
