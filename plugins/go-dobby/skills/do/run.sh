@@ -20,13 +20,18 @@
 # DOBBY_REUSE_MAX_CTX 이하이며(dobby-lib.sh), 직전 호출 뒤 DOBBY_REUSE_MAX_GAP 초가 지나지 않았을 때만 직전 세션을
 # `claude -p --resume` 으로 이어 쓴다(근거: session-reuse.md).
 #
+# 질문 뒤 이어 가기: 세션이 질문(ask.json)을 남기고 끝나면 이 셸이 답을 기다린다. 답이 오면 테스터와 배포담당의 질문은
+# 그 세션을 이어 띄우고(문맥이 DOBBY_REUSE_MAX_CTX 이하일 때, 그 세션이 시작한 폴더에서), 그 밖에는 새 세션을 띄운다.
+# 새 세션의 시작 헬퍼가 질문과 답을 전하고 닫는다(dobby_v2_ask_resume).
+#
 # MCP: 세션마다 크롬 도구 하나만 붙인다(--strict-mcp-config).
 #
 # 역할별 모델: ~/.config/go-dobby/role-models.json 에 {"developer": "claude-opus-5-5", ...} 가 있으면 차례 담당자의 역할 모델을
 # `claude -p --model` 로 넘긴다. 담당자 슬러그로 역할을 가른다(analysis-agent 기획자, review-agent 리뷰어, deploy-agent 배포담당,
-# test-agent 테스터, 나머지 개발자). 파일이 없거나 그 역할 값이 없으면 --model 없이 기본 모델로 돈다.
+# test-agent 테스터, produce-agent 산출자(producer), 나머지 개발자). 파일이 없거나 그 역할 값이 없으면 --model 없이 기본 모델로 돈다.
 #
 # 다음 할 일: 차례마다 dobby_v2_step 이 정한다(/do 세션·훅과 같은 판정). 설계·설계 확인·판단 답 차례면 사람이 할 일이라 멈춘다.
+# 예외: 사람 없이 돌던 설계 세션이 질문을 남겼고 그 답이 왔으면 설계 세션을 다시 띄운다(`/do {키} auto`).
 # 단계 밖 변경: 차례마다 dobby_v2_drift_apply 로 /do 밖에서 바뀐 설계·코드를 먼저 본다. 설계가 바뀌었으면 멈추고,
 # 코드만 바뀌었으면 리뷰부터 잇는다. 이 셸이 띄운 세션이 끝나면 기준점을 남긴다(dobby_v2_checkpoint).
 #
@@ -36,9 +41,10 @@
 # 멈추는 경우:
 #   dobby-order 가 만든 메타 · 설계 미확정 · 판단 답 차례(보류) · 통합 완료(--with-test 없고 auto 배포 오더도 아닐 때)
 #   · TASK- 작업의 PR 머지 차례 · 검증 전부 통과 · 배포 표의 막힘(⚠)
-#   · 끝난 오더 · 모르는 단계값 · 단계 밖 설계 변경
-# 부탁(ask.json)이 열리면 끝내지 않고 셸에서 기다린다 — argocd 로그인 풀림, 리뷰봇·빌드 30분 지연, 세션이 남긴 부탁.
-#   대시보드 카드에서 답하면 이어 가고, "멈추기"·8시간 무응답·기다리는 사이 사람이 손대면 끝낸다.
+#   · 끝난 오더(테스터 없는 오더는 켜진 담당자가 모두 끝났을 때) · 모르는 단계값 · 단계 밖 설계 변경
+# 질문(ask.json)이 열리면 끝내지 않고 셸에서 기다린다 — argocd 로그인 풀림, 리뷰봇·빌드 30분 지연, 세션이 남긴 질문.
+#   대시보드나 오피스에서 답하면 이어 가고, "멈추기"·8시간 무응답·기다리는 사이 사람이 손대면 끝낸다.
+#   8시간 무응답으로 끝나도 질문은 남는다. 그 뒤 답하고 자동 실행을 다시 띄우면 이어 간다.
 #   · 세션이 끝났는데 아무것도 바뀌지 않음(사람 판단이 필요해 스킬이 멈춘 것) · 세션 오류 · 상한 도달
 set -uo pipefail
 
@@ -89,21 +95,36 @@ stop() {
 }
 
 ask_open() { [ -f "$D/ask.json" ] && [ -z "$(jq -r '.answer.value // empty' "$D/ask.json" 2>/dev/null)" ]; }
-# 열린 부탁에 답이 오거나 확인이 통과할 때까지 기다린다. 답이 오면 0 을 돌려주고, 아니면 여기서 끝낸다.
+# 열린 질문에 답이 오거나 확인이 통과할 때까지 기다린다. 답이 오면 0 을 돌려주고, 아니면 여기서 끝낸다.
 wait_ask() {
   printf '사람의 답을 기다립니다 — %s · %s\n' "$(jq -r .title "$D/ask.json")" "$(date '+%H:%M')"
   case "$(dobby_v2_ask_wait "$KEY")" in
     answered|passed) printf '답을 받아 이어 갑니다 · %s\n' "$(date '+%H:%M')"; return 0 ;;
-    stop)    die "부탁 카드에서 멈추기를 골랐습니다" ;;
+    stop)    die "질문 창에서 멈추기를 골랐습니다" ;;
     changed) die "기다리는 사이 설계·코드가 바뀌었거나 터미널 세션이 이 오더를 잡아 끝냈습니다" ;;
-    *)       stop "부탁에 8시간 동안 답이 없었습니다. 대시보드 카드를 보고 /do $KEY 로 이어 가세요" ;;
+    *)       stop "질문에 8시간 동안 답이 없어 멈췄습니다. 질문은 남아 있습니다. 대시보드나 오피스에서 답하면 자동 실행을 다시 시작해 이어 갑니다" ;;
   esac
+}
+# 셸이 남기는 질문 — 세션의 질문과 같은 형식(dobby_v2_ask … file)으로 남긴다.
+#   shell_ask 답하는방식 "질문 한 줄" "무슨 일이 있었나" "왜 스스로 못 하나" "해 본 것" "할 일" "답한 뒤" [확인 명령] [방법들 JSON]
+shell_ask() {
+  local draft="$D/.ask-draft.json"
+  jq -n --arg kind "$1" --arg title "$2" --arg what "$3" --arg why "$4" --arg tried "$5" --arg todo "$6" --arg after "$7" \
+     --arg check "${8:-}" --argjson options "${9:-[]}" \
+     '{kind:$kind, title:$title, what:$what, why:$why, tried:[$tried], todo:$todo, after:$after, check:$check, options:$options}' > "$draft" \
+    && DOBBY_ASK_ROLE=shell dobby_v2_ask "$KEY" file "$draft" >/dev/null \
+    || { rm -f "$draft"; stop "질문을 남기지 못했습니다: $2"; }
 }
 # 리뷰봇·빌드가 30분을 넘으면 더 기다릴지 묻는다. "30분 더 기다리기"면 그 대상의 한도를 30분 늘린다.
 ext_tgt=""; ext_lim=0
 ask_delay() {
-  dobby_v2_ask "$KEY" choice "$1" "$2" "$3" "30분 더 기다리기,멈추기" >/dev/null
+  shell_ask choice "$1" "$2" "기다려도 오지 않는 것인지 조금 늦는 것인지 셸에서는 알 수 없습니다" \
+    "30분 동안 기다렸습니다 → 아직 끝나지 않았습니다" "$3" "30분 더 기다리기를 고르면 같은 자리에서 30분을 더 기다립니다" "" \
+    '[{"label":"30분 더 기다리기","does":"같은 자리에서 30분을 더 기다립니다","effect":"그 사이 끝나면 배포를 이어 갑니다","recommended":true,"reason":"조금 늦는 경우가 많습니다"},
+      {"label":"그만 기다리기","does":"자동 실행을 끝냅니다","effect":"원인을 확인한 뒤 자동 실행을 다시 시작해야 합니다","recommended":false,"reason":""}]'
   wait_ask
+  [ "$(jq -r '.answer.value // empty' "$D/ask.json" 2>/dev/null)" = "30분 더 기다리기" ] \
+    || { dobby_v2_ask_close "$KEY" 멈춤; die "질문 창에서 그만 기다리기를 골랐습니다"; }
   dobby_v2_ask_close "$KEY" "30분 더"
   ext_tgt="$tgt"; ext_lim=$(( el + 1800 ))
 }
@@ -114,9 +135,13 @@ fingerprint() {
     phase
     sed -n '/^## 배포[[:space:]]*$/,/^## /p' "$D/status.md"
     find "$D/reviews" "$D/test-runs" 2>/dev/null | sort
-    for f in design.md design-ack.json implementation.md outcome.md; do
-      [ -f "$D/$f" ] && stat -f '%m %N' "$D/$f" 2>/dev/null
+    for f in design.md design-ack.json implementation.md outcome.md test-plan.md "$D"/produce.md "$D"/produce-*.md; do
+      [ -f "$D/${f##*/}" ] && stat -f '%m %N' "$D/${f##*/}" 2>/dev/null
     done
+    find "$D/deliverables" "$D/asks" -type f 2>/dev/null | sort
+    sed -nE 's/^- \*\*(담당자|리뷰 대상|다시 설계)\*\*:.*$/&/p' "$D/status.md"
+    # 끝난 담당자 — 산출물만 확정하는 통합처럼 단계값이 그대로인 채 담당자만 완료가 되는 세션이 있다
+    awk -F'|' '/^## /{ins=($0 ~ /에이전트 상태표/)} ins && /^\|/ && $5 ~ /완료/ {print $2 $5 $4}' "$D/orchestration.md" 2>/dev/null
     for f in "$D"/test-runs/*/result.md; do
       [ -f "$f" ] && stat -f '%m %N' "$f" 2>/dev/null
     done
@@ -164,13 +189,21 @@ extra=(); [ -n "$sys" ] && extra=(--append-system-prompt "$sys")
 ROLE_MODELS="$HOME/.config/go-dobby/role-models.json"
 role_model() {
   local role=developer
-  case "$1" in analysis-agent) role=planner ;; review-agent) role=reviewer ;; deploy-agent) role=deployer ;; test-agent) role=tester ;; esac
+  case "$1" in analysis-agent) role=planner ;; review-agent) role=reviewer ;; deploy-agent) role=deployer ;; test-agent) role=tester ;; produce-agent) role=producer ;; esac
   [ -f "$ROLE_MODELS" ] && jq -r --arg r "$role" '.[$r] // empty | strings | select(test("^claude-[a-z0-9-]+$"))' "$ROLE_MODELS" 2>/dev/null
 }
 
+# 이 셸이 띄운 세션은 자동 실행을 또 띄우지 않는다(설계 세션이 끝에 부르는 dobby_v2_autorun 이 아무것도 하지 않게).
+export DOBBY_V2_CHAINED=1
 n=0; sid=""; noted=""
 while :; do
   ask_open && wait_ask
+  # 답이 달린 질문이 남아 있으면 세션이 남긴 질문이다. 이어 띄울지 먼저 정한다. 질문은 다음 세션의 시작 헬퍼가 전하고 닫는다.
+  answered=""; ask_sid=""; ask_cwd=""; ask_role=""
+  if [ -f "$D/ask.json" ]; then
+    answered=1; ask_role="$(jq -r '.from.role // empty' "$D/ask.json" 2>/dev/null)"
+    if ar="$(dobby_v2_ask_resume "$KEY")"; then IFS=$'\t' read -r ask_sid ask_cwd _ <<<"$ar"; fi
+  fi
   [ "$(dobby_v2_drift_apply "$KEY")" = design ] \
     && stop "단계 밖에서 설계 문서가 바뀌었습니다. 터미널에서 /do $KEY 로 바뀐 설계를 확인해 주세요"
   ph="$(phase)"
@@ -187,10 +220,13 @@ while :; do
         asrv="$(_ship_argo_server "$AUTO_ENV")"
         if [ "$repo" = com.wadiz.web ] && [ -n "$asrv" ] \
            && ! argocd account get-user-info --server "$asrv" --grpc-web 2>/dev/null | grep -q 'Logged In: *true'; then
-          dobby_v2_ask "$KEY" action "argocd 로그인이 필요합니다 ($AUTO_ENV)" \
-            "com.wadiz.web 을 $AUTO_ENV 에 동기화하려는데 argocd 로그인이 풀려 있습니다. 회사 통합 로그인(SSO)이라 대신 할 수 없습니다" \
+          shell_ask action "argocd 로그인이 필요합니다 ($AUTO_ENV)" \
+            "com.wadiz.web 을 $AUTO_ENV 에 동기화하려는데 argocd 로그인이 풀려 있습니다" \
+            "회사 통합 로그인(SSO)이라 브라우저에서 사람이 해야 합니다" \
+            "로그인 상태를 확인했습니다 → 로그인이 풀려 있습니다" \
             "터미널에서 실행: argocd login $asrv --sso --grpc-web" \
-            "argocd account get-user-info --server $asrv --grpc-web | grep -q 'Logged In: *true'" >/dev/null
+            "로그인이 확인되면 막힘 표시를 지우고 배포를 이어 갑니다" \
+            "argocd account get-user-info --server $asrv --grpc-web | grep -q 'Logged In: *true'"
           wait_ask
           bst="$(_v2_ship_row "$KEY" "$repo" "$AUTO_ENV" | cut -d$'\037' -f1)"
           CLAUDE_CODE_SESSION_ID= dobby_ship_stage "$KEY" "$repo" "$AUTO_ENV" "${bst% ⚠}" >/dev/null   # 셸 기록이라 작업 표시를 잡지 않는다
@@ -223,14 +259,16 @@ while :; do
   case "$stg" in
     멈춤)
       case "$slug" in
-        검증을\ 전부\ 통과*|끝난\ 오더*|PR\ 이\ 머지*|PR\ 머지\ 차례*) finish "$slug" ;;
+        검증을\ 전부\ 통과*|끝난\ 오더*|PR\ 이\ 머지*|PR\ 머지\ 차례*|할\ 일을\ 모두\ 마쳤습니다*|통합까지\ 끝났습니다*) finish "$slug" ;;
       esac
       stop "$slug" ;;
     설계)
       [ "$ph" = 보류 ] && stop "판단이 필요해 멈춰 있습니다. 설계 문서 '확인이 필요했던 것'을 보고 터미널에서 /do $KEY 로 답해 주세요"
-      stop "설계가 끝나지 않았습니다. 터미널에서 /do $KEY 로 설계를 확정하세요" ;;
-    설계확인) stop "설계가 확정되지 않았습니다. 터미널에서 /do $KEY 로 설계를 보고 답해 주세요" ;;
-    구현|리뷰|수정|통합|배포|실패분석) ;;
+      # 사람 없이 돌던 설계 세션(기획자)이 남긴 질문에 답이 왔으면 설계 세션을 다시 띄운다. 그 밖에는 사람이 설계를 확정할 차례다.
+      [ "$ask_role" = analysis-agent ] || stop "설계가 끝나지 않았습니다. 터미널에서 /do $KEY 로 설계를 확정하세요" ;;
+    설계확인)
+      [ "$ask_role" = analysis-agent ] || stop "설계가 확정되지 않았습니다. 터미널에서 /do $KEY 로 설계를 보고 답해 주세요" ;;
+    구현|산출|리뷰|수정|통합|배포|실패분석) ;;
     검증)
       # 배포 확인 전(단계 배포)이면 검증은 배포 뒤에야 의미가 있다. 사람이 배포를 마쳐 단계가 검증이면 돈다.
       if [ -z "$AUTO_ENV" ] && [ "$WITH_TEST" != 1 ] && [ "$ph" = 배포 ]; then
@@ -244,8 +282,13 @@ while :; do
 
   n=$((n + 1))
   before="$(fingerprint)"
-  resume=(); how="새 세션"
-  if [ -n "$sid" ] && [ "$stg" = 수정 ]; then
+  resume=(); how="새 세션"; run_cwd="$WT"; prompt="/do $KEY"
+  case "$stg" in 설계|설계확인) prompt="/do $KEY auto" ;; esac
+  if [ -n "$ask_sid" ]; then
+    resume=(--resume "$ask_sid"); run_cwd="$ask_cwd"; how="질문한 세션 이어 띄우기"
+  elif [ -n "$answered" ]; then
+    how="새 세션(질문과 답을 읽고 이어 감)"
+  elif [ -n "$sid" ] && [ "$stg" = 수정 ]; then
     if r="$(dobby_v2_reuse_ok "$KEY" "$sid")"; then
       resume=(--resume "$sid"); how="직전 세션 이어 쓰기(문맥 ${r%%$'\t'*}, ${r##*$'\t'}초 전)"
     else
@@ -255,7 +298,7 @@ while :; do
   model=(); m="$(role_model "$slug")"; [ -n "$m" ] && model=(--model "$m")
   mark "$n"
   printf '\n━━ %s · 세션 %d · %s 차례(%s) · %s · 모델 %s · %s\n' "$KEY" "$n" "$stg" "$desc" "$how" "${m:-기본}" "$(date '+%H:%M')"
-  out="$(cd "$WT" && claude -p ${resume[@]+"${resume[@]}"} "/do $KEY" ${extra[@]+"${extra[@]}"} ${mcp[@]+"${mcp[@]}"} ${model[@]+"${model[@]}"} --permission-mode "$MODE" --output-format json 2>/dev/null)"
+  out="$(cd "$run_cwd" && DOBBY_SESSION_CWD="$run_cwd" claude -p ${resume[@]+"${resume[@]}"} "$prompt" ${extra[@]+"${extra[@]}"} ${mcp[@]+"${mcp[@]}"} ${model[@]+"${model[@]}"} --permission-mode "$MODE" --output-format json 2>/dev/null)"
   code=$?
   sid="$(printf '%s' "$out" | jq -r '.session_id // empty' 2>/dev/null)"
   err="$(printf '%s' "$out" | jq -r '.is_error // false' 2>/dev/null)"
@@ -268,7 +311,7 @@ while :; do
   printf '━━ 세션 %d 끝 · 세션 아이디 %s · 지금 단계 %s\n' "$n" "${sid:-알 수 없음}" "$(phase)"
 
   [ "$code" -eq 0 ] && [ "$err" != "true" ] || stop "세션이 오류로 끝났습니다(종료 코드 $code). 복기: claude --resume ${sid:-?}"
-  # 세션이 부탁을 남기고 끝났으면 멈추지 않는다 — 다음 차례 맨 앞에서 답을 기다린다.
+  # 세션이 질문을 남기고 끝났으면 멈추지 않는다 — 다음 차례 맨 앞에서 답을 기다린다.
   ask_open && { dobby_v2_checkpoint "$KEY" >/dev/null 2>&1; continue; }
   [ "$(fingerprint)" != "$before" ] || stop "세션이 아무것도 바꾸지 못했습니다. 사람 판단이 필요해 멈췄을 수 있습니다. 복기: cd $WT && claude --resume ${sid:-?}"
   dobby_v2_checkpoint "$KEY" >/dev/null 2>&1

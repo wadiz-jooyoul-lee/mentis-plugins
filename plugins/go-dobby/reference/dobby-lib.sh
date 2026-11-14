@@ -25,10 +25,10 @@ DOBBY_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" ||
 #   · 담당자 상태(orchestration.md 상태표): 대기·작업중·기다림·사람 차례·막힘·완료 (6)
 #     옛 값(분석·구현·리뷰·검증·수정·반영·산출)은 작업중으로 접는다.
 #   · 오더 단계(status.md 현재 단계): 착수·설계·설계확인·구현·리뷰·수정·통합·배포·검증·실패분석·보류·해결·종료 (13)
-#     옛 값 분석은 설계로 접는다.
+#     옛 값 분석은 설계로 접는다. /do 오더는 여기에 산출(산출자 차례)을 더 쓴다. 그 밖의 오더가 적는 산출은 지금처럼 구현으로 접는다.
 # 막지 않고 조용히 접되(파이프라인 비차단), 교정이 일어나면 stderr에 경고 한 줄을 남긴다.
 DOBBY_STATES="대기|작업중|기다림|사람 차례|막힘|완료"
-DOBBY_PHASES="착수 설계 설계확인 구현 리뷰 수정 통합 배포 검증 실패분석 보류 해결 종료"
+DOBBY_PHASES="착수 설계 설계확인 구현 산출 리뷰 수정 통합 배포 검증 실패분석 보류 해결 종료"
 
 _trim() { printf '%s' "${1//\*/}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'; }
 
@@ -398,9 +398,11 @@ dobby_unit_end() {
 # ── status.md 단계 ───────────────────────────────────────────────────
 # dobby_phase KEY PHASE — 현재 단계/갱신 갱신.
 _dobby_phase_u() {
-  local key="$1" ph f now; ph="$(dobby_norm_phase "$2")"
+  local key="$1" ph f now
   f="$(_order_dir "$key")/status.md"; now="$(_now)"
   [ -f "$f" ] || return 1
+  # /do 오더의 산출 단계는 접지 않는다(산출자 차례). dobby-order 가 적는 산출은 지금처럼 구현으로 접는다.
+  if [ "$(_trim "$2")" = 산출 ] && grep -q '^## 지난 세션' "$f"; then ph=산출; else ph="$(dobby_norm_phase "$2")"; fi
   awk -v ph="$ph" -v now="$now" '
     /^## / { insec = ($0 ~ /현재 단계/) }
     {
@@ -3338,17 +3340,29 @@ dobby_v2_wait() {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 부탁 — 자동 실행이 사람 손(로그인·값·선택)을 받으면 이어 갈 수 있을 때 끝내지 않고 셸에서 기다린다.
-# 오더 폴더의 ask.json 하나가 열린 부탁이다. 대시보드 '다음 할 일'이 카드로 띄우고 답을 적는다.
-#   종류 action : 사람이 무언가 하고 온다. 확인 명령(check)이 통과하면 답 없이도 이어 간다
-#        choice : 선택지(쉼표로 구분) 중 하나를 고른다
-#        input  : 값을 적는다
+# 질문 — 자동 실행이 사람의 답(판단·값·선택·사람 손)을 받아야 이어 갈 수 있을 때 끝내지 않고 셸에서 기다린다.
+# 오더 폴더의 ask.json 하나가 열린 질문이다. 대시보드와 오피스가 질문 창으로 띄우고 답을 적는다.
+#   답하는 방식 yesno  : 예 / 아니오
+#               choice : 방법 2~3개 가운데 하나를 고르거나 다른 의견을 적는다
+#               input  : 글로 적는다
+#               action : 사람이 무언가 하고 온다. 확인 명령(check)이 통과하면 답 없이도 이어 간다
 # 답이 "멈추기" 면 run.sh 가 끝낸다. 비밀번호는 받지 않는다(시험 계정은 config.env 에 있다).
+# 파일 형식(v 2): {v, id, kind, title, what, why, tried[], options[{label,does,effect,recommended,reason}], choices[],
+#   todo, after, from{role,session,cwd,resume}, check, created, answer{value,at}|null, note}
+#   옛 형식(v 없음: kind action·choice·input, title, why, todo, choices)도 그대로 읽고 답할 수 있다.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# dobby_v2_ask KEY 종류 제목 이유 할일 [확인명령|선택지]
+# dobby_v2_ask KEY file 질문파일 — 세션이 쓴 질문 초안(JSON)을 검사해 ask.json 으로 남긴다. 어기면 "거부: …" 를 내고 1.
+#   초안에 적는 칸: kind, title(질문 한 줄), what(무슨 일이 있었나), why(왜 스스로 정하지 못했나), tried(해 본 것과 결과 목록),
+#     options(방법들 — choice 는 2~3개, 방법마다 label·does·effect, 권하는 방법 하나에 recommended:true 와 reason),
+#     todo(input 은 무엇을 적을지와 예시, action 은 할 일과 명령), after(답한 뒤 일어나는 일), check(action 의 확인 명령, 없어도 됨)
+#   검사: 칸이 다 찼는가 · 답하는 방식이 넷 중 하나인가 · choice 의 방법마다 "고르면 어떻게 되는지"가 있는가 · 내부 낱말이 없는가
+#   헬퍼가 채우는 칸: v, id, created, answer, note, choices(options 의 label), from(이 세션의 담당자·세션·시작 폴더·이어 띄우기 여부)
+#   받아들이면 초안 파일은 지운다.
+# dobby_v2_ask KEY 종류 제목 이유 할일 [확인명령|선택지] — 옛 쓰임(종류 action·choice·input). 옛 형식으로 남긴다.
 dobby_v2_ask() {
   local key="$1" kind="$2" title="$3" why="$4" todo="$5" extra="${6:-}" f
+  if [ "$kind" = file ]; then _v2_ask_file "$key" "$3"; return; fi
   case "$kind" in action|choice|input) ;; *) _die "부탁 종류는 action·choice·input: '$kind'"; return 1 ;; esac
   [ -n "$key" ] && [ -n "$title" ] || { _die "쓰임: dobby_v2_ask KEY 종류 제목 이유 할일 [확인명령|선택지]"; return 1; }
   f="$(_order_dir "$key")/ask.json"
@@ -3361,22 +3375,104 @@ dobby_v2_ask() {
   dobby_v2_notify "$key" "부탁 — $title"
 }
 
-# dobby_v2_ask_get KEY — 열린 부탁(ask.json)을 낸다. 없으면 아무것도 내지 않고 1.
+# _v2_ask_file KEY 초안파일 — 위 file 쓰임의 본체.
+_v2_ask_file() {
+  local key="$1" src="$2" d f errs txt hits role="" sess cwd res=false
+  d="$(_order_dir "$key")"; f="$d/ask.json"
+  [ -d "$d" ] || { _die "$key 의 메타 폴더가 없습니다"; return 1; }
+  [ -f "$src" ] && jq -e 'type == "object"' "$src" >/dev/null 2>&1 || { printf '거부: 질문 파일을 읽지 못했습니다(JSON 객체여야 합니다): %s\n' "$src"; return 1; }
+  if [ -f "$f" ] && [ -z "$(jq -r '.answer.value // empty' "$f" 2>/dev/null)" ]; then
+    printf '거부: 아직 답을 받지 못한 질문이 열려 있습니다 — %s\n' "$(jq -r .title "$f")"; return 1
+  fi
+  errs="$(jq -r '
+    def s: if type == "string" then gsub("^\\s+|\\s+$"; "") else "" end;
+    def opts: (.options // []) | if type == "array" then . else [] end;
+    (.kind // "") as $kind |
+    [ (if (["yesno","choice","input","action"] | index($kind)) then empty else "답하는 방식(kind)은 yesno·choice·input·action 가운데 하나여야 합니다" end),
+      (if (.title | s) == "" then "질문 한 줄(title)이 비었습니다" else empty end),
+      (if (.what | s) == "" then "무슨 일이 있었나(what)가 비었습니다" else empty end),
+      (if (.why | s) == "" then "왜 스스로 정하지 못했나(why)가 비었습니다" else empty end),
+      (if ((.tried // []) | if type == "array" then map(s) | map(select(. != "")) | length else 0 end) == 0
+         then "지금까지 해 본 것(tried)이 비었습니다. 해 본 것과 결과를 한 줄씩 적어 주세요" else empty end),
+      (if (.after | s) == "" then "답한 뒤(after)가 비었습니다" else empty end),
+      (if .kind == "choice" then
+         (if (opts | length) < 2 or (opts | length) > 3 then "하나 고르기는 방법(options)이 2~3개여야 합니다" else empty end),
+         (opts[] | select((.label | s) == "" or (.does | s) == "") | "방법마다 이름(label)과 무엇을 하는지(does)가 있어야 합니다"),
+         (opts[] | select((.effect | s) == "") | "방법 \"\(.label // "?")\" 에 고르면 어떻게 되는지(effect)가 없습니다"),
+         (if ([opts[] | select(.recommended == true)] | length) != 1 then "권하는 방법 하나에 recommended: true 를 적어 주세요" else empty end),
+         (opts[] | select(.recommended == true and (.reason | s) == "") | "권하는 방법에 권하는 이유(reason)가 없습니다"),
+         (if ([opts[] | (.label | s)] | index("멈추기")) then "방법 이름으로 \"멈추기\"는 쓸 수 없습니다(자동 실행을 끝내는 답으로 따로 있습니다)" else empty end)
+       else empty end),
+      (if (.kind == "input" or .kind == "action") and (.todo | s) == ""
+         then "할 일(todo)이 비었습니다. 글로 적기면 무엇을 적을지와 예시, 직접 해 주기면 할 일과 명령을 적어 주세요" else empty end)
+    ] | unique | .[]' "$src" 2>/dev/null)" || { printf '거부: 질문 파일을 검사하지 못했습니다(칸의 모양이 다릅니다 — tried 는 글 목록, options 는 방법 목록): %s\n' "$src"; return 1; }
+  if [ -n "$errs" ]; then printf '%s\n' "$errs" | sed 's/^/거부: /'; return 1; fi
+  # 사람이 읽는 글에 내부 낱말이 없는가. 직접 해 주기의 할 일은 명령을 담으므로 보지 않는다.
+  txt="${TMPDIR:-/tmp}/dobby-ask-$$.txt"
+  jq -r '[.title, .what, .why, .after, (.tried // [])[], ((.options // [])[] | .label, .does, .effect, (.reason // "")),
+          (if .kind == "action" then "" else (.todo // "") end)] | map(select(type == "string")) | .[]' "$src" > "$txt" 2>/dev/null
+  hits="$(dobby_terms_lint "$txt"; grep -nE '[a-z]+-agent|[A-Za-z_-]+\.(md|json|sh)([^A-Za-z]|$)|dobby_[a-z_]+|슬러그|단계값' "$txt" 2>/dev/null)"
+  rm -f "$txt"
+  if [ -n "$hits" ]; then
+    printf '거부: 질문 글에 내부 낱말이 있습니다(파일 이름·담당자 식별 이름·회차 번호·헬퍼 이름을 쉬운 말로 바꿔 주세요)\n%s\n' "$hits"; return 1
+  fi
+  # 묻는 쪽: 세션이면 그 세션의 담당자(시작 기록), 셸(run.sh)이면 DOBBY_ASK_ROLE=shell 로 알려 준다.
+  role="${DOBBY_ASK_ROLE:-}"; sess=""
+  if [ -z "$role" ]; then
+    [ -f "$d/.v2-begin" ] && role="$(cut -f3 "$d/.v2-begin")"
+    sess="${CLAUDE_CODE_SESSION_ID:-}"
+  fi
+  cwd="${DOBBY_SESSION_CWD:-}"; [ -d "$cwd" ] || cwd="$(_order_worktree "$key")"; [ -d "$cwd" ] || cwd="$PWD"
+  # 이어 띄우기는 일하던 도중 사람 손이 필요해진 테스터와 배포담당의 질문에만 한다
+  case "$role" in test-agent|deploy-agent) [ -n "$sess" ] && res=true ;; esac
+  [ -f "$f" ] && dobby_v2_ask_close "$key" "다음 질문으로 넘어감"
+  jq --arg id "$(date '+%Y%m%d-%H%M%S')" --arg at "$(date '+%Y-%m-%d %H:%M')" --arg role "$role" --arg sess "$sess" \
+     --arg cwd "$cwd" --argjson res "$res" '
+    def s: if type == "string" then gsub("^\\s+|\\s+$"; "") else "" end;
+    (.check | s) as $chk
+    | { v: 2, id: $id, kind: .kind, title: (.title | s), what: (.what | s), why: (.why | s),
+      tried: [(.tried // [])[] | s | select(. != "")],
+      options: [((.options // []) | if type == "array" then .[] else empty end)
+        | {label: (.label | s), does: (.does | s), effect: (.effect | s), recommended: (.recommended == true), reason: (.reason | s)}],
+      todo: (.todo | s), after: (.after | s),
+      from: {role: $role, session: $sess, cwd: $cwd, resume: $res},
+      created: $at, answer: null, note: "" }
+    | .choices = (if .kind == "yesno" then ["예", "아니오"] else [.options[].label] end)
+    | if .kind == "action" then .check = $chk else . end' "$src" > "$f.tmp" && mv "$f.tmp" "$f" || return 1
+  [ "$src" -ef "$f" ] || rm -f "$src"
+  dobby_v2_notify "$key" "질문 — $(jq -r .title "$f")"
+  printf '질문을 남겼습니다: %s\n' "$(jq -r .title "$f")"
+}
+
+# dobby_v2_ask_get KEY — 열린 질문(ask.json)을 낸다. 없으면 아무것도 내지 않고 1.
 dobby_v2_ask_get() { local f; f="$(_order_dir "$1")/ask.json"; [ -f "$f" ] && cat "$f"; }
 
-# dobby_v2_ask_answer KEY 답 — 대시보드가 부른다. choice 는 선택지 안의 값이나 "멈추기"만 받는다.
+# dobby_v2_ask_answer KEY 답 — 대시보드와 오피스가 부른다. "멈추기"는 언제나 받는다.
+#   yesno 는 예·아니오만. choice 는 새 형식이면 방법 이름이나 적은 글(다른 의견)을, 옛 형식이면 선택지 안의 값만 받는다.
+#   답을 적으면 질문한 담당자의 행을 사람 차례에서 대기로 돌린다.
 dobby_v2_ask_answer() {
-  local key="$1" ans="$2" f
+  local key="$1" ans="$2" f role o
   f="$(_order_dir "$key")/ask.json"; [ -f "$f" ] || { _die "열린 부탁이 없습니다: $key"; return 1; }
   [ -n "$ans" ] || { _die "답이 비었습니다"; return 1; }
-  if [ "$ans" != 멈추기 ] && [ "$(jq -r .kind "$f")" = choice ]; then
-    jq -e --arg a "$ans" '.choices | index($a)' "$f" >/dev/null || { _die "선택지에 없는 답입니다: $ans"; return 1; }
+  if [ "$ans" != 멈추기 ]; then
+    case "$(jq -r .kind "$f")" in
+      yesno) case "$ans" in 예|아니오) ;; *) _die "예 또는 아니오로 답해 주세요: $ans"; return 1 ;; esac ;;
+      choice)
+        if [ "$(jq -r '.v // 1' "$f")" -lt 2 ]; then
+          jq -e --arg a "$ans" '.choices | index($a)' "$f" >/dev/null || { _die "선택지에 없는 답입니다: $ans"; return 1; }
+        fi ;;
+    esac
   fi
   jq --arg a "$ans" --arg at "$(date '+%Y-%m-%d %H:%M')" '.answer = {value:$a, at:$at} | .note = ""' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
   dobby_event "$key" "부탁에 답함 — $(jq -r .title "$f"): $ans" 2>/dev/null
+  role="$(jq -r '.from.role // empty' "$f")"; o="$(_order_dir "$key")/orchestration.md"
+  if [ -n "$role" ] && [ "$ans" != 멈추기 ] && [ "$(_board_cell "$o" "$role" 상태)" = "사람 차례" ]; then
+    _v2_set "$key" "$role" 대기 "" "답을 받음 — 이어 갈 차례"
+  fi
+  return 0
 }
 
-# dobby_v2_ask_close KEY [결과] — 부탁을 닫아 asks/ 에 남긴다. 답을 쓴 세션이나 run.sh 가 부른다.
+# dobby_v2_ask_close KEY [결과] — 질문을 닫아 asks/ 에 남긴다. 답을 받은 세션의 시작 헬퍼나 run.sh 가 부른다.
 dobby_v2_ask_close() {
   local key="$1" res="${2:-닫음}" d f
   d="$(_order_dir "$key")"; f="$d/ask.json"; [ -f "$f" ] || return 0
@@ -3385,9 +3481,27 @@ dobby_v2_ask_close() {
     && rm -f "$f"
 }
 
+# dobby_v2_ask_resume KEY — run.sh 용. 답이 달린 질문을 남긴 세션을 이어 띄울지 정한다.
+#   이어 띄울 때만 "세션 아이디<TAB>그 세션이 시작한 폴더<TAB>마지막 문맥 크기" 를 내고 0. 아니면 출력 없이 1(새 세션이 질문과 답을 읽고 잇는다).
+#   이어 띄우는 조건: 테스터나 배포담당의 질문(from.resume)이고, 그 세션의 마지막 문맥이 DOBBY_REUSE_MAX_CTX 이하이고, 시작한 폴더가 남아 있다.
+dobby_v2_ask_resume() {
+  local f sid cwd ctx ans
+  f="$(_order_dir "$1")/ask.json"; [ -f "$f" ] || return 1
+  ans="$(jq -r '.answer.value // empty' "$f" 2>/dev/null)"
+  [ -n "$ans" ] && [ "$ans" != 멈추기 ] || return 1
+  [ "$(jq -r '.from.resume // false' "$f")" = true ] || return 1
+  sid="$(jq -r '.from.session // empty' "$f")"; cwd="$(jq -r '.from.cwd // empty' "$f")"
+  [ -n "$sid" ] && [ -d "$cwd" ] || return 1
+  ctx="$(_v2_last_call "$sid" | cut -f1)"
+  case "$ctx" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$ctx" -le "$DOBBY_REUSE_MAX_CTX" ] || return 1
+  printf '%s\t%s\t%s\n' "$sid" "$cwd" "$ctx"
+}
+
 # dobby_v2_ask_wait KEY [최대초] — run.sh 용. 열린 부탁이 풀릴 때까지 셸에서 기다리고 결과 한 단어를 낸다.
-#   answered : 답이 왔다(choice·input) — 다음 세션이 ask.json 의 답을 읽는다
-#   passed   : action 의 확인 명령이 통과했다 — 부탁은 닫혔다
+#   answered : 답이 왔다(yesno·choice·input, 확인 명령이 없는 action, 세션이 남긴 action 의 확인 명령 통과)
+#              — 다음 세션의 시작 헬퍼가 질문과 답을 전하고 닫는다
+#   passed   : 셸이 남긴 action 의 확인 명령이 통과했다 — 질문은 닫혔다
 #   stop     : 답이 "멈추기"
 #   changed  : 기다리는 사이 사람이 손댔다(설계·코드 변경, 터미널 세션, 단계 바뀜) — 부탁을 닫고 끝낸다
 #   timeout  : 최대 시간(기본 8시간)이 지났다
@@ -3400,12 +3514,21 @@ dobby_v2_ask_wait() {
     [ -f "$f" ] || { echo answered; return 0; }
     kind="$(jq -r .kind "$f")"; chk="$(jq -r '.check // ""' "$f")"; ans="$(jq -r '.answer.value // ""' "$f")"
     [ "$ans" = 멈추기 ] && { dobby_v2_ask_close "$key" 멈춤; echo stop; return 0; }
-    if [ "$kind" = action ]; then
-      if [ -n "$chk" ] && bash -c "$chk" >/dev/null 2>&1; then dobby_v2_ask_close "$key" 통과; echo passed; return 0; fi
+    if [ "$kind" = action ] && [ -n "$chk" ]; then
+      if bash -c "$chk" >/dev/null 2>&1; then
+        # 셸(run.sh)이 남긴 질문은 닫는다. 세션이 남긴 질문은 닫지 않고 답으로 적어 둔다 — 다음 세션이 질문과 답을 받고, 이어 띄울 세션을 알아야 한다.
+        case "$(jq -r '.from.role // "shell"' "$f")" in
+          ''|shell) dobby_v2_ask_close "$key" 통과; echo passed; return 0 ;;
+          *) if [ -z "$ans" ]; then
+               jq --arg at "$(date '+%Y-%m-%d %H:%M')" '.answer = {value:"했어요", at:$at} | .note = ""' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+             fi
+             echo answered; return 0 ;;
+        esac
+      fi
       if [ -n "$ans" ]; then   # 했다고 답했는데 확인이 안 된다 — 답을 지우고 카드에 알린다
         jq --arg n "$(date '+%H:%M') 확인해 봤지만 아직 안 됐습니다" '.answer = null | .note = $n' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
       fi
-    elif [ -n "$ans" ]; then echo answered; return 0
+    elif [ -n "$ans" ]; then echo answered; return 0   # 확인 명령이 없는 "직접 해 주기"는 했다는 답으로 이어 간다
     fi
     drk="$(dobby_v2_drift "$key" 2>/dev/null | head -1 | cut -f1)"
     if { [ -n "$drk" ] && [ "$drk" != none ] && [ "$drk" != nobase ]; } \
@@ -3724,8 +3847,10 @@ $bad"; return 1; }
 #     **자동으로** 붙인다. 리뷰 요청이 있어야 자동 코드리뷰가 돌아 승인이 붙는다.
 #     ⛔ com.wadiz.web 에는 붙이지 않는다 — 리뷰봇이 없어 **오지 않을 리뷰를 기다리게 되고**,
 #        조직이 달라(wadiz-web) wadiz-fe/fe1-team 은 붙지도 않는다.
+#   · 일곱째 인자로 "이전 PR 의 지적과 처리" 표(마크다운)를 주면 본문 끝에 그 절을 붙인다.
+#     변경요청으로 닫은 PR(dobby_ship_close_pr)이 있는 저장소·환경이면 이 표가 없을 때 거부한다.
 dobby_ship_pr() {
-  local key="$1" wt="$2" br="$3" env="$4" title="$5" body="$6" n dirty
+  local key="$1" wt="$2" br="$3" env="$4" title="$5" body="$6" prev="${7:-}" n dirty closed prevno
   _ship_has "$env" "$DOBBY_SHIP_ENVS" || { _die "배포 환경이 아니다: '$env' (허용: $DOBBY_SHIP_ENVS)"; return 1; }
   [ -d "$wt" ] || { _die "워크트리가 없다: $wt"; return 1; }
 
@@ -3782,14 +3907,57 @@ $dirty"
   fi
   [ "$rc" -eq 0 ] || return 1
 
+  # 변경요청으로 닫은 PR 뒤에 다시 올리는 PR 이면 본문에 "이전 PR 의 지적과 처리" 표를 싣는다.
+  closed="$(_order_dir "$key")/.v2-pr-closed"
+  prevno="$(awk -F'\t' -v rp="$name" -v env="$env" '$1==rp && $2==env {v=$3} END{print v}' "$closed" 2>/dev/null)"
+  if [ -n "$prevno" ] && [ -z "$prev" ]; then
+    _die "이 저장소·환경에는 변경요청으로 닫은 PR $prevno 이 있다. 일곱째 인자로 '이전 PR 의 지적과 처리' 표(| 지적 | 처리 | 근거 |)를 주어라."
+    return 1
+  fi
+  [ -z "$prev" ] || body="$body"$'\n\n'"## 이전 PR ${prevno:+$prevno }의 지적과 처리"$'\n\n'"$prev"
+
   local extra=()
   if _ship_reviewbot "$name" && [ "$env" != "dev" ]; then extra=(--reviewer wadiz-fe/fe1-team); fi
   ( cd "$wt" && gh pr create --base "$base" --head "$bridge" --title "$title" --body "$body" "${extra[@]}" ) >&2 || return 1
   n="$(gh pr list --repo "$rp" --head "$bridge" --base "$base" --state open --json number -q '.[0].number')"
   [ -n "$n" ] || { _die "PR 을 만들었는데 번호를 못 찾았다"; return 1; }
+  if [ -n "$prevno" ]; then
+    awk -F'\t' -v rp="$name" -v env="$env" '!($1==rp && $2==env)' "$closed" > "$closed.tmp" && mv "$closed.tmp" "$closed"
+    [ -s "$closed" ] || rm -f "$closed"
+    dobby_event "$key" "이전 PR $prevno 의 지적과 처리를 새 PR #$n 본문에 실음"
+  fi
   dobby_event "$key" "PR 생성 — $name #$n ($bridge → $base)"
   dobby_ship_stage "$key" "$name" "$env" "PR 생성" "#$n"
   printf '%s' "$n"
+}
+
+# dobby_ship_close_pr KEY 워크트리 환경 PR번호 "지적 요약" — 변경요청(CHANGES_REQUESTED)이 달린 PR 을 고치지 않고 닫는다.
+#
+# /do 오더에서 변경요청은 설계 오류로 본다. 배포담당은 고치지 않고 PR 을 닫아 기획자에게 넘긴다.
+#   · 변경요청이 아닌 PR 은 닫지 않는다(승인·코멘트의 지적은 지금처럼 범위 안에서 고친다).
+#   · 배포 표의 그 저장소·환경 줄을 지운다. 줄이 없으면 통합 뒤 PR 생성부터 다시 한다(dobby_v2_ship_next 가 ship 을 낸다).
+#   · 닫은 번호와 이유는 이벤트 기록과 오더 폴더의 .v2-pr-closed(저장소<TAB>환경<TAB>#번호<TAB>요약)에 남긴다.
+#     끝 헬퍼의 리뷰지적 결과가 이 기록을 확인하고, dobby_ship_pr 이 새 PR 을 만들 때 지운다.
+dobby_ship_close_pr() {
+  local key="$1" wt="$2" env="$3" pr="${4#\#}" why="${5:-}" name rp f d
+  [ -n "$pr" ] && [ -n "$why" ] || { _die "쓰임: dobby_ship_close_pr KEY 워크트리 환경 PR번호 \"지적 요약\""; return 1; }
+  [ -d "$wt" ] || { _die "워크트리가 없다: $wt"; return 1; }
+  rp="$(_ship_repo "$wt")"; name="$(basename "$rp")"
+  d="$(_order_dir "$key")"; f="$d/status.md"
+  [ "$(gh pr view "$pr" --repo "$rp" --json state -q .state 2>/dev/null)" = OPEN ] || { _die "PR #$pr 이 열려 있지 않다."; return 1; }
+  [ "$(gh pr view "$pr" --repo "$rp" --json reviewDecision -q .reviewDecision 2>/dev/null)" = CHANGES_REQUESTED ] \
+    || { _die "PR #$pr 은 변경요청 상태가 아니다. 승인이나 코멘트의 지적은 닫지 않고 범위 안에서 고친다."; return 1; }
+  gh pr close "$pr" --repo "$rp" --comment "변경 요청을 설계부터 다시 반영하기 위해 닫습니다. 반영한 뒤 새 PR 로 다시 올립니다." >&2 || return 1
+  if [ -f "$f" ]; then
+    awk -F'|' -v rp="$name" -v env="$env" '
+      function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
+      /^## /{ins=($0 ~ /^##[ \t]*배포[ \t]*$/)}
+      ins && /^\|/ && NF>=9 && t($2)==rp && t($3)==env {next}
+      {print}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  fi
+  printf '%s\t%s\t#%s\t%s\n' "$name" "$env" "$pr" "${why//$'\n'/ }" >> "$d/.v2-pr-closed"
+  dobby_event "$key" "PR 닫음 — $name #$pr ($env): 변경요청 — ${why%%$'\n'*}"
+  printf '%s\n' "$pr"
 }
 
 # dobby_ship_resubmit KEY 워크트리 브랜치 환경 PR번호 — 리뷰 반영을 새 PR 로 다시 리뷰받는다. 새 번호 stdout.
@@ -5171,7 +5339,7 @@ _dobby_v2_drift_apply_u() {
   fi
   dev="$(_board_dev_slug "$d/orchestration.md")"
   case "$ph" in
-    착수|분석|설계|설계확인|구현)
+    착수|분석|설계|설계확인|구현|산출)
       printf '%s' "$det" | grep -q '^commit' && _v2_drift_section "$key" "$(_v2_open_next_round "$key")" "$det" >/dev/null
       _v2_checkpoint_mark "$key"; printf 'kept\n'; return 0 ;;
     리뷰)
@@ -5308,6 +5476,11 @@ dobby_v2_next_all() {
       fi
       grp=auto; kind=running; text="자동 실행 중 — $ph 단계"; _v2_emit; continue
     fi
+    # 자동 실행이 죽어 있어도 답 없는 질문은 사람 차례로 낸다(8시간 넘게 답이 없어 멈춘 뒤, 또는 자동 실행 밖에서 남은 질문).
+    if [ -f "$d/ask.json" ] && [ -z "$(jq -r '.answer.value // empty' "$d/ask.json" 2>/dev/null)" ]; then
+      kind=ask; act=ask; text="답을 기다립니다 — $(jq -r .title "$d/ask.json")"
+      since="$(jq -r .created "$d/ask.json")"; _v2_emit; continue
+    fi
     # 옛 규칙("방금 끝난 일")으로 적힌 단계는 한 번 옮겨 적는다. 자동 실행이 도는 오더는 건드리지 않는다(위에서 넘김).
     _v2_rule_ok "$k" || { _v2_phase_migrate "$k" >/dev/null 2>&1; ph="$(_order_phase "$k")"; }
 
@@ -5346,6 +5519,15 @@ dobby_v2_next_all() {
       fi
     fi
 
+    # 테스터 없이 끝난 오더 — 켜진 담당자가 모두 완료이고 남은 질문이 없다. 테스터가 켜진 오더는 아래 검증 통과 조건 그대로다.
+    if case "$ph" in 산출|리뷰|수정|통합|배포) _v2_finished "$k" ;; *) false ;; esac; then
+      grp=notice
+      if _v2_has "$k" 개발자; then kind=verify-skip; text="검증 필요 없음 — 릴리즈 노트 등록 차례"; cmd="/dobby-release $k"
+      else kind=done; text="산출물 완료 — 해결 처리 차례"; cmd="/dobby-resolve $k"; act=resolve
+      fi
+      _v2_emit; continue
+    fi
+
     case "$ph" in
       보류)
         kind=decision; text="판단이 필요합니다"; cmd="/do $k" ;;
@@ -5358,7 +5540,7 @@ dobby_v2_next_all() {
         else
           kind=run-ready; text="설계 확정 — 자동 실행 대기"; act=autorun
         fi ;;
-      구현|리뷰|수정|실패분석)
+      구현|산출|리뷰|수정|실패분석)
         if _v2_recent "$k"; then grp=work; kind=working; text="터미널에서 $ph 진행 중"
         else kind=resume; text="$ph 차례입니다 — 자동 실행으로 이어 가기"; act=autorun
         fi ;;
@@ -5434,7 +5616,8 @@ dobby_v2_next_all() {
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 다섯 담당자 상태 — /do 오더의 상태표는 시작 헬퍼(dobby_v2_begin)와 끝 헬퍼(dobby_v2_end)가 바꾼다.
-#   담당자: 기획자 analysis-agent · 개발자 {영역} · 리뷰어 review-agent · 배포담당 deploy-agent · 테스터 test-agent
+#   담당자: 기획자 analysis-agent · 개발자 {영역} · 산출자 produce-agent · 리뷰어 review-agent · 배포담당 deploy-agent · 테스터 test-agent
+#           상태 문서에 담당자 줄이 있으면 켜진 담당자만, 없으면(옛 오더) 산출자를 뺀 다섯이 행을 갖는다.
 #   상태:   대기 · 작업중 · 기다림 · 사람 차례 · 막힘 · 완료  (무엇을 하는지는 설명 칸이 말한다)
 #   시작은 입력 검사 훅(prompt-guard.sh)이 모델보다 먼저 부르고, 세션이 첫 명령으로 한 번 더 부른다(두 번 불러도 안전).
 #   끝 헬퍼는 세션이 고른 결과를 리뷰 파일·커밋·배포 표·회차 결과와 맞춰 보고 맞을 때만 적는다.
@@ -5561,25 +5744,270 @@ _v2_set() {
   fi
 }
 
-# _v2_board_five KEY — 담당자 다섯 행을 맞춘다. 없는 행은 대기로 더하고, 이름 "분석"은 "기획자"로 바꾼다.
+# _v2_board_five KEY — 담당자 행을 맞춘다. 없는 행은 대기로 더하고, 이름 "분석"은 "기획자"로 바꾼다.
+#   상태 문서에 담당자 줄이 없으면 다섯(기획자·개발자·리뷰어·배포담당·테스터), 있으면 켜진 담당자만 더한다.
 _v2_board_five() {
   local key="$1" f dev
   f="$(_order_dir "$key")/orchestration.md"
   dobby_ensure_board "$key"; _board_todo_col "$f"
   [ "$(_board_role "$f" analysis-agent)" = 분석 ] && _board_set_name "$f" analysis-agent 기획자
   dobby_agent_add "$key" analysis-agent 기획자 "설계" 대기 0
-  dev="$(_board_dev_slug "$f")"
-  [ -n "$dev" ] || dobby_agent_add "$key" "$(dobby_slug "$key" dev)" 개발자 "구현" 대기 0
-  dobby_agent_add "$key" review-agent 리뷰어 "코드 리뷰" 대기 0
-  dobby_agent_add "$key" deploy-agent 배포담당 "통합과 배포" 대기 0
-  dobby_agent_add "$key" test-agent 테스터 "검증" 대기 0
+  if _v2_has "$key" 개발자; then
+    dev="$(_board_dev_slug "$f")"
+    [ -n "$dev" ] || dobby_agent_add "$key" "$(dobby_slug "$key" dev)" 개발자 "구현" 대기 0
+  fi
+  _v2_has "$key" 산출자 && dobby_agent_add "$key" produce-agent 산출자 "문서와 조사" 대기 0
+  _v2_has "$key" 리뷰어 && dobby_agent_add "$key" review-agent 리뷰어 "코드 리뷰" 대기 0
+  _v2_has "$key" 배포담당 && dobby_agent_add "$key" deploy-agent 배포담당 "통합과 배포" 대기 0
+  _v2_has "$key" 테스터 && dobby_agent_add "$key" test-agent 테스터 "검증" 대기 0
+  return 0
+}
+
+# ── 켜진 담당자 — 상태 문서 '## 현재 단계' 의 `- **담당자**: 기획자, 산출자, 리뷰어` 한 줄(표시 이름, 쉼표) ──
+# 줄이 없으면 옛 오더다. 지금처럼 다섯(기획자·개발자·리뷰어·배포담당·테스터)으로 본다. 한번 켠 담당자는 끄지 않는다.
+DOBBY_V2_ROLES="기획자 개발자 산출자 리뷰어 배포담당 테스터"
+
+# _v2_roles_line KEY — 담당자 줄의 값. 줄이 없으면 빈 출력.
+_v2_roles_line() {
+  sed -nE 's/^[ \t]*-[ \t]*\*\*담당자\*\*:[ \t]*(.*)$/\1/p' "$(_order_dir "$1")/status.md" 2>/dev/null | head -1
+}
+
+# dobby_v2_roles KEY — 켜진 담당자를 한 줄에 하나씩 낸다(정해진 순서). 담당자 줄이 없으면 다섯.
+dobby_v2_roles() {
+  local line r; line="$(_v2_roles_line "$1")"
+  if [ -z "$line" ]; then printf '기획자\n개발자\n리뷰어\n배포담당\n테스터\n'; return 0; fi
+  for r in $DOBBY_V2_ROLES; do
+    printf '%s\n' "$line" | tr ',' '\n' | sed 's/^[ \t]*//;s/[ \t]*$//' | grep -qxF -- "$r" && printf '%s\n' "$r"
+  done
+  return 0
+}
+
+# _v2_has KEY 담당자 — 그 담당자가 켜져 있으면 0.
+_v2_has() { dobby_v2_roles "$1" | grep -qxF -- "$2"; }
+
+# _v2_role_slug KEY 담당자 — 그 담당자의 상태표 식별 이름.
+_v2_role_slug() {
+  case "$2" in
+    기획자) printf 'analysis-agent' ;;
+    개발자) _v2_dev_slug "$1" ;;
+    산출자) printf 'produce-agent' ;;
+    리뷰어) printf 'review-agent' ;;
+    배포담당) printf 'deploy-agent' ;;
+    테스터) printf 'test-agent' ;;
+  esac
+}
+
+# _v2_idle KEY 담당자 — 켜졌지만 "할 일 없음"으로 끝낸 담당자면 0(dobby_v2_role_skip). 담당자 줄이 있는 오더만 본다.
+_v2_idle() {
+  local s
+  [ -n "$(_v2_roles_line "$1")" ] || return 1
+  s="$(_v2_role_slug "$1" "$2")"; [ -n "$s" ] || return 1
+  [ "$(_v2_state "$1" "$s")" = 완료 ] || return 1
+  case "$(_board_cell "$(_order_dir "$1")/orchestration.md" "$s" 설명)" in "할 일 없음"*) return 0 ;; esac
+  return 1
+}
+
+# _v2_on KEY 담당자 — 켜져 있고 할 일이 남은 담당자면 0. 단계 판정이 이 담당자의 단계를 건너뛸지 볼 때 쓴다.
+_v2_on() { _v2_has "$1" "$2" && ! _v2_idle "$1" "$2"; }
+
+# dobby_v2_set_roles KEY "담당자, 담당자, …" ["근거"] — 담당자를 켠다(더하기만 한다). 기획자는 늘 켜진다.
+#   · 개발자를 켜면 리뷰어와 배포담당도 켠다(구현은 리뷰를 받고 커밋·푸시로 나간다). 테스터는 개발자가 있어야 켤 수 있다.
+#   · 개발자나 산출자 가운데 하나는 있어야 한다.
+#   · 종류 줄도 맞춘다: 개발자가 켜지면 개발, 아니면 산출물.
+#   · 이미 시작한 옛 오더(담당자 줄 없음)에 부르면 지금의 다섯에 더한다.
+#   · "할 일 없음"으로 끝냈던 담당자를 다시 주면 대기로 되돌린다.
+#   출력: 적힌 담당자 줄의 값.
+dobby_v2_set_roles() { _dobby_locked "$1" _dobby_v2_set_roles_u "$@"; }
+_dobby_v2_set_roles_u() {
+  local key="$1" asked="$2" why="${3:-}" f cur want r out="" s
+  f="$(_order_dir "$key")/status.md"
+  [ -f "$f" ] || { _die "$key 의 상태 문서가 없습니다"; return 1; }
+  asked="$(printf '%s\n' "$asked" | tr ',' '\n' | sed 's/^[ \t]*//;s/[ \t]*$//' | sed '/^$/d')"
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    case " $DOBBY_V2_ROLES " in *" $r "*) ;; *) _die "모르는 담당자입니다: '$r' (쓸 수 있는 이름: $DOBBY_V2_ROLES)"; return 1 ;; esac
+  done < <(printf '%s\n' "$asked")
+  cur="$(_v2_roles_line "$key")"
+  if [ -n "$cur" ] || _v2_rule_ok "$key"; then cur="$(dobby_v2_roles "$key")"; else cur=기획자; fi
+  want="$(printf '%s\n%s\n기획자\n' "$cur" "$asked")"
+  printf '%s\n' "$want" | grep -qxF 개발자 && want="$(printf '%s\n리뷰어\n배포담당\n' "$want")"
+  if printf '%s\n' "$want" | grep -qxF 테스터 && ! printf '%s\n' "$want" | grep -qxF 개발자; then
+    _die "테스터는 개발자가 켜진 오더에만 켭니다(문서와 조사는 리뷰어가 확인합니다)"; return 1
+  fi
+  printf '%s\n' "$want" | grep -qxE '개발자|산출자' || { _die "개발자나 산출자 가운데 하나는 켜야 합니다"; return 1; }
+  for r in $DOBBY_V2_ROLES; do
+    printf '%s\n' "$want" | grep -qxF -- "$r" && out="${out:+$out, }$r"
+  done
+  while IFS= read -r r; do
+    [ -n "$r" ] && _v2_idle "$key" "$r" || continue
+    s="$(_v2_role_slug "$key" "$r")"; _v2_set "$key" "$s" 대기 "" "다시 켜짐${why:+ — $why}"
+  done < <(printf '%s\n' "$asked")
+  _v2_set_line "$key" 담당자 "$out"
+  if printf '%s\n' "$want" | grep -qxF 개발자; then dobby_set_kind "$key" 개발; else dobby_set_kind "$key" 산출물; fi
+  # 이미 상태표가 있는 오더면 새로 켠 담당자의 행을 바로 더한다
+  if grep -q '^## 에이전트 상태표' "$(_order_dir "$key")/orchestration.md" 2>/dev/null; then _v2_board_five "$key"; fi
+  dobby_event "$key" "담당자 → $out${why:+ — $why}" 2>/dev/null
+  printf '%s\n' "$out"
+}
+
+# dobby_v2_role_skip KEY 담당자 "이유" — 켠 담당자의 일이 없어졌을 때 "할 일 없음"과 이유를 남기고 완료로 끝낸다.
+#   세션을 따로 열지 않고 기획자가 대신 적는다. 단계 판정은 이 담당자의 단계를 건너뛴다.
+dobby_v2_role_skip() {
+  local key="$1" role="$2" why="${3:-}" s
+  [ -n "$why" ] || { _die "쓰임: dobby_v2_role_skip KEY 담당자 \"이유\""; return 1; }
+  [ "$role" != 기획자 ] && _v2_has "$key" "$role" || { _die "켜져 있지 않거나 끝낼 수 없는 담당자입니다: '$role'"; return 1; }
+  [ -n "$(_v2_roles_line "$key")" ] || { _die "담당자 줄이 없는 오더입니다. dobby_v2_set_roles 로 먼저 담당자를 적어 주세요"; return 1; }
+  s="$(_v2_role_slug "$key" "$role")"
+  [ -n "$s" ] && [ -n "$(_board_role "$(_order_dir "$key")/orchestration.md" "$s")" ] || { _die "$role 의 상태표 행이 없습니다"; return 1; }
+  _v2_set "$key" "$s" 완료 "" "할 일 없음 — $why"
+  dobby_event "$key" "$role 할 일 없음 — $why" 2>/dev/null
+}
+
+# _v2_del_line KEY 이름 — '- **이름**: …' 줄을 지운다. 줄이 없으면 파일을 건드리지 않는다.
+_v2_del_line() {
+  local f; f="$(_order_dir "$1")/status.md"
+  [ -f "$f" ] && grep -qF -- "- **$2**:" "$f" || return 0
+  awk -v n="$2" 'index($0, "- **" n "**:") == 1 { next } { print }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+# _v2_get_line KEY 이름 — 그 줄의 값. 없으면 빈 출력.
+_v2_get_line() {
+  awk -v n="$2" 'index($0, "- **" n "**:") == 1 { sub(/^[^:]*:[ \t]*/, ""); sub(/[ \t]+$/, ""); print; exit }' \
+    "$(_order_dir "$1")/status.md" 2>/dev/null
+}
+
+# ── 산출물 — 설계 문서 '## 산출물' 표(이름·언제·올릴 곳)와 산출 기록(produce.md, 여럿이면 produce-{이름}.md) ──
+# _v2_deliverables KEY — 표의 줄마다 "이름<TAB>언제(앞|뒤)<TAB>올릴 곳". 표가 없으면 빈 출력.
+_v2_deliverables() {
+  awk -F'|' '
+    function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);gsub(/`|\*/,"",x);return x}
+    /^## /{ins=($0 ~ /^## 산출물[ \t]*$/); hdr=0; next}
+    ins && /^\|/ {
+      if(!hdr){cn=0;cw=0;cu=0; for(i=2;i<NF;i++){c=t($i); if(c=="이름")cn=i; if(c=="언제")cw=i; if(c=="올릴 곳")cu=i}; hdr=1; next}
+      if(!cn || t($cn) ~ /^-*$/) next
+      u=(cu ? t($cu) : ""); if(u=="") u="-"
+      print t($cn) "\t" ((cw && t($cw) ~ /뒤/) ? "뒤" : "앞") "\t" u
+    }' "$(_order_dir "$1")/design.md" 2>/dev/null
+}
+
+# _v2_produce_rec KEY 이름 — 그 산출물의 산출 기록 파일. 산출물이 하나뿐이면 produce.md.
+_v2_produce_rec() {
+  local n; n="$(_v2_deliverables "$1" | wc -l | tr -d ' ')"
+  if [ "${n:-0}" -le 1 ]; then printf '%s/produce.md' "$(_order_dir "$1")"; else printf '%s/produce-%s.md' "$(_order_dir "$1")" "$2"; fi
+}
+
+# _v2_produce_when KEY — 지금 만들 산출물의 때. 개발자가 일하는 오더면 구현이 끝나기 전에는 앞, 끝난 뒤에는 뒤. 그 밖에는 빈 값(전부).
+_v2_produce_when() {
+  _v2_on "$1" 개발자 || return 0
+  if [ "$(_v2_state "$1" "$(_v2_dev_slug "$1")")" = 완료 ]; then printf '뒤'; else printf '앞'; fi
+}
+
+# _v2_produce_pending KEY [앞|뒤] — 산출 기록이 아직 없는 산출물 이름을 한 줄씩. 때를 주면 그 때의 것만.
+#   표가 없으면 산출물 하나(이름 "산출물", 앞)로 본다.
+_v2_produce_pending() {
+  local key="$1" when="${2:-}" rows n w u
+  rows="$(_v2_deliverables "$key")"
+  [ -n "$rows" ] || rows="$(printf '산출물\t앞\t-')"
+  while IFS=$'\t' read -r n w u; do
+    [ -n "$n" ] || continue
+    [ -z "$when" ] || [ "$w" = "$when" ] || continue
+    [ -f "$(_v2_produce_rec "$key" "$n")" ] || printf '%s\n' "$n"
+  done < <(printf '%s\n' "$rows")
+}
+
+_v2_produce_desc() {
+  local p; p="$(_v2_produce_pending "$1" "$(_v2_produce_when "$1")" | paste -sd, - | sed 's/,/, /g')"
+  if [ -n "$p" ] && [ "$p" != 산출물 ]; then printf '산출 — %s' "$p"; else printf '산출'; fi
+}
+
+# _v2_produce_mode KEY — 지금 리뷰와 수정, 통합이 다루는 것이 산출물이면 0.
+#   산출을 마칠 때 '- **리뷰 대상**: 산출물' 줄을 적고, 구현을 마칠 때 지운다.
+_v2_produce_mode() { [ "$(_v2_get_line "$1" "리뷰 대상")" = 산출물 ]; }
+
+# _v2_next_work KEY — 설계나 변경이 확정된 뒤 일할 단계: 구현 또는 산출.
+_v2_next_work() {
+  if _v2_on "$1" 개발자; then
+    if _v2_on "$1" 산출자 && [ -n "$(_v2_produce_pending "$1" 앞)" ]; then printf '산출'; else printf '구현'; fi
+  elif _v2_on "$1" 산출자; then printf '산출'
+  else printf '구현'
+  fi
+}
+
+# _v2_after_produce KEY — 산출물이 받아들여진 뒤의 차례: 구현(앞 산출 뒤) · 통합(커밋할 문서나 올릴 곳이 있음) · 끝.
+_v2_after_produce() {
+  local key="$1" r b p n w u need=""
+  if _v2_on "$key" 개발자 && [ "$(_v2_state "$key" "$(_v2_dev_slug "$key")")" != 완료 ]; then printf '구현'; return 0; fi
+  if _v2_on "$key" 배포담당; then
+    while IFS=$'\t' read -r r b p; do
+      [ -d "$p" ] || continue
+      [ -n "$(git -C "$p" status --porcelain 2>/dev/null | head -1)" ] && need=1
+      [ "$(git -C "$p" rev-parse HEAD 2>/dev/null)" = "$(git -C "$p" rev-parse '@{u}' 2>/dev/null)" ] || need=1
+      case "$key" in TASK-*) need=1 ;; esac
+    done < <(_v2_worktrees "$key")
+    while IFS=$'\t' read -r n w u; do
+      case "$u" in ''|없음|-|—) ;; *) need=1 ;; esac
+    done < <(_v2_deliverables "$key")
+    [ -n "$need" ] && { printf '통합'; return 0; }
+  fi
+  printf '끝'
+}
+
+# _v2_all_done KEY — 켜진 담당자가 모두 완료이고 답 없는 질문이 없으면 0. 담당자 줄이 있는 오더만 본다.
+_v2_all_done() {
+  local key="$1" r s d
+  [ -n "$(_v2_roles_line "$key")" ] || return 1
+  d="$(_order_dir "$key")"
+  [ -f "$d/ask.json" ] && [ -z "$(jq -r '.answer.value // empty' "$d/ask.json" 2>/dev/null)" ] && return 1
+  while IFS= read -r r; do
+    s="$(_v2_role_slug "$key" "$r")"
+    [ -n "$s" ] && [ "$(_v2_state "$key" "$s")" = 완료 ] || return 1
+  done < <(dobby_v2_roles "$key")
+  return 0
+}
+
+# _v2_finished KEY — 테스터 없이 끝난 오더면 0. 테스터가 켜진 오더는 지금처럼 검증 통과로 끝을 본다.
+_v2_finished() { [ -n "$(_v2_roles_line "$1")" ] && ! _v2_on "$1" 테스터 && _v2_all_done "$1"; }
+
+# _v2_redo KEY — 기획자에게 넘어온 이유('- **다시 설계**:' 줄). 검증 실패로 넘어온 때에는 줄이 없다.
+_v2_redo() { _v2_get_line "$1" "다시 설계"; }
+
+# _v2_to_planner KEY 넘긴담당자슬러그 "이유" — 단계를 실패분석으로 옮기고 기획자 차례로 적는다.
+_v2_to_planner() {
+  dobby_phase "$1" 실패분석
+  _v2_set_line "$1" "다시 설계" "$3"
+  [ -n "$2" ] && _v2_set "$1" "$2" 대기 "" "설계 다시 보기 기다림"
+  _v2_set "$1" analysis-agent 대기 "" "설계 다시 보기 차례 — $3"
+}
+
+# _v2_design_blocking KEY 차수 — 그 차수의 막는 지적(blocker·major)을 "설계와 구현" 줄로 가른다.
+#   출력 "설계대로 구현됨 건수<TAB>구현이 설계와 다름 건수<TAB>그 줄이 없는 건수"
+_v2_design_blocking() {
+  cat "$(_order_dir "$1")/reviews/round-$2"/*.md 2>/dev/null | awk '
+    function close_card(){ if(card && !seen) miss++; card=0; seen=0 }
+    /^## /{ close_card(); if($0 ~ /^## \[(blocker|major)\]/) card=1; next }
+    card && !seen && /^-[ \t]*설계와 구현[ \t]*:/ { seen=1; if($0 ~ /설계대로 구현됨/) d++; else o++ }
+    END{ close_card(); printf "%d\t%d\t%d\n", d, o, miss }'
+}
+
+# dobby_v2_pr_fixes KEY — PR 변경요청으로 설계를 바꾼 횟수. 설계 문서의 '## 변경 N — PR 리뷰 지적' 절 수.
+dobby_v2_pr_fixes() {
+  local n; n="$(grep -cE '^## 변경 [0-9]+ — PR 리뷰 지적' "$(_order_dir "$1")/design.md" 2>/dev/null)"
+  printf '%s' "${n:-0}"
+}
+
+# _v2_persona 담당자 — role-personas.md 의 /do 절에서 그 담당자의 줄만 낸다. 시작 헬퍼가 결과에 붙인다.
+_v2_persona() {
+  awk -v r="$1" '
+    /^## /{ins=($0 ~ /^## \/do 담당자/); next}
+    ins && index($0, "- " r ": ") == 1 { sub(/^- [^:]*: /, ""); print "  - " $0 }' "$DOBBY_LIB_DIR/role-personas.md" 2>/dev/null
 }
 
 # _v2_slug_of KEY 단계 — 그 단계를 맡는 담당자 슬러그.
 _v2_slug_of() {
   case "$2" in
     착수|설계|설계확인|실패분석|보류) printf 'analysis-agent' ;;
-    구현|수정) _v2_dev_slug "$1" ;;
+    구현) _v2_dev_slug "$1" ;;
+    수정) if _v2_produce_mode "$1"; then printf 'produce-agent'; else _v2_dev_slug "$1"; fi ;;
+    산출) printf 'produce-agent' ;;
     리뷰) printf 'review-agent' ;;
     통합|배포) printf 'deploy-agent' ;;
     검증) printf 'test-agent' ;;
@@ -5699,10 +6127,22 @@ _v2_pr_line() { sed -nE 's/^- \*\*PR\*\*:[ \t]*(.*)$/\1/p' "$(_order_dir "$1")/s
 #   "단계<TAB>담당자 슬러그<TAB>설명<TAB>지시 문서 경로"
 #   멈출 때는 "멈춤<TAB>이유" (끝난 오더·기다림·막힘·dobby-order 오더·모르는 단계값)
 #   인자: "변경 …" 은 변경 접수, "light …" 은 가벼운 변경. 그 밖의 인자(auto·env=·전체 테스트 등)는 판정에 쓰지 않는다.
+#   켜진 담당자를 따른다(상태 문서의 담당자 줄). 켜지지 않았거나 "할 일 없음"으로 끝낸 담당자의 단계는 건너뛴다.
 dobby_v2_step() {
   local key="$1" first="${2:-}" d f ph dev rd k env nx what repo tgt pr
   d="$(_order_dir "$key")"; f="$d/status.md"
   _out() { printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$(_v2_step_doc "$4")"; }
+  # 설계나 변경이 확정된 뒤의 첫 일: 구현 또는 산출
+  _out_work() {
+    if [ "$(_v2_next_work "$key")" = 산출 ]; then _out 산출 produce-agent "$(_v2_produce_desc "$key")" produce.md
+    else _out 구현 "$dev" "$(_v2_impl_desc "$key")" impl.md
+    fi
+  }
+  _out_done() {
+    if _v2_on "$key" 테스터 && _v2_test_passed "$key"; then printf '멈춤\t검증을 전부 통과했습니다. /dobby-resolve %s 로 해결 처리해 주세요\n' "$key"
+    else printf '멈춤\t할 일을 모두 마쳤습니다. /dobby-resolve %s 로 해결 처리해 주세요\n' "$key"
+    fi
+  }
   if _qa_active "$key"; then
     printf '멈춤\tQA 감시가 진행 중입니다. QA 가 끝난 뒤(/dobby-qa stop %s 또는 해결 처리) 이어 가세요\n' "$key"; return 0
   fi
@@ -5720,20 +6160,33 @@ dobby_v2_step() {
     return 0
   fi
   dev="$(_v2_dev_slug "$key")"
+  # 테스터 없이 끝난 오더: 켜진 담당자가 모두 완료이고 답 없는 질문이 없다
+  # 사람이 변경을 요청해 설계로 되돌아간 오더는 담당자 행이 완료로 남아 있어도 끝난 오더가 아니다. 일을 마칠 수 있는 단계에서만 본다
+  case "$ph" in 산출|리뷰|수정|통합|배포) if _v2_finished "$key"; then _out_done; return 0; fi ;; esac
   case "$ph" in
     착수|"") _out 설계 analysis-agent "설계 작성" design.md ;;
     설계|설계확인|분석)
       if _v2_takeover_pending "$key"; then _out 설계 analysis-agent "이어받기 설계" takeover.md
       elif [ ! -f "$d/design.md" ]; then _out 설계 analysis-agent "설계 작성" design.md
-      elif _v2_design_approved "$key"; then _out 구현 "$dev" "$(_v2_impl_desc "$key")" impl.md
+      elif _v2_design_approved "$key"; then _out_work
       else _out 설계확인 analysis-agent "설계 확인 — 요약을 보고 답하기" design.md
       fi ;;
     구현) _out 구현 "$dev" "$(_v2_impl_desc "$key")" impl.md ;;
+    산출) _out 산출 produce-agent "$(_v2_produce_desc "$key")" produce.md ;;
     리뷰|수정)
       rd="$(_v2_latest_round "$key")"
       if _v2_round_done "$key" "$rd"; then
         k="$(dobby_blocking "$key" "$rd" 2>/dev/null)"
-        if [ "${k:-0}" -gt 0 ]; then _out 수정 "$dev" "${rd}차 리뷰 지적 ${k}건 수정" fix.md
+        if _v2_produce_mode "$key"; then
+          if [ "${k:-0}" -gt 0 ]; then _out 수정 produce-agent "${rd}차 리뷰 지적 ${k}건 수정" produce.md
+          else
+            case "$(_v2_after_produce "$key")" in
+              구현) _out 구현 "$dev" "$(_v2_impl_desc "$key")" impl.md ;;
+              통합) _out 통합 deploy-agent "산출물 확정과 문서 올리기" integrate.md ;;
+              *) _out_done ;;
+            esac
+          fi
+        elif [ "${k:-0}" -gt 0 ]; then _out 수정 "$dev" "${rd}차 리뷰 지적 ${k}건 수정" fix.md
         else _out 통합 deploy-agent "커밋·푸시와 결과 문서" integrate.md
         fi
       else
@@ -5751,15 +6204,28 @@ dobby_v2_step() {
           return 0
         fi ;;
       esac
-      if [ "$ph" = 통합 ]; then _out 통합 deploy-agent "커밋·푸시와 결과 문서" integrate.md; return 0; fi
+      if [ "$ph" = 통합 ]; then
+        if _v2_produce_mode "$key"; then _out 통합 deploy-agent "산출물 확정과 문서 올리기" integrate.md
+        else _out 통합 deploy-agent "커밋·푸시와 결과 문서" integrate.md
+        fi
+        return 0
+      fi
       env="$(dobby_v2_env "$key")"
-      if [ -z "$env" ]; then _out 검증 test-agent "$(_v2_verify_desc "$key")" verify.md; return 0; fi
+      if [ -z "$env" ]; then
+        if _v2_on "$key" 테스터; then _out 검증 test-agent "$(_v2_verify_desc "$key")" verify.md
+        else printf '멈춤\t통합까지 끝났습니다. /dobby-ship %s {환경} 으로 배포해 주세요(이 오더는 화면 검증을 하지 않습니다)\n' "$key"
+        fi
+        return 0
+      fi
       dobby_ship_reopen "$key" >/dev/null 2>&1
       nx="$(dobby_v2_ship_next "$key" 2>/dev/null)"
       IFS=$'\t' read -r what repo tgt _ <<<"$nx"
       case "$what" in
         ship) _out 배포 deploy-agent "$repo $env 배포" ship.md ;;
-        verify) _out 검증 test-agent "$(_v2_verify_desc "$key")" verify.md ;;
+        verify)
+          if _v2_on "$key" 테스터; then _out 검증 test-agent "$(_v2_verify_desc "$key")" verify.md
+          else _out 배포 deploy-agent "$env 배포 확인 마감" ship.md
+          fi ;;
         wait-review) printf '멈춤\t리뷰봇 리뷰를 기다리는 중입니다(%s PR %s). 자동 실행이 기다립니다\n' "$repo" "$tgt" ;;
         wait-build) printf '멈춤\t빌드를 기다리는 중입니다(%s run %s). 자동 실행이 기다립니다\n' "$repo" "$tgt" ;;
         blocked) printf '멈춤\t배포가 막혔습니다(%s): %s. 상태 문서 배포 표의 비고를 보고 처리해 주세요\n' "$repo" "$tgt" ;;
@@ -5772,7 +6238,10 @@ dobby_v2_step() {
         _out 실패분석 analysis-agent "검증 실패 분석 — $(_v2_failed_ids "$key")" triage.md
       else _out 검증 test-agent "$(_v2_verify_desc "$key")" verify.md
       fi ;;
-    실패분석) _out 실패분석 analysis-agent "검증 실패 분석 — $(_v2_failed_ids "$key")" triage.md ;;
+    실패분석)
+      if [ -n "$(_v2_redo "$key")" ]; then _out 실패분석 analysis-agent "설계 다시 보기 — $(_v2_redo "$key")" triage.md
+      else _out 실패분석 analysis-agent "검증 실패 분석 — $(_v2_failed_ids "$key")" triage.md
+      fi ;;
     보류) _out 설계 analysis-agent "판단 답 반영" answer.md ;;
     해결|종료|완료) printf '멈춤\t끝난 오더입니다(단계 %s)\n' "$ph" ;;
     *) printf '멈춤\t모르는 단계값입니다: %s. 상태 문서를 확인해 주세요\n' "$ph" ;;
@@ -5834,20 +6303,38 @@ _v2_mtime() { stat -f '%m' "$1" 2>/dev/null || printf '0'; }
 # dobby_v2_begin KEY [인자…] — 단계를 판정하고 이 세션의 담당자를 작업중으로 적는다. 결과를 사람이 읽는 줄로 낸다.
 #   반환 0 = 시작함(또는 이미 시작됨) · 2 = 멈춤(이유 출력) · 3 = 다른 세션이 이 오더를 작업 중
 #   메타가 아직 없으면(첫 설계 세션) 판정만 내고 적지 않는다. 설계 세션이 골격을 깐 뒤 다시 부르면 적는다.
+#   결과 끝에 이 세션 담당자가 지킬 줄(role-personas.md 의 /do 절)을 `지킬 것:` 으로 붙인다. 줄이 없는 담당자는 붙이지 않는다.
+#   답이 달린 질문(ask.json)이 있으면 `질문과 답:` 으로 붙이고 그 질문을 닫는다. 세션은 그 답을 받아 이어 간다.
 _dobby_v2_begin_u() {
   local key="$1"; shift
-  local line stage slug desc doc d sid rec sub name cwd rd m other round now
+  local line stage slug desc doc d sid rec sub name cwd rd m other round now t0 cc0 ws0 rname
   line="$(dobby_v2_step "$key" "$@")"
   IFS=$'\t' read -r stage slug desc doc <<<"$line"
   if [ "$stage" = 멈춤 ]; then printf '멈춤\n이유: %s\n' "$slug"; return 2; fi
   d="$(_order_dir "$key")"; sid="$(_session_id)"; rec="$d/.v2-begin"
   _show() {
-    printf '%s\n단계: %s\n담당자: %s (%s)\n설명: %s\n지시 문서: %s\n' "$1" "$stage" \
-      "$(_board_role "$d/orchestration.md" "$slug" 2>/dev/null || true)" "$slug" "$desc" "$doc"
+    rname="$(_board_role "$d/orchestration.md" "$slug" 2>/dev/null || true)"
+    printf '%s\n단계: %s\n담당자: %s (%s)\n설명: %s\n지시 문서: %s\n' "$1" "$stage" "$rname" "$slug" "$desc" "$doc"
+    # 지킬 줄은 담당자 이름으로 찾는다. 상태표가 아직 없으면(첫 설계 세션) 단계로 짐작한다.
+    case "$rname" in ''|분석/개발자) case "$stage" in 구현|수정) rname=개발자 ;; 산출) rname=산출자 ;; 리뷰) rname=리뷰어 ;; 통합|배포) rname=배포담당 ;; esac ;; esac
+    # 담당자 줄이 없는 옛 오더에는 붙이지 않는다(옛 오더의 결과는 전과 같아야 한다).
+    [ -n "$(_v2_roles_line "$key")" ] || return 0
+    m="$(_v2_persona "$rname")"
+    [ -z "$m" ] || printf '지킬 것:\n%s\n' "$m"
+  }
+  # 답이 달린 질문을 이 세션에 전하고 닫는다
+  _deliver_ask() {
+    [ -f "$d/ask.json" ] && [ -n "$(jq -r '.answer.value // empty' "$d/ask.json" 2>/dev/null)" ] || return 0
+    jq -r '"질문과 답:\n  질문: \(.title)\n  답: \(.answer.value)"
+      + (if (.what // "") != "" then "\n  무슨 일이 있었나: \(.what)" else "" end)
+      + (if (.after // "") != "" then "\n  답한 뒤 하기로 한 일: \(.after)" else "" end)
+      + (if ((.options // []) | length) > 0 then "\n  방법들: " + ([.options[] | "\(.label) — \(.does)"] | join(" / ")) else "" end)' "$d/ask.json" 2>/dev/null
+    printf '  이 답을 사람의 답으로 쓰고 다시 묻지 않습니다. 지난 질문은 이 오더의 질문 기록 폴더(asks)에 남았습니다.\n'
+    dobby_v2_ask_close "$key" "답을 세션에 전함"
   }
   if [ ! -f "$d/status.md" ]; then _show "시작 전(메타 없음)"; return 0; fi
   if [ -n "$sid" ] && [ -f "$rec" ] && [ "$(cut -f1,2 "$rec")" = "$sid"$'\t'"$stage" ]; then
-    _show "이미 시작됨"; return 0
+    _show "이미 시작됨"; _deliver_ask; return 0
   fi
   other="$(_v2_live_sessions "$key" "$sid" | awk -F'\t' '$3=="working"' | head -1)"
   if [ -n "$other" ] && [ "$(_v2_state "$key" "$(printf '%s' "$other" | cut -f2)")" = 작업중 ]; then
@@ -5870,25 +6357,37 @@ _dobby_v2_begin_u() {
     takeover.md) sub=takeover; name="이어받기 설계" ;;
     change.md)   sub="change-$((m + 1))"; name="변경 $((m + 1)) 접수" ;;
     impl.md)     m="$(_v2_pending_change "$key")"; sub="impl${m:+-change-$m}"; name="${m:+변경 $m }구현" ;;
+    produce.md)  if [ "$stage" = 수정 ]; then sub="produce-fix-$rd"; name="${rd}차 산출 수정"; else sub=produce; name=산출; fi ;;
     review.md)   sub="round-${rd:-1}"; name="${rd:-1}차 리뷰"; round="${rd:-1}" ;;
     fix.md)      sub="fix-$rd"; name="${rd}차 수정" ;;
     integrate.md) sub=integrate; name=통합 ;;
     ship.md)     sub="ship-$now"; name=배포 ;;
     verify.md)   m="$(dobby_verify_next "$key" 2>/dev/null | cut -f1)"; sub="verify-${m:-done}"; name="검증 ${m:-마감}" ;;
-    triage.md)   sub="triage-$now"; name="검증 실패 분석" ;;
+    triage.md)   sub="triage-$now"; if [ -n "$(_v2_redo "$key")" ]; then name="설계 다시 보기"; else name="검증 실패 분석"; fi ;;
     answer.md)   sub="answer-$now"; name="판단 답" ;;
     light.md)    sub=light; name="가벼운 변경" ;;
   esac
   [ "$(_order_phase "$key")" = "$stage" ] || dobby_phase "$key" "$stage"
   dobby_session_log "$key" "$slug" "$sub" "$name" "$cwd" >/dev/null
   case "$stage" in
-    구현|수정) round="$(dobby_fix_count "$key" "$slug")" ;;
+    구현|수정|산출)
+      if [ "$slug" = produce-agent ]; then
+        round="$(jq -r '(.["produce-agent"] // {}) | if type == "object" then [keys[] | select(test("^produce-fix-"))] | length else 0 end' "$d/agent-logs.json" 2>/dev/null || printf '0')"
+      else round="$(dobby_fix_count "$key" "$slug")"
+      fi ;;
     검증) round="$(awk -F'|' '/^## /{ins=(index($0,"테스트 실행 이력")>0); next} ins && /^\|/ && $2 !~ /회차|---/ {n++} END{print n+0}' "$d/status.md")" ;;
   esac
   _presence_claim "$key" "$slug"
   _v2_set "$key" "$slug" 작업중 "${round:-}" "$desc"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${sid:-}" "$stage" "$slug" "$(date +%s)" "$(_v2_change_count "$key")" "$(_v2_wt_sig "$key")" > "$rec"
+  # 질문을 남기고 끝낸 세션의 일을 같은 단계에서 잇는 세션이면 그때의 시작 기록(시각·변경 수·작업 폴더 지문)을 이어 쓴다.
+  # 끝 헬퍼가 "시작 뒤 바뀐 것"을 볼 때 질문 전에 한 일까지 세기 위해서다.
+  t0="$(date +%s)"; cc0="$(_v2_change_count "$key")"; ws0="$(_v2_wt_sig "$key")"
+  if [ -f "$rec" ] && [ "$(cut -f1,2,3 "$rec")" = ask$'\t'"$stage"$'\t'"$slug" ]; then
+    t0="$(cut -f4 "$rec")"; cc0="$(cut -f5 "$rec")"; ws0="$(cut -f6 "$rec")"
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${sid:-}" "$stage" "$slug" "$t0" "$cc0" "$ws0" > "$rec"
   _show 시작함
+  _deliver_ask
 }
 
 # ── 끝 헬퍼 ──
@@ -5896,29 +6395,68 @@ _dobby_v2_begin_u() {
 #   맞지 않으면 "거부: 이유" 를 내고 1 을 돌려준다(아무것도 바꾸지 않는다).
 #   결과 어휘(단계별):
 #     설계·설계확인  사람확인 · 확정 · 변경접수 · 재배포 · 재검증 · 판단요청
-#     실패분석       변경접수 · 재배포 · 재검증 · 판단요청
-#     구현·수정      완료 (light 오더의 구현은 통합완료 — 리뷰 없이 커밋·푸시까지 마친 뒤)
-#     리뷰           통과 · 지적
+#     실패분석       변경접수 · 재배포 · 재검증 · 돌려보냄 "이유"(설계는 맞고 구현이 달랐다 — 변경 절 없이 되돌린다) · 판단요청
+#     구현·수정      완료 (light 오더의 구현은 통합완료 — 리뷰 없이 커밋·푸시까지 마친 뒤) · 설계문제 "이유"(기획자에게 넘긴다)
+#     산출           완료 · 설계문제 "이유"
+#     리뷰           통과 · 지적 (막는 지적에 "설계대로 구현됨"이 있으면 기획자, 아니면 고칠 담당자 차례)
 #     통합           완료
-#     배포           기다림 · 배포확인 · 사람승인 · 막힘
+#     배포           기다림 · 배포확인 · 사람승인 · 막힘 · 리뷰지적 "지적 요약"(변경요청으로 PR 을 닫음 — 기획자에게 넘긴다)
 #     검증           묶음남음 · 통과 · 실패
 #     어느 단계든    막힘 "이유" · 넘김 "이유"(단계는 두고 다음 /do 가 잇게 자기 행만 대기로)
+#                    · 질문(dobby_v2_ask 로 남긴 질문이 열려 있을 때 — 단계는 두고 자동 실행이 답을 기다린다)
 _dobby_v2_end_u() {
   local key="$1" res="$2" extra="${3:-}" d rec sid stage slug t0 cc0 ws0 dev env ph rd k nx what repo tgt ts m pr todo="" human="" name o
+  local pm="" dn on miss fixer nw keep=""
   d="$(_order_dir "$key")"; rec="$d/.v2-begin"; o="$d/orchestration.md"
   if [ -f "$rec" ]; then IFS=$'\t' read -r sid stage slug t0 cc0 ws0 < "$rec"
   else stage="$(_order_phase "$key")"; slug="$(_v2_slug_of "$key" "$stage")"; t0=0; cc0=0; ws0=""
   fi
   dev="$(_v2_dev_slug "$key")"; env="$(dobby_v2_env "$key")"
   name="$(_board_role "$o" "$slug")"; [ -n "$name" ] || name="$slug"
+  _v2_produce_mode "$key" && pm=1
   _rej() { printf '거부: %s\n' "$*"; return 1; }
   _human() { human="$1"; todo="$2"; }
+  # 산출물이 받아들여진 뒤의 차례로 넘긴다
+  _after_produce() {
+    case "$(_v2_after_produce "$key")" in
+      구현) _v2_del_line "$key" "리뷰 대상"; dobby_phase "$key" 구현; _v2_set "$key" "$dev" 대기 "" "$(_v2_impl_desc "$key") 차례" ;;
+      통합) dobby_phase "$key" 통합; _v2_set "$key" deploy-agent 대기 "" "산출물 확정과 문서 올리기 차례" ;;
+      *) _tail_done ;;
+    esac
+  }
+  # 검증을 통과한 뒤에 만든 산출물까지 끝났으면 단계를 검증으로 되돌린다. 테스터가 켜진 오더의 끝은 지금처럼 "검증 통과"로 읽힌다.
+  _tail_done() {
+    if _v2_on "$key" 테스터 && _v2_test_passed "$key" && [ "$(_order_phase "$key")" != 검증 ]; then dobby_phase "$key" 검증; fi
+  }
+  # 구현 결과가 배포 환경에 들어간 뒤의 차례: 검증(테스터가 켜진 오더) · 뒤에 만드는 산출물 · 없으면 끝
+  _after_deploy() {
+    if _v2_on "$key" 산출자 && [ -n "$(_v2_produce_pending "$key" 뒤)" ]; then
+      dobby_phase "$key" 산출; _v2_set "$key" produce-agent 대기 "" "산출 차례"
+    fi
+  }
 
   case "$stage:$res" in
     *:막힘)
       _v2_set "$key" "$slug" 막힘 "" "${extra:-이유 없음}" "/do $key"; _human "$slug" "/do $key" ;;
     *:넘김)
       _v2_set "$key" "$slug" 대기 "" "${extra:-다음 세션이 이어감}" ;;
+    *:질문)
+      [ -f "$d/ask.json" ] && [ -z "$(jq -r '.answer.value // empty' "$d/ask.json" 2>/dev/null)" ] \
+        || { _rej "열린 질문이 없습니다. dobby_v2_ask $key file {질문 파일} 로 질문을 먼저 남기세요"; return 1; }
+      _v2_set "$key" "$slug" "사람 차례" "" "답을 기다림 — $(jq -r .title "$d/ask.json")" "대시보드나 오피스의 질문 창에서 답하기"
+      _human "$slug" "대시보드나 오피스의 질문 창에서 답해 주세요. 답하면 자동 실행이 이어 갑니다"
+      # 시작 기록을 남겨 둔다. 답을 받은 뒤 같은 단계를 잇는 세션이 질문 전에 한 일까지 "시작 뒤 바뀐 것"으로 센다.
+      [ -f "$rec" ] && printf 'ask\t%s\t%s\t%s\t%s\t%s\n' "$stage" "$slug" "${t0:-0}" "${cc0:-0}" "$ws0" > "$rec"
+      keep=1 ;;
+    구현:설계문제|수정:설계문제|산출:설계문제)
+      [ -n "$extra" ] || { _rej "넘기는 이유를 덧붙여 주세요: dobby_v2_end $key 설계문제 \"{무엇이 왜 설계대로 안 되는지}\""; return 1; }
+      _v2_to_planner "$key" "$slug" "$stage 중 넘김 — $extra" ;;
+    배포:리뷰지적)
+      [ -n "$extra" ] || { _rej "지적 요약을 덧붙여 주세요: dobby_v2_end $key 리뷰지적 \"{지적 요약}\""; return 1; }
+      [ -s "$d/.v2-pr-closed" ] || { _rej "닫은 PR 기록이 없습니다. dobby_ship_close_pr 로 변경요청이 달린 PR 을 먼저 닫으세요"; return 1; }
+      [ -z "$ws0" ] || [ "$(_v2_wt_sig "$key")" = "$ws0" ] \
+        || { _rej "변경요청은 배포 세션이 고치지 않습니다. 시작 뒤 작업 폴더에 바뀐 것을 되돌린 뒤 다시 불러 주세요"; return 1; }
+      _v2_to_planner "$key" deploy-agent "PR 리뷰 지적 — $(awk -F'\t' '{printf "%s%s %s", (NR>1?", ":""), $1, $3}' "$d/.v2-pr-closed"): $extra" ;;
     설계:사람확인|설계확인:사람확인)
       [ -f "$d/design.md" ] || { _rej "설계 문서가 없습니다"; return 1; }
       _v2_design_approved "$key" && { _rej "이미 승인된 설계입니다. 확정으로 끝내세요"; return 1; }
@@ -5929,39 +6467,87 @@ _dobby_v2_end_u() {
       return 0 ;;
     설계:확정|설계확인:확정)
       _v2_design_approved "$key" || { _rej "승인 기록이 지금 설계와 다릅니다. dobby_design_ack $key 사용자(또는 auto)를 먼저 부르세요"; return 1; }
-      dobby_phase "$key" 구현
-      _v2_set "$key" analysis-agent 완료 "" "설계 확정"
-      _v2_set "$key" "$dev" 대기 "" "$(_v2_impl_desc "$key") 차례" ;;
+      # 개발자를 켰는데 테스터를 켜지 않았으면 이유가 있어야 한다(담당자 줄이 있는 오더만)
+      if [ -n "$(_v2_roles_line "$key")" ] && _v2_has "$key" 개발자 && ! _v2_has "$key" 테스터 && ! _v2_test_skip "$key"; then
+        _rej "테스터를 켜지 않은 이유가 없습니다. 테스트 계획 제목 아래에 '- **검증**: 필요 없음 — {이유}' 줄을 적거나 dobby_v2_set_roles $key 테스터 로 테스터를 켜세요"; return 1
+      fi
+      if [ "$(_v2_next_work "$key")" = 산출 ]; then
+        dobby_phase "$key" 산출
+        _v2_set "$key" analysis-agent 완료 "" "설계 확정"
+        _v2_set "$key" produce-agent 대기 "" "산출 차례"
+      else
+        dobby_phase "$key" 구현
+        _v2_set "$key" analysis-agent 완료 "" "설계 확정"
+        _v2_set "$key" "$dev" 대기 "" "$(_v2_impl_desc "$key") 차례"
+      fi ;;
     설계:변경접수|설계확인:변경접수|실패분석:변경접수)
       [ "$(_v2_change_count "$key")" -gt "${cc0:-0}" ] || { _rej "설계 문서에 새 변경 절(## 변경 N)이 없습니다"; return 1; }
       if [ "$stage" = 실패분석 ]; then
-        [ "$(_v2_mtime "$d/test-plan.md")" -gt "${t0:-0}" ] || { _rej "테스트 계획의 검증 항목을 시작 뒤 고치지 않았습니다"; return 1; }
+        if [ -z "$(_v2_redo "$key")" ]; then
+          [ "$(_v2_mtime "$d/test-plan.md")" -gt "${t0:-0}" ] || { _rej "테스트 계획의 검증 항목을 시작 뒤 고치지 않았습니다"; return 1; }
+        fi
+        case "$(_v2_redo "$key")" in "PR 리뷰 지적"*)
+          [ "$(dobby_v2_pr_fixes "$key")" -le 3 ] || { _rej "PR 변경요청으로 설계를 바꾸는 것은 3번까지입니다. 질문으로 사람에게 넘기세요"; return 1; } ;;
+        esac
         dobby_design_ack "$key" auto >/dev/null
       else
         _v2_design_approved "$key" || { _rej "변경 절을 확정받은 뒤 dobby_design_ack $key 사용자 를 먼저 부르세요"; return 1; }
       fi
       m="$(_v2_pending_change "$key")"
-      dobby_phase "$key" 구현
-      _v2_set "$key" analysis-agent 완료 "" "변경 ${m:-?} 접수"
-      _v2_set "$key" "$dev" 대기 "" "변경 ${m:-?} 구현 차례"
-      [ "$stage" = 실패분석 ] && _v2_set "$key" test-agent 대기 "" "변경 ${m:-?} 반영 뒤 다시 검증" ;;
+      if [ "$(_v2_next_work "$key")" = 산출 ]; then
+        dobby_phase "$key" 산출
+        _v2_set "$key" analysis-agent 완료 "" "변경 ${m:-?} 접수"
+        _v2_set "$key" produce-agent 대기 "" "변경 ${m:-?} 산출 차례"
+      else
+        dobby_phase "$key" 구현
+        _v2_set "$key" analysis-agent 완료 "" "변경 ${m:-?} 접수"
+        _v2_set "$key" "$dev" 대기 "" "변경 ${m:-?} 구현 차례"
+      fi
+      if [ "$stage" = 실패분석 ]; then
+        if [ -z "$(_v2_redo "$key")" ]; then _v2_set "$key" test-agent 대기 "" "변경 ${m:-?} 반영 뒤 다시 검증"; fi
+        _v2_del_line "$key" "다시 설계"
+      fi ;;
+    실패분석:돌려보냄)
+      [ -n "$(_v2_redo "$key")" ] || { _rej "검증 실패 분석에서는 쓰지 않는 결과입니다. 변경접수·재배포·재검증 가운데 하나로 끝내세요"; return 1; }
+      [ -n "$extra" ] || { _rej "돌려보내는 이유를 덧붙여 주세요: dobby_v2_end $key 돌려보냄 \"{설계가 맞는 근거}\""; return 1; }
+      rd="$(_v2_latest_round "$key")"; k=0
+      _v2_round_done "$key" "$rd" && k="$(dobby_blocking "$key" "$rd" 2>/dev/null)"
+      if [ -n "$pm" ]; then fixer=produce-agent; else fixer="$dev"; fi
+      if [ "${k:-0}" -gt 0 ]; then
+        dobby_phase "$key" 수정
+        _v2_set "$key" "$fixer" 대기 "" "${rd}차 리뷰 지적 ${k}건 수정 차례 (설계 유지)"
+      elif [ -n "$pm" ] || [ "$(_v2_next_work "$key")" = 산출 ]; then
+        dobby_phase "$key" 산출; _v2_set "$key" produce-agent 대기 "" "산출 차례 (설계 유지)"
+      else
+        dobby_phase "$key" 구현; _v2_set "$key" "$dev" 대기 "" "$(_v2_impl_desc "$key") 차례 (설계 유지)"
+      fi
+      _v2_set "$key" analysis-agent 완료 "" "설계 유지 — $extra"
+      _v2_del_line "$key" "다시 설계" ;;
     설계:재배포|설계확인:재배포|실패분석:재배포)
       if [ -n "$env" ]; then
         nx="$(dobby_v2_ship_next "$key" 2>/dev/null)"
         [ "${nx%%$'\t'*}" != verify ] || { _rej "배포 표에 다시 할 행이 없습니다. dobby_ship_stage 로 그 행을 다시 할 단계로 되돌리세요"; return 1; }
       fi
+      case "$(_v2_redo "$key")" in "PR 리뷰 지적"*)
+        [ "$(_v2_change_count "$key")" -gt "${cc0:-0}" ] || { _rej "설계 문서에 '코드 변경 없음'을 적은 새 변경 절(## 변경 N — PR 리뷰 지적 …)이 없습니다"; return 1; }
+        [ "$(dobby_v2_pr_fixes "$key")" -le 3 ] || { _rej "PR 변경요청으로 설계를 바꾸는 것은 3번까지입니다. 질문으로 사람에게 넘기세요"; return 1; } ;;
+      esac
       dobby_phase "$key" 배포
-      _v2_set "$key" analysis-agent 완료 "" "검증 실패 분석 — 배포가 덜 됨"
+      if [ -n "$(_v2_redo "$key")" ]; then _v2_set "$key" analysis-agent 완료 "" "설계 다시 보기 — 코드 변경 없이 다시 배포"
+      else _v2_set "$key" analysis-agent 완료 "" "검증 실패 분석 — 배포가 덜 됨"
+      fi
       if [ -n "$env" ]; then _v2_set "$key" deploy-agent 대기 "" "재배포 차례 (자동 실행)"
       else _v2_set "$key" deploy-agent "사람 차례" "" "재배포 — 배포가 덜 됐습니다" "/dobby-ship $key {환경}"; _human deploy-agent "/dobby-ship $key {환경}"
-      fi ;;
+      fi
+      [ "$stage" = 실패분석 ] && _v2_del_line "$key" "다시 설계" ;;
     설계:재검증|설계확인:재검증|실패분석:재검증)
       if [ "$stage" = 실패분석 ]; then
         [ "$(_v2_mtime "$d/test-plan.md")" -gt "${t0:-0}" ] || { _rej "테스트 계획의 검증 항목을 시작 뒤 고치지 않았습니다"; return 1; }
       fi
       dobby_phase "$key" 검증
       _v2_set "$key" analysis-agent 완료 "" "검증 항목 고침 — 재검증"
-      _v2_set "$key" test-agent 대기 "" "재검증 차례" ;;
+      _v2_set "$key" test-agent 대기 "" "재검증 차례"
+      [ "$stage" = 실패분석 ] && _v2_del_line "$key" "다시 설계" ;;
     설계:판단요청|설계확인:판단요청|실패분석:판단요청)
       grep -q '^## 확인이 필요했던 것' "$d/design.md" 2>/dev/null && [ "$(_v2_mtime "$d/design.md")" -gt "${t0:-0}" ] \
         || { _rej "설계 문서의 '## 확인이 필요했던 것' 절을 시작 뒤 적지 않았습니다"; return 1; }
@@ -5969,12 +6555,35 @@ _dobby_v2_end_u() {
       _v2_set "$key" analysis-agent "사람 차례" "" "판단 필요 — ${extra:-설계 문서의 확인이 필요했던 것}" "/do $key 로 답하기"
       _human analysis-agent "/do $key 로 답하기" ;;
     구현:완료|수정:완료)
-      [ "$(_v2_wt_sig "$key")" != "$ws0" ] || { _rej "시작 뒤 작업 폴더에 바뀐 것이 없습니다"; return 1; }
-      [ "$(_v2_mtime "$d/implementation.md")" -gt "${t0:-0}" ] || { _rej "구현 기록(implementation.md)을 시작 뒤 고치지 않았습니다"; return 1; }
-      rd="$(_v2_open_next_round "$key")"
-      dobby_phase "$key" 리뷰
-      _v2_set "$key" "$dev" 대기 "" "${rd}차 리뷰 기다림"
-      _v2_set "$key" review-agent 대기 "" "${rd}차 리뷰 차례" ;;
+      if [ "$stage" = 수정 ] && [ "$slug" = produce-agent ]; then
+        [ "$(_v2_newest_produce "$key")" -gt "${t0:-0}" ] || { _rej "산출 기록(produce.md)을 시작 뒤 고치지 않았습니다"; return 1; }
+        rd="$(_v2_open_next_round "$key")"
+        dobby_phase "$key" 리뷰
+        _v2_set "$key" produce-agent 대기 "" "${rd}차 리뷰 기다림"
+        _v2_set "$key" review-agent 대기 "" "${rd}차 리뷰 차례"
+      else
+        [ "$(_v2_wt_sig "$key")" != "$ws0" ] || { _rej "시작 뒤 작업 폴더에 바뀐 것이 없습니다"; return 1; }
+        [ "$(_v2_mtime "$d/implementation.md")" -gt "${t0:-0}" ] || { _rej "구현 기록(implementation.md)을 시작 뒤 고치지 않았습니다"; return 1; }
+        rd="$(_v2_open_next_round "$key")"
+        _v2_del_line "$key" "리뷰 대상"
+        dobby_phase "$key" 리뷰
+        _v2_set "$key" "$dev" 대기 "" "${rd}차 리뷰 기다림"
+        _v2_set "$key" review-agent 대기 "" "${rd}차 리뷰 차례"
+      fi ;;
+    산출:완료)
+      [ "$(_v2_newest_produce "$key")" -gt "${t0:-0}" ] || { _rej "산출 기록(produce.md)을 시작 뒤 고치지 않았습니다"; return 1; }
+      m="$(_v2_produce_pending "$key" "$(_v2_produce_when "$key")" | paste -sd, -)"
+      [ -z "$m" ] || { _rej "산출 기록이 없는 산출물이 남았습니다: $m (산출물이 여럿이면 기록 파일은 produce-{이름}.md)"; return 1; }
+      _v2_set_line "$key" "리뷰 대상" 산출물
+      if _v2_on "$key" 리뷰어; then
+        rd="$(_v2_open_next_round "$key")"
+        dobby_phase "$key" 리뷰
+        _v2_set "$key" produce-agent 대기 "" "${rd}차 리뷰 기다림"
+        _v2_set "$key" review-agent 대기 "" "${rd}차 리뷰 차례"
+      else
+        _v2_set "$key" produce-agent 완료 "" "산출 완료"
+        _after_produce
+      fi ;;
     구현:통합완료)
       grep -qE '^\|[[:space:]]*진행 방식[[:space:]]*\|[[:space:]]*light' "$d/design.md" 2>/dev/null \
         || { _rej "light 오더가 아닙니다(설계 문서 결정과 근거에 진행 방식 light 행 없음). 완료로 끝내세요"; return 1; }
@@ -5995,18 +6604,33 @@ _dobby_v2_end_u() {
       rd="$(_v2_latest_round "$key")"
       _v2_round_done "$key" "$rd" || { _rej "${rd:-1}차 리뷰 결과 파일이 없습니다"; return 1; }
       k="$(dobby_blocking "$key" "$rd" 2>/dev/null)"; k="${k:-0}"
+      if [ -n "$pm" ]; then fixer=produce-agent; else fixer="$dev"; fi
       if [ "$res" = 통과 ]; then
         [ "$k" -eq 0 ] || { _rej "통과라고 했지만 ${rd}차 리뷰에 막는 지적(blocker·major) ${k}건이 남아 있습니다"; return 1; }
-        dobby_phase "$key" 통합
-        _v2_set "$key" review-agent 완료 "$rd" "${rd}차 리뷰 · 통과"
-        _v2_set "$key" "$dev" 완료 "" "리뷰 통과"
-        _v2_set "$key" deploy-agent 대기 "" "통합 차례"
+        if [ -n "$pm" ]; then
+          _v2_set "$key" review-agent 완료 "$rd" "${rd}차 리뷰 · 통과"
+          _v2_set "$key" produce-agent 완료 "" "리뷰 통과"
+          _after_produce
+        else
+          dobby_phase "$key" 통합
+          _v2_set "$key" review-agent 완료 "$rd" "${rd}차 리뷰 · 통과"
+          _v2_set "$key" "$dev" 완료 "" "리뷰 통과"
+          _v2_set "$key" deploy-agent 대기 "" "통합 차례"
+        fi
       else
         [ "$k" -gt 0 ] || { _rej "지적이라고 했지만 막는 지적이 0건입니다. 통과로 끝내세요"; return 1; }
         case "$extra" in ''|*[!0-9]*) ;; *) [ "$extra" -eq "$k" ] || { _rej "지적 ${extra}건이라고 했지만 리뷰 파일에는 ${k}건입니다"; return 1; } ;; esac
-        dobby_phase "$key" 수정
-        _v2_set "$key" review-agent 완료 "$rd" "${rd}차 리뷰 · 지적 ${k}건"
-        _v2_set "$key" "$dev" 대기 "" "${rd}차 리뷰 지적 ${k}건 수정 차례"
+        IFS=$'\t' read -r dn on miss <<<"$(_v2_design_blocking "$key" "$rd")"
+        [ "${miss:-0}" -eq 0 ] || { _rej "막는 지적 ${miss}건에 '- 설계와 구현: 설계대로 구현됨' 또는 '- 설계와 구현: 구현이 설계와 다름' 줄이 없습니다"; return 1; }
+        if [ "${dn:-0}" -gt 0 ]; then
+          # 설계대로 만들었는데 결함이 있다 — 설계를 고칠 기획자가 먼저다(설계가 바뀌면 구현도 다시 한다)
+          _v2_set "$key" review-agent 완료 "$rd" "${rd}차 리뷰 · 지적 ${k}건"
+          _v2_to_planner "$key" "$fixer" "리뷰 지적 — ${rd}차 리뷰, 설계대로 만들었는데 결함 ${dn}건"
+        else
+          dobby_phase "$key" 수정
+          _v2_set "$key" review-agent 완료 "$rd" "${rd}차 리뷰 · 지적 ${k}건"
+          _v2_set "$key" "$fixer" 대기 "" "${rd}차 리뷰 지적 ${k}건 수정 차례"
+        fi
       fi ;;
     통합:완료)
       local r b p
@@ -6016,25 +6640,41 @@ _dobby_v2_end_u() {
         [ "$(git -C "$p" rev-parse HEAD 2>/dev/null)" = "$(git -C "$p" rev-parse '@{u}' 2>/dev/null)" ] \
           || { _rej "$r 의 끝 커밋이 원격 브랜치와 다릅니다(푸시 안 됨)"; return 1; }
       done < <(_v2_worktrees "$key")
-      [ -f "$d/outcome.md" ] || { _rej "결과 문서(outcome.md)가 없습니다"; return 1; }
-      _v2_set "$key" "$dev" 완료 "" "리뷰 통과"
-      case "$key" in
-        TASK-*)
-          pr="$(_v2_pr_line "$key")"
-          if [ -n "$pr" ]; then
-            _v2_set "$key" deploy-agent "사람 차례" "" "PR 머지 — 기준 브랜치로" "$pr 머지 뒤 /dobby-resolve $key"
-            _human deploy-agent "PR 을 확인하고 머지해 주세요: $pr — 머지한 뒤 /dobby-resolve $key"
-          else
-            _v2_set "$key" deploy-agent 완료 "" "기준 브랜치보다 앞선 커밋 없음"
-          fi ;;
-        *)
-          dobby_phase "$key" 배포
-          if [ -n "$env" ]; then _v2_set "$key" deploy-agent 대기 "" "$env 배포 차례 (자동 실행)"
-          else
-            _v2_set "$key" deploy-agent "사람 차례" "" "통합 끝 — 배포하기" "/dobby-ship $key {환경}"
-            _human deploy-agent "배포: /dobby-ship $key {환경} — 배포가 끝나면 /do $key 로 검증"
-          fi ;;
-      esac ;;
+      if [ -n "$pm" ]; then
+        # 산출물만 확정하는 통합 — 결과 문서는 요구하지 않는다. 산출 기록이 있어야 한다
+        [ "$(_v2_newest_produce "$key")" -gt 0 ] || { _rej "산출 기록(produce.md)이 없습니다"; return 1; }
+        pr=""; case "$key" in TASK-*) pr="$(_v2_pr_line "$key")" ;; esac
+        if [ -n "$pr" ]; then
+          _v2_set "$key" deploy-agent "사람 차례" "" "PR 머지 — 기준 브랜치로" "$pr 머지 뒤 /dobby-resolve $key"
+          _human deploy-agent "PR 을 확인하고 머지해 주세요: $pr — 머지한 뒤 /dobby-resolve $key"
+        else
+          _v2_set "$key" deploy-agent 완료 "" "산출물 확정"
+          _tail_done
+        fi
+      else
+        [ -f "$d/outcome.md" ] || { _rej "결과 문서(outcome.md)가 없습니다"; return 1; }
+        _v2_set "$key" "$dev" 완료 "" "리뷰 통과"
+        case "$key" in
+          TASK-*)
+            pr="$(_v2_pr_line "$key")"
+            if [ -n "$pr" ]; then
+              _v2_set "$key" deploy-agent "사람 차례" "" "PR 머지 — 기준 브랜치로" "$pr 머지 뒤 /dobby-resolve $key"
+              _human deploy-agent "PR 을 확인하고 머지해 주세요: $pr — 머지한 뒤 /dobby-resolve $key"
+            else
+              _v2_set "$key" deploy-agent 완료 "" "기준 브랜치보다 앞선 커밋 없음"
+            fi ;;
+          *)
+            dobby_phase "$key" 배포
+            if [ -n "$env" ]; then _v2_set "$key" deploy-agent 대기 "" "$env 배포 차례 (자동 실행)"
+            elif _v2_on "$key" 테스터; then
+              _v2_set "$key" deploy-agent "사람 차례" "" "통합 끝 — 배포하기" "/dobby-ship $key {환경}"
+              _human deploy-agent "배포: /dobby-ship $key {환경} — 배포가 끝나면 /do $key 로 검증"
+            else
+              _v2_set "$key" deploy-agent "사람 차례" "" "통합 끝 — 배포하기" "/dobby-ship $key {환경}"
+              _human deploy-agent "배포: /dobby-ship $key {환경} — 이 오더는 화면 검증을 하지 않습니다"
+            fi ;;
+        esac
+      fi ;;
     배포:기다림|배포:배포확인|배포:막힘|배포:사람승인)
       if [ "$res" = 사람승인 ]; then
         _v2_set "$key" deploy-agent "사람 차례" "" "${extra:-승인 기다림}" "배포 세션 창에서 답하기"; _human deploy-agent "배포 세션 창에서 답하기"
@@ -6046,9 +6686,14 @@ _dobby_v2_end_u() {
             m=$(( ( $(date +%s) - $(_v2_epoch "${ts:-}" 2>/dev/null || date +%s) ) / 60 ))
             dobby_v2_wait_mark "$key" "$repo" "$what" "$tgt" "$m" ;;
           배포확인:verify)
-            dobby_phase "$key" 검증
-            _v2_set "$key" deploy-agent 완료 "" "$env 배포 확인"
-            _v2_set "$key" test-agent 대기 "" "검증 차례" ;;
+            if _v2_on "$key" 테스터; then
+              dobby_phase "$key" 검증
+              _v2_set "$key" deploy-agent 완료 "" "$env 배포 확인"
+              _v2_set "$key" test-agent 대기 "" "검증 차례"
+            else
+              _v2_set "$key" deploy-agent 완료 "" "$env 배포 확인"
+              _after_deploy
+            fi ;;
           막힘:blocked)
             _v2_set "$key" deploy-agent 막힘 "" "$repo $env — $tgt" "상태 문서 배포 표의 비고를 보고 처리한 뒤 /do $key"
             _human deploy-agent "상태 문서 배포 표의 비고를 보고 처리한 뒤 /do $key" ;;
@@ -6064,7 +6709,8 @@ _dobby_v2_end_u() {
           _v2_set "$key" test-agent 대기 "" "다음 묶음 ${v%%$'\t'*} 차례" ;;
         통과)
           [ -z "$open" ] && _v2_test_passed "$key" || { _rej "마지막 회차가 마감되지 않았거나 전부 통과가 아닙니다"; return 1; }
-          _v2_set "$key" test-agent 완료 "" "전부 통과" ;;
+          _v2_set "$key" test-agent 완료 "" "전부 통과"
+          _after_deploy ;;
         실패)
           _v2_last_failed "$key" || { _rej "마감된 회차에 실패가 없습니다"; return 1; }
           dobby_phase "$key" 실패분석
@@ -6075,14 +6721,30 @@ _dobby_v2_end_u() {
       _rej "이 단계($stage)에서 받지 않는 결과입니다: $res"; return 1 ;;
   esac
   dobby_event "$key" "$name 끝 — $res${extra:+ · $extra}" 2>/dev/null
-  rm -f "$rec"
+  [ -n "$keep" ] || rm -f "$rec"
   dobby_v2_checkpoint "$key" >/dev/null 2>&1
   printf '다음\n'
   [ -n "$todo" ] && printf '  - %s\n' "$todo"
+  if [ -z "$human" ] && _v2_finished "$key"; then
+    dobby_event "$key" "켜진 담당자의 일이 모두 끝남" 2>/dev/null
+    printf '  - 이 세션을 닫아 주세요. (/clear 또는 터미널 종료)\n'
+    printf '  - 할 일을 모두 마쳤습니다. /dobby-resolve %s 로 해결 처리해 주세요.\n' "$key"
+    return 0
+  fi
   printf '  - 이 세션을 닫아 주세요. (/clear 또는 터미널 종료)\n'
   [ -n "$human" ] || printf '  - 새 세션에서: /do %s\n' "$key"
   dobby_v2_next_hint "$key"
   return 0
+}
+
+# _v2_newest_produce KEY — 산출 기록(produce.md, produce-*.md) 가운데 가장 늦은 수정 시각(초). 없으면 0.
+_v2_newest_produce() {
+  local f m best=0
+  for f in "$(_order_dir "$1")"/produce.md "$(_order_dir "$1")"/produce-*.md; do
+    [ -f "$f" ] || continue
+    m="$(_v2_mtime "$f")"; [ "$m" -gt "$best" ] && best="$m"
+  done
+  printf '%s' "$best"
 }
 
 # ── 진척 헬퍼가 담당자 행도 고친다 ──
@@ -6108,6 +6770,16 @@ _dobby_ship_stage_board() {
   _v2_set "$key" deploy-agent "$ns" "" "$desc" "$todo"
   # 배포가 끝났으면 검증 차례로 넘긴다. 자동 배포 오더는 모든 저장소가 들어갔을 때만.
   [ "$st" = "배포 확인" ] && [ "$(_order_phase "$key")" = 배포 ] || return 0
+  if ! _v2_on "$key" 테스터; then
+    # 테스터가 없는 오더 — 검증으로 넘기지 않는다. 뒤에 만드는 산출물이 있으면 산출자 차례, 없으면 여기서 끝이다.
+    if [ -n "$(dobby_v2_env "$key")" ]; then
+      nx="$(dobby_v2_ship_next "$key" 2>/dev/null)"; [ "${nx%%$'\t'*}" = verify ] || return 0
+    fi
+    if _v2_on "$key" 산출자 && [ -n "$(_v2_produce_pending "$key" 뒤)" ]; then
+      dobby_phase "$key" 산출; _v2_set "$key" produce-agent 대기 "" "산출 차례"
+    fi
+    return 0
+  fi
   if [ -n "$(dobby_v2_env "$key")" ]; then
     nx="$(dobby_v2_ship_next "$key" 2>/dev/null)"; [ "${nx%%$'\t'*}" = verify ] || return 0
     dobby_phase "$key" 검증; _v2_set "$key" test-agent 대기 "" "검증 차례"
