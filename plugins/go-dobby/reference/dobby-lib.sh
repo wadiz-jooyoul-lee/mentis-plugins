@@ -25,10 +25,11 @@ DOBBY_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" ||
 #   · 담당자 상태(orchestration.md 상태표): 대기·작업중·기다림·사람 차례·막힘·완료 (6)
 #     옛 값(분석·구현·리뷰·검증·수정·반영·산출)은 작업중으로 접는다.
 #   · 오더 단계(status.md 현재 단계): 착수·설계·설계확인·구현·리뷰·수정·통합·배포·검증·실패분석·보류·해결·종료 (13)
-#     옛 값 분석은 설계로 접는다. /do 오더는 여기에 산출(산출자 차례)을 더 쓴다. 그 밖의 오더가 적는 산출은 지금처럼 구현으로 접는다.
+#     옛 값 분석은 설계로 접는다. /do 오더는 여기에 완성(자동으로 할 일이 끝나 사람이 결과를 확인할 차례)을 더 쓴다.
+#     옛 단계값 완료(담당자 상태값을 단계로 잘못 적은 것)는 완성으로 접는다. /do 오더는 여기에 산출(산출자 차례)을 더 쓴다. 그 밖의 오더가 적는 산출은 지금처럼 구현으로 접는다.
 # 막지 않고 조용히 접되(파이프라인 비차단), 교정이 일어나면 stderr에 경고 한 줄을 남긴다.
 DOBBY_STATES="대기|작업중|기다림|사람 차례|막힘|완료"
-DOBBY_PHASES="착수 설계 설계확인 구현 산출 리뷰 수정 통합 배포 검증 실패분석 보류 해결 종료"
+DOBBY_PHASES="착수 설계 설계확인 구현 산출 리뷰 수정 통합 배포 검증 완성 실패분석 보류 해결 종료"
 
 _trim() { printf '%s' "${1//\*/}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'; }
 
@@ -60,6 +61,7 @@ dobby_norm_phase() {
   case "$s" in
     *종료*)            out=종료 ;;
     *해결*)            out=해결 ;;
+    *완성*|완료)       out=완성 ;;
     *보류*)            out=보류 ;;
     *실패*분석*)       out=실패분석 ;;
     *검증*)            out=검증 ;;
@@ -1244,7 +1246,8 @@ dobby_merge_root() {
 dobby_resolve() {
   local key="$1" undo="${2:-}" f now; f="$(_order_dir "$key")/status.md"; now="$(_now)"
   if [ "$undo" = "undo" ]; then
-    dobby_phase "$key" "통합"
+    # 완성에서 해결한 오더(/do 오더)는 완성으로, 그 밖에는 지금처럼 통합으로 되돌린다
+    if grep -q '^- \*\*완성\*\*:' "$f" 2>/dev/null; then dobby_phase "$key" "완성"; else dobby_phase "$key" "통합"; fi
     # ## 해결 섹션 제거
     awk '/^## 해결/{skip=1; next} /^## /{if(skip)skip=0} !skip{print}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
     dobby_event "$key" "해결 취소 — 해결 표시 해제"
@@ -2586,7 +2589,7 @@ dobby_discard_check() {
   if [ -f "$dir/status.md" ]; then
     phase="$(_trim "$(grep -m1 '^- \*\*단계\*\*:' "$dir/status.md" 2>/dev/null | sed 's/^[^:]*: *//')")"
     case "$phase" in
-      해결|종료) printf -- '- 단계가 "%s"다 — 정상 완료한 오더는 폐기하지 않는다(기록 보존).\n' "$phase"; bad=1 ;;
+      완성|해결|종료) printf -- '- 단계가 "%s"다 — 정상 완료한 오더는 폐기하지 않는다(기록 보존).\n' "$phase"; bad=1 ;;
     esac
   fi
 
@@ -2724,7 +2727,7 @@ dobby_discard_purge() {
 #    `완료`로 갱신한다"를 단계로 잘못 읽기 쉽다. 실제 메타에 `완료` 로 적힌 오더가 4개 있어
 #    받아는 주되, 정본으로 쓰지 않는다.
 # dobby-order 가 끝나는 지점이 `통합` 이므로 그것이 기본 진입 조건이다.
-DOBBY_SHIP_PHASES="통합 배포 검증 실패분석 해결 종료 완료"
+DOBBY_SHIP_PHASES="통합 배포 검증 완성 실패분석 해결 종료 완료"
 
 # 배포을 맡는 저장소. **여기 없는 저장소는 이 스킬이 다루지 않는다.**
 #
@@ -3118,6 +3121,7 @@ dobby_v2_change_open() {
   elif ls "$d/reviews/round-$rd"/*.md >/dev/null 2>&1; then rd=$((rd + 1))
   fi
   mkdir -p "$d/reviews/round-$rd"
+  _v2_del_line "$key" "완성"
   dobby_phase "$key" 설계
   dobby_event "$key" "변경 요청 접수 — 단계 $ph → 설계, 리뷰는 ${rd}차부터" 2>/dev/null
   printf '%s\n' "$rd"
@@ -5474,10 +5478,26 @@ dobby_v2_next_all() {
       --arg text "$text" --arg since "$since" --arg env "$env" --arg cmd "$cmd" --arg link "$link" --arg action "$act" \
       '{key:$key,title:$title,phase:$phase,group:$group,kind:$kind,text:$text,since:$since,env:$env,cmd:$cmd,link:$link,action:$action}'
   }
+  # 완성된 개발 오더의 알림: 완료 조건 기다림 · 릴리즈 노트 등록 · 정기배포 기다림 · 오늘 stage 확인. 알릴 것이 없으면 1.
+  _v2_release_notice() {
+    ln="$(sed -nE 's/^- \*\*완료 조건\*\*:[ \t]*(.*)$/\1/p' "$f" | head -1)"
+    dt="$(awk -F'|' '
+      function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
+      /^## /{ins=(index($0,"릴리즈 노트")>0); next}
+      ins && /^\|/ && t($2) ~ /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/ {if(t($2)>m)m=t($2)} END{print m}' "$f")"
+    if [ -n "$ln" ]; then grp=wait; kind=condition; text="완성 — 완료 조건 기다림: $ln"
+    elif [ -z "$dt" ]; then grp=notice; kind=release; text="완성 — 결과 확인과 릴리즈 노트 등록 차례"; cmd="/dobby-release $k"
+    elif [[ "$dt" > "$today" ]]; then grp=wait; kind=release-wait; text="완성 — $(_v2_md_day "$dt") 정기배포 뒤 해결"; since="$dt 09:00"
+    elif [ "$dt" = "$today" ] && ! grep -q '^- \*\*상태\*\*: 완료' "$(_release_file "$dt")" 2>/dev/null; then
+      grp=wait; kind=stage-check; text="완성 — 오늘 정기배포, stage 확인은 릴리즈 화면에서"; link="/releases/$dt"; since="$dt 09:00"
+    else
+      return 1
+    fi
+  }
   while IFS= read -r f; do
     d="${f%/status.md}"; k="${d##*/}"
     ph="$(_order_phase "$k")"
-    case "$ph" in 해결|종료|완료) continue ;; esac
+    case "$ph" in 해결|종료) continue ;; esac
     title="$(sed -nE 's/^- \*\*제목\*\*:[ \t]*(.*)$/\1/p' "$f" | head -1)"
     upd="$(sed -nE 's/^- \*\*갱신\*\*:[ \t]*([0-9-]+ [0-9:]+).*/\1/p' "$f" | head -1)"
     env="$(dobby_v2_env "$k")"
@@ -5524,7 +5544,7 @@ dobby_v2_next_all() {
     if [ "$drk" = code ]; then
       rd="$(find "$d/reviews" -maxdepth 1 -type d -name 'round-*' 2>/dev/null | sed 's/.*round-//' | sort -n | tail -1)"
       case "$ph" in
-        수정|통합|배포|검증|실패분석|보류) dr=1 ;;
+        수정|통합|배포|검증|완성|실패분석|보류) dr=1 ;;
         리뷰) { [ -n "$rd" ] && ls "$d/reviews/round-$rd"/*.md >/dev/null 2>&1; } && dr=1 || dr="" ;;
         *) dr="" ;;
       esac
@@ -5535,18 +5555,30 @@ dobby_v2_next_all() {
       fi
     fi
 
-    # 테스터 없이 끝난 오더 — 켜진 담당자가 모두 완료이고 남은 질문이 없다. 테스터가 켜진 오더는 아래 검증 통과 조건 그대로다.
-    if case "$ph" in 산출|리뷰|수정|통합|배포) _v2_finished "$k" ;; *) false ;; esac; then
-      grp=notice
-      if _v2_has "$k" 개발자; then kind=verify-skip; text="검증 필요 없음 — 릴리즈 노트 등록 차례"; cmd="/dobby-release $k"
-      else kind=done; text="산출물 완료 — 해결 처리 차례"; cmd="/dobby-resolve $k"; act=resolve
-      fi
-      _v2_emit; continue
+    # 완성 단계가 생기기 전에 끝난 오더는 완성으로 옮긴다(자동 실행이 도는 오더는 위에서 넘겼다).
+    #   테스터 없이 켜진 담당자가 모두 끝남 · 검증을 전부 통과함 · 사람이 /dobby-ship 으로 배포를 마친 테스터 없는 개발 오더
+    if case "$ph" in
+         산출|리뷰|수정|통합|배포) _v2_finished "$k" ;;
+         검증) ! _testrun_open "$k" >/dev/null && _v2_on "$k" 테스터 && _v2_test_passed "$k" ;;
+         완료) true ;;
+         *) false ;;
+       esac; then
+      _dobby_locked "$k" _v2_complete "$k" "할 일을 모두 마침"; ph="$(_order_phase "$k")"; phn="$ph"
+    elif [ "$ph" = 배포 ] && [ -z "$env" ] && [[ "$k" != TASK-* ]]; then
+      _dobby_locked "$k" _v2_dev_done_check "$k"; ph="$(_order_phase "$k")"; phn="$ph"
+    elif [ "$ph" = 검증 ] && [ -n "$(_v2_roles_line "$k")" ] && ! _v2_on "$k" 테스터; then
+      # 검증 단계에서 테스트를 건너뛰었다 — 배포는 끝났다
+      _dobby_locked "$k" _v2_deployed_next "$k" "배포 확인 — 테스트 건너뜀"; ph="$(_order_phase "$k")"; phn="$ph"
     fi
 
     case "$ph" in
       보류)
         kind=decision; text="판단이 필요합니다"; cmd="/do $k" ;;
+      완성)
+        # 자동으로 할 일이 끝나 사람이 결과를 확인할 차례. 개발 오더는 릴리즈 노트 흐름을, 그 밖에는 해결 처리를 알린다
+        if _v2_has "$k" 개발자; then _v2_release_notice || continue
+        else grp=notice; kind=done; text="완성 — 결과를 확인하고 해결 처리"; cmd="/dobby-resolve $k"; act=resolve
+        fi ;;
       착수|분석|설계|설계확인)
         # 설계 세션은 테스트 계획까지 다 쓴 뒤에야 단계를 분석으로 바꾼다. 착수거나 틀 자리표시가 남아 있으면 아직 작성 중이다.
         if [ "$ph" = 착수 ] || [ ! -f "$d/design.md" ] || grep -qE '^(\| 무엇이 문제인가 \| \(한 문장\)|\((고칠 파일과 읽어야 할|실제 코드를 보여 주고|문제를 만드는 코드를))' "$d/design.md"; then
@@ -5601,19 +5633,7 @@ dobby_v2_next_all() {
           else kind=verify-continue; text="검증이 중간에 멈췄습니다 — 남은 묶음 이어 가기"; act=autorun
           fi
         elif _v2_test_passed "$k"; then
-          ln="$(sed -nE 's/^- \*\*완료 조건\*\*:[ \t]*(.*)$/\1/p' "$f" | head -1)"
-          dt="$(awk -F'|' '
-            function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
-            /^## /{ins=(index($0,"릴리즈 노트")>0); next}
-            ins && /^\|/ && t($2) ~ /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/ {if(t($2)>m)m=t($2)} END{print m}' "$f")"
-          if [ -n "$ln" ]; then grp=wait; kind=condition; text="완료 조건 기다림 — $ln"
-          elif [ -z "$dt" ]; then grp=notice; kind=release; text="검증 통과 — 릴리즈 노트 등록 차례"; cmd="/dobby-release $k"
-          elif [[ "$dt" > "$today" ]]; then grp=wait; kind=release-wait; text="$(_v2_md_day "$dt") 정기배포 뒤 해결"; since="$dt 09:00"
-          elif [ "$dt" = "$today" ] && ! grep -q '^- \*\*상태\*\*: 완료' "$(_release_file "$dt")" 2>/dev/null; then
-            grp=wait; kind=stage-check; text="오늘 정기배포 — stage 확인은 릴리즈 화면에서"; link="/releases/$dt"; since="$dt 09:00"
-          else
-            continue
-          fi
+          _v2_release_notice || continue
         elif ! awk -F'|' '/^## /{ins=(index($0,"테스트 실행 이력")>0); next} ins && /^\|/ && $2 !~ /회차|---/ {n++} END{exit n?0:1}' "$f"; then
           if _v2_test_skip "$k"; then grp=notice; kind=verify-skip; text="검증 필요 없음 — 릴리즈 노트 등록 차례"; cmd="/dobby-release $k"
           else kind=verify; text="검증 차례"; act=autorun
@@ -6017,6 +6037,100 @@ _v2_all_done() {
 # _v2_finished KEY — 테스터 없이 끝난 오더면 0. 테스터가 켜진 오더는 지금처럼 검증 통과로 끝을 본다.
 _v2_finished() { [ -n "$(_v2_roles_line "$1")" ] && ! _v2_on "$1" 테스터 && _v2_all_done "$1"; }
 
+# _v2_complete KEY "이유" — 단계를 완성으로 옮긴다. 자동으로 할 일이 모두 끝나 사람이 결과를 확인할 차례다.
+#   완성은 사람이 /dobby-resolve 로 해결하거나 /do KEY 변경 … 으로 고치기 전까지 머무는 자리다.
+#   '- **완성**' 줄에 시각과 이유를 남긴다(해결 취소가 이 줄을 보고 완성으로 되돌린다).
+_v2_complete() {
+  local key="$1" why="${2:-할 일을 모두 마침}"
+  dobby_phase "$key" 완성
+  _v2_set_line "$key" "완성" "$(_now) · $why"
+  if [ -n "$(dobby_v2_env "$key")" ]; then dobby_v2_notify "$key" "완성 — $why. 결과를 확인해 주세요" >/dev/null
+  else dobby_event "$key" "완성 — $why" 2>/dev/null
+  fi
+  return 0
+}
+
+# _v2_complete_msg KEY — 완성 단계에서 단계 판정이 내는 멈춤 이유.
+_v2_complete_msg() {
+  printf '완성 — 결과를 확인해 주세요. 됐으면 /dobby-resolve %s 로 해결하고, 고칠 것이 있으면 /do %s 변경 {내용}' "$1" "$1"
+}
+
+# _v2_shipped KEY — 배포를 맡는 저장소가 모두 어느 환경이든 배포 확인을 마쳤으면 0(사람이 /dobby-ship 으로 배포한 오더용).
+#   배포를 맡는 저장소가 없으면 거짓이다 — 배포를 확인할 수 없으니 사람 차례로 남긴다.
+_v2_shipped() {
+  local key="$1" f r b p any=""
+  f="$(_order_dir "$key")/status.md"
+  while IFS=$'\t' read -r r b p; do
+    any=1
+    awk -F'|' -v rp="$r" '
+      function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
+      /^## /{ins=($0 ~ /^##[ \t]*배포[ \t]*$/); next}
+      ins && /^\|/ && NF>=9 && t($2)==rp && t($4) ~ /^(배포 확인|검증 중|검증 완료)$/ {ok=1}
+      END{exit ok?0:1}' "$f" || return 1
+  done < <(_v2_ship_repos "$key")
+  [ -n "$any" ]
+}
+
+# _v2_deployed_next KEY "이유" — 배포가 끝난 테스터 없는 개발 오더의 다음 차례를 적는다. 완성으로 옮겼으면 0.
+#   뒤에 만들 산출물이 남았으면 산출 차례로 넘기고 1 을 돌려준다. 잠금 안에서 부른다.
+_v2_deployed_next() {
+  _v2_set "$1" deploy-agent 완료 "" "배포 확인"
+  if _v2_on "$1" 산출자 && [ -n "$(_v2_produce_pending "$1" 뒤)" ]; then
+    dobby_phase "$1" 산출; _v2_set "$1" produce-agent 대기 "" "산출 차례"; return 1
+  fi
+  _v2_complete "$1" "$2"
+}
+
+# _v2_dev_done_check KEY — 테스터 없는 개발 오더가 사람의 /dobby-ship 으로 배포까지 마쳤으면 다음 차례로 옮긴다.
+#   완성으로 옮겼으면 0. 배포 전이거나 뒤 산출물 차례로 넘겼으면 1. 잠금 안에서 부른다.
+_v2_dev_done_check() {
+  _v2_on "$1" 테스터 && return 1
+  _v2_shipped "$1" || return 1
+  _v2_deployed_next "$1" "배포 확인 — 화면 검증 없음"
+}
+
+# dobby_v2_test_skip KEY "이유" — 사람이 테스트를 건너뛰라고 했을 때 부른다(설계 뒤 어느 단계에서든).
+#   테스트 계획 제목 아래에 '- **검증**: 필요 없음 — 이유' 줄을 적고 테스터를 '할 일 없음'으로 끝낸다.
+#   이미 배포가 확인된 오더(단계 배포·검증)면 곧바로 완성으로 옮긴다. 아니면 배포가 확인될 때 완성이 된다.
+dobby_v2_test_skip() {
+  local key="$1" why="$2" d tp ph
+  [ -n "$key" ] && [ -n "$why" ] || { _die "쓰임: dobby_v2_test_skip KEY \"이유\""; return 1; }
+  d="$(_order_dir "$key")"; tp="$d/test-plan.md"
+  [ -f "$d/status.md" ] || { _die "$key 의 상태 문서가 없습니다"; return 1; }
+  [ -n "$(_v2_roles_line "$key")" ] || { _die "담당자 줄이 없는 옛 오더입니다. dobby_v2_set_roles $key \"{담당자들}\" 로 담당자를 먼저 적어 주세요"; return 1; }
+  if [ -f "$tp" ]; then
+    awk -v v="- **검증**: 필요 없음 — $why" '
+      index($0, "- **검증**:") == 1 { next }
+      { print }
+      /^# / && !done { print ""; print v; done = 1 }
+      END { if (!done) { print ""; print v } }
+    ' "$tp" > "$tp.tmp" && mv "$tp.tmp" "$tp"
+  else
+    printf '# 테스트 계획\n\n- **검증**: 필요 없음 — %s\n' "$why" > "$tp"
+  fi
+  if _v2_on "$key" 테스터; then dobby_v2_role_skip "$key" 테스터 "테스트 건너뜀 — $why" >/dev/null || return 1; fi
+  dobby_event "$key" "테스트 건너뜀 — $why" 2>/dev/null
+  ph="$(_order_phase "$key")"
+  case "$ph" in
+    배포|검증)
+      if [ -n "$(dobby_v2_env "$key")" ] && [ "$ph" = 배포 ] && [ "$(dobby_v2_ship_next "$key" 2>/dev/null | cut -f1)" != verify ]; then
+        printf '테스트를 건너뜁니다. 자동 배포가 확인되면 완성이 됩니다\n'
+      elif [ -n "$(dobby_v2_env "$key")" ] || [ "$ph" = 검증 ]; then
+        # 자동 배포가 확인됐거나 검증 단계까지 왔으면 배포는 끝난 것이다
+        if _dobby_locked "$key" _v2_deployed_next "$key" "배포 확인 — 테스트 건너뜀"; then
+          printf '완성으로 옮겼습니다. 결과를 확인한 뒤 /dobby-resolve %s 로 해결해 주세요\n' "$key"
+        else
+          printf '테스트를 건너뜁니다. 뒤에 만들 산출물을 마치면 완성이 됩니다. 이어서: /do %s\n' "$key"
+        fi
+      elif _dobby_locked "$key" _v2_dev_done_check "$key"; then
+        printf '완성으로 옮겼습니다. 결과를 확인한 뒤 /dobby-resolve %s 로 해결해 주세요\n' "$key"
+      else
+        printf '테스트를 건너뜁니다. /dobby-ship %s {환경} 으로 배포가 확인되면 완성이 됩니다\n' "$key"
+      fi ;;
+    *) printf '테스트를 건너뜁니다. 배포가 확인되면 완성이 됩니다\n' ;;
+  esac
+}
+
 # _v2_redo KEY — 기획자에게 넘어온 이유('- **다시 설계**:' 줄). 검증 실패로 넘어온 때에는 줄이 없다.
 _v2_redo() { _v2_get_line "$1" "다시 설계"; }
 
@@ -6188,10 +6302,14 @@ dobby_v2_step() {
     else _out 구현 "$dev" "$(_v2_impl_desc "$key")" impl.md
     fi
   }
+  # 할 일을 모두 마친 오더: 단계가 완성이 아니면(이 단계가 생기기 전에 끝난 오더) 완성으로 옮긴 뒤 멈춘다
   _out_done() {
-    if _v2_on "$key" 테스터 && _v2_test_passed "$key"; then printf '멈춤\t검증을 전부 통과했습니다. /dobby-resolve %s 로 해결 처리해 주세요\n' "$key"
-    else printf '멈춤\t할 일을 모두 마쳤습니다. /dobby-resolve %s 로 해결 처리해 주세요\n' "$key"
+    if [ "$(_order_phase "$key")" != 완성 ]; then
+      if _v2_on "$key" 테스터 && _v2_test_passed "$key"; then _dobby_locked "$key" _v2_complete "$key" "검증 전부 통과"
+      else _dobby_locked "$key" _v2_complete "$key" "켜진 담당자의 일이 모두 끝남"
+      fi
     fi
+    printf '멈춤\t%s\n' "$(_v2_complete_msg "$key")"
   }
   if _qa_active "$key"; then
     printf '멈춤\tQA 감시가 진행 중입니다. QA 가 끝난 뒤(/dobby-qa stop %s 또는 해결 처리) 이어 가세요\n' "$key"; return 0
@@ -6263,7 +6381,9 @@ dobby_v2_step() {
       env="$(dobby_v2_env "$key")"
       if [ -z "$env" ]; then
         if _v2_on "$key" 테스터; then _out 검증 test-agent "$(_v2_verify_desc "$key")" verify.md
-        else printf '멈춤\t통합까지 끝났습니다. /dobby-ship %s {환경} 으로 배포해 주세요(이 오더는 화면 검증을 하지 않습니다)\n' "$key"
+        elif _dobby_locked "$key" _v2_dev_done_check "$key"; then _out_done
+        elif [ "$(_order_phase "$key")" = 산출 ]; then _out 산출 produce-agent "$(_v2_produce_desc "$key")" produce.md
+        else printf '멈춤\t통합까지 끝났습니다. /dobby-ship %s {환경} 으로 배포해 주세요(이 오더는 화면 검증을 하지 않습니다. 배포가 확인되면 완성이 됩니다)\n' "$key"
         fi
         return 0
       fi
@@ -6282,8 +6402,13 @@ dobby_v2_step() {
         *) printf '멈춤\t배포 다음 일을 정하지 못했습니다: %s\n' "${nx:-빈 값}" ;;
       esac ;;
     검증)
-      if _testrun_open "$key" >/dev/null; then _out 검증 test-agent "$(_v2_verify_desc "$key")" verify.md
-      elif _v2_test_passed "$key"; then printf '멈춤\t검증을 전부 통과했습니다. /dobby-resolve %s 로 해결 처리해 주세요\n' "$key"
+      if ! _v2_on "$key" 테스터 && [ "$(_v2_state "$key" deploy-agent)" != 완료 ]; then
+        # 검증 단계에서 테스트를 건너뛰었다 — 배포는 끝났으니 뒤 산출물이나 완성으로 간다
+        if _dobby_locked "$key" _v2_deployed_next "$key" "배포 확인 — 테스트 건너뜀"; then _out_done
+        else _out 산출 produce-agent "$(_v2_produce_desc "$key")" produce.md
+        fi
+      elif ! _v2_on "$key" 테스터 || _v2_test_passed "$key"; then _out_done
+      elif _testrun_open "$key" >/dev/null; then _out 검증 test-agent "$(_v2_verify_desc "$key")" verify.md
       elif _v2_last_failed "$key" && [ "$(_v2_state "$key" test-agent)" = 완료 ]; then
         _out 실패분석 analysis-agent "검증 실패 분석 — $(_v2_failed_ids "$key")" triage.md
       else _out 검증 test-agent "$(_v2_verify_desc "$key")" verify.md
@@ -6293,7 +6418,9 @@ dobby_v2_step() {
       else _out 실패분석 analysis-agent "검증 실패 분석 — $(_v2_failed_ids "$key")" triage.md
       fi ;;
     보류) _out 설계 analysis-agent "판단 답 반영" answer.md ;;
-    해결|종료|완료) printf '멈춤\t끝난 오더입니다(단계 %s)\n' "$ph" ;;
+    완성) printf '멈춤\t%s\n' "$(_v2_complete_msg "$key")" ;;
+    해결|종료) printf '멈춤\t끝난 오더입니다(단계 %s)\n' "$ph" ;;
+    완료) _dobby_locked "$key" _v2_complete "$key" "옛 단계값 완료를 옮김"; printf '멈춤\t%s\n' "$(_v2_complete_msg "$key")" ;;
     *) printf '멈춤\t모르는 단계값입니다: %s. 상태 문서를 확인해 주세요\n' "$ph" ;;
   esac
 }
@@ -6357,7 +6484,14 @@ _v2_mtime() { stat -f '%m' "$1" 2>/dev/null || printf '0'; }
 #   답이 달린 질문(ask.json)이 있으면 `질문과 답:` 으로 붙이고 그 질문을 닫는다. 세션은 그 답을 받아 이어 간다.
 _dobby_v2_begin_u() {
   local key="$1"; shift
-  local line stage slug desc doc d sid rec sub name cwd rd m other round now t0 cc0 ws0 rname
+  local line stage slug desc doc d sid rec sub name cwd rd m other round now t0 cc0 ws0 rname why
+  # "테스트 건너뛰기 {이유}" — 단계를 판정하기 전에 테스터를 끝낸다(배포가 확인된 오더는 여기서 완성이 된다)
+  case "$*" in
+    테스트\ 건너뛰기*|테스트건너뛰기*)
+      why="$*"; why="${why#테스트 건너뛰기}"; why="${why#테스트건너뛰기}"; why="$(_trim "$why")"
+      [ -f "$(_order_dir "$key")/status.md" ] && dobby_v2_test_skip "$key" "${why:-사람 지시}" >&2
+      set -- ;;
+  esac
   line="$(dobby_v2_step "$key" "$@")"
   IFS=$'\t' read -r stage slug desc doc <<<"$line"
   if [ "$stage" = 멈춤 ]; then printf '멈춤\n이유: %s\n' "$slug"; return 2; fi
@@ -6471,17 +6605,20 @@ _dobby_v2_end_u() {
     case "$(_v2_after_produce "$key")" in
       구현) _v2_del_line "$key" "리뷰 대상"; dobby_phase "$key" 구현; _v2_set "$key" "$dev" 대기 "" "$(_v2_impl_desc "$key") 차례" ;;
       통합) dobby_phase "$key" 통합; _v2_set "$key" deploy-agent 대기 "" "산출물 확정과 문서 올리기 차례" ;;
-      *) _tail_done ;;
+      *) _tail_done "산출물 완성" ;;
     esac
   }
-  # 검증을 통과한 뒤에 만든 산출물까지 끝났으면 단계를 검증으로 되돌린다. 테스터가 켜진 오더의 끝은 지금처럼 "검증 통과"로 읽힌다.
+  # 산출물까지 모두 끝났으면 완성으로 옮긴다. 테스터가 켜진 오더는 검증을 통과했을 때만이다(그 전이면 아직 일이 남았다).
   _tail_done() {
-    if _v2_on "$key" 테스터 && _v2_test_passed "$key" && [ "$(_order_phase "$key")" != 검증 ]; then dobby_phase "$key" 검증; fi
+    _v2_on "$key" 테스터 && ! _v2_test_passed "$key" && return 0
+    _v2_complete "$key" "$1"
   }
-  # 구현 결과가 배포 환경에 들어간 뒤의 차례: 검증(테스터가 켜진 오더) · 뒤에 만드는 산출물 · 없으면 끝
+  # 구현 결과가 배포 환경에 들어간 뒤의 차례: 뒤에 만드는 산출물 · 없으면 완성
   _after_deploy() {
     if _v2_on "$key" 산출자 && [ -n "$(_v2_produce_pending "$key" 뒤)" ]; then
       dobby_phase "$key" 산출; _v2_set "$key" produce-agent 대기 "" "산출 차례"
+    else
+      _v2_complete "$key" "$1"
     fi
   }
 
@@ -6699,7 +6836,7 @@ _dobby_v2_end_u() {
           _human deploy-agent "PR 을 확인하고 머지해 주세요: $pr — 머지한 뒤 /dobby-resolve $key"
         else
           _v2_set "$key" deploy-agent 완료 "" "산출물 확정"
-          _tail_done
+          _tail_done "산출물 확정"
         fi
       else
         [ -f "$d/outcome.md" ] || { _rej "결과 문서(outcome.md)가 없습니다"; return 1; }
@@ -6742,7 +6879,7 @@ _dobby_v2_end_u() {
               _v2_set "$key" test-agent 대기 "" "검증 차례"
             else
               _v2_set "$key" deploy-agent 완료 "" "$env 배포 확인"
-              _after_deploy
+              _after_deploy "$env 배포 확인 — 화면 검증 없음"
             fi ;;
           막힘:blocked)
             _v2_set "$key" deploy-agent 막힘 "" "$repo $env — $tgt" "상태 문서 배포 표의 비고를 보고 처리한 뒤 /do $key"
@@ -6760,7 +6897,7 @@ _dobby_v2_end_u() {
         통과)
           [ -z "$open" ] && _v2_test_passed "$key" || { _rej "마지막 회차가 마감되지 않았거나 전부 통과가 아닙니다"; return 1; }
           _v2_set "$key" test-agent 완료 "" "전부 통과"
-          _after_deploy ;;
+          _after_deploy "검증 전부 통과" ;;
         실패)
           _v2_last_failed "$key" || { _rej "마감된 회차에 실패가 없습니다"; return 1; }
           dobby_phase "$key" 실패분석
@@ -6775,10 +6912,14 @@ _dobby_v2_end_u() {
   dobby_v2_checkpoint "$key" >/dev/null 2>&1
   printf '다음\n'
   [ -n "$todo" ] && printf '  - %s\n' "$todo"
-  if [ -z "$human" ] && _v2_finished "$key"; then
+  # 위 경로에서 빠졌어도 켜진 담당자의 일이 모두 끝났으면 완성으로 옮긴다
+  if [ -z "$human" ] && [ "$(_order_phase "$key")" != 완성 ] && _v2_finished "$key"; then
     dobby_event "$key" "켜진 담당자의 일이 모두 끝남" 2>/dev/null
+    _v2_complete "$key" "켜진 담당자의 일이 모두 끝남"
+  fi
+  if [ -z "$human" ] && [ "$(_order_phase "$key")" = 완성 ]; then
     printf '  - 이 세션을 닫아 주세요. (/clear 또는 터미널 종료)\n'
-    printf '  - 할 일을 모두 마쳤습니다. /dobby-resolve %s 로 해결 처리해 주세요.\n' "$key"
+    printf '  - %s.\n' "$(_v2_complete_msg "$key")"
     return 0
   fi
   printf '  - 이 세션을 닫아 주세요. (/clear 또는 터미널 종료)\n'
