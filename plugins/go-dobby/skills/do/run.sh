@@ -272,7 +272,7 @@ while :; do
   case "$stg" in
     멈춤)
       case "$slug" in
-        검증을\ 전부\ 통과*|끝난\ 오더*|PR\ 이\ 머지*|PR\ 머지\ 차례*|할\ 일을\ 모두\ 마쳤습니다*|통합까지\ 끝났습니다*) finish "$slug" ;;
+        완성*|끝난\ 오더*|PR\ 이\ 머지*|PR\ 머지\ 차례*|통합까지\ 끝났습니다*) finish "$slug" ;;
       esac
       stop "$slug" ;;
     설계)
