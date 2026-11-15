@@ -4,8 +4,12 @@
 
 ## 1-1. 골격과 착수
 
+0. **접수 내용(`request.md`)을 먼저 본다.** 대시보드 실행 탭과 오피스 업무 맡기기는 사람이 적은 내용을 명령 글이 아니라 `$ORCHESTRATION_META/{키}/request.md` 로 넘긴다. Jira 이슈 없이 맡긴 일은 대시보드가 작업 키(`TASK-{YYMMDD}{a,b,…}`, 예: `TASK-261115a`)를 만들어 이 파일과 함께 넘긴다. 이 파일만 있는 폴더는 아직 메타가 아니다(보드는 `status.md` 가 있는 폴더만 보인다).
+   - 키가 `TASK-` 로 시작하면 `request.md` 가 **이슈 본문**이다. 2번의 Jira 조회 대신 이 파일을 읽고, 임시 제목도 이 내용을 한 줄로 줄여 짓는다. 그 뒤 2번의 "그 자리에서" 할 일 가운데 제목 바꾸기와 담당자 정하기만 한다(Jira 전환은 없다).
+   - 키가 `TASK-` 인데 `request.md` 가 없거나 비었으면 무엇을 할지 알 수 없다. 1번 골격을 깔지 않는다. `auto` 면 "접수 내용(request.md)이 없어 설계를 시작하지 못했습니다. 대시보드 실행 탭이나 오피스 업무 맡기기에서 내용을 적어 다시 맡겨 주세요."라고 알리고 끝낸다. `auto` 가 없으면 사람에게 무엇을 할지 물어 그 답을 `request.md` 로 적고 이어 간다.
+   - Jira 키에 `request.md` 가 있으면 사람이 Jira 설명에 **덧붙인 지시**다. 2번에서 Jira 를 읽은 뒤 함께 읽고, Jira 설명과 어긋나면 `request.md` 를 따른다(사람이 접수할 때 새로 적은 것이다). 따른 점은 `## 결정과 근거` 에 적는다.
 1. `dobby_bootstrap {키} "{임시제목}" 개발 "{키워드1|키워드2}"` — 폴더·골격·종류·세션·docs 게이트를 한 번에 깐다. 종류는 아래 2-2 에서 담당자를 정할 때 다시 맞춰진다.
-2. Jira 이슈를 조회한다(작업 키 `TASK-` 면 건너뛴다). Jira 는 MCP 가 아니라 `twg` 로 다룬다(`${CLAUDE_PLUGIN_ROOT}/reference/jira-twg.md`).
+2. Jira 이슈를 조회한다(작업 키 `TASK-` 면 건너뛰고 0번의 `request.md` 를 이슈 본문으로 쓴다). Jira 는 MCP 가 아니라 `twg` 로 다룬다(`${CLAUDE_PLUGIN_ROOT}/reference/jira-twg.md`).
    - 조회: `twg jira workitem get {키} --fields summary,status,issuetype,parent,labels`
    - 설명: `dobby_jira_desc {키} $ORCHESTRATION_META/{키}/jira-issue.md` 로 파일에 받아 읽는다. 대시보드 Jira 탭도 이 파일을 쓴다.
 
