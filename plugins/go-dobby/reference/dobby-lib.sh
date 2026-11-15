@@ -5583,6 +5583,13 @@ dobby_v2_next_all() {
         # 설계 세션은 테스트 계획까지 다 쓴 뒤에야 단계를 분석으로 바꾼다. 착수거나 틀 자리표시가 남아 있으면 아직 작성 중이다.
         if [ "$ph" = 착수 ] || [ ! -f "$d/design.md" ] || grep -qE '^(\| 무엇이 문제인가 \| \(한 문장\)|\((고칠 파일과 읽어야 할|실제 코드를 보여 주고|문제를 만드는 코드를))' "$d/design.md"; then
           grp=work; kind=designing; text="설계 작성 중"
+        elif ! _v2_takeover_pending "$k" && _v2_light "$k" && ! jq -r '.["사용자"] // empty, .auto // empty' "$d/design-ack.json" 2>/dev/null | grep -qx "$(dobby_design_rev "$k")"; then
+          # light 확인은 그 세션 안에서 받는 대화다. 화면의 승인 버튼으로 받으면 일반 실행이 겹쳐 뜬다
+          if [ "$pst" = waiting ] || [ "$pst" = working ]; then
+            grp=mine; kind=answer-wait; text="터미널의 light 세션이 '실행' 답을 기다립니다"
+          else
+            kind=light-confirm; text="light 확인 차례 — 터미널에서 /do $k 로 요약을 보고 '실행'이라고 답해 주세요"; cmd="/do $k"
+          fi
         elif _v2_takeover_pending "$k" || ! jq -r '.["사용자"] // empty, .auto // empty' "$d/design-ack.json" 2>/dev/null | grep -qx "$(dobby_design_rev "$k")"; then
           kind=design-confirm; text="설계 확인 대기 — 자동 실행·수동 실행·전체 실행 중 하나로 답해 주세요"; cmd="/do $k"; act=approve
         else
@@ -5879,7 +5886,12 @@ _dobby_v2_set_roles_u() {
     esac
   fi
   want="$(printf '%s\n%s\n기획자\n' "$cur" "$asked")"
-  printf '%s\n' "$want" | grep -qxF 개발자 && want="$(printf '%s\n리뷰어\n배포담당\n' "$want")"
+  # light 오더는 리뷰를 하지 않는다. 개발자를 켜도 리뷰어를 함께 켜지 않는다(사람이 리뷰어를 적으면 켠다)
+  if printf '%s\n' "$want" | grep -qxF 개발자; then
+    if _v2_light "$key"; then want="$(printf '%s\n배포담당\n' "$want")"
+    else want="$(printf '%s\n리뷰어\n배포담당\n' "$want")"
+    fi
+  fi
   if printf '%s\n' "$want" | grep -qxF 테스터 && ! printf '%s\n' "$want" | grep -qxF 개발자; then
     _die "테스터는 개발자가 켜진 오더에만 켭니다(문서와 조사는 리뷰어가 확인합니다)"; return 1
   fi
@@ -5932,6 +5944,53 @@ dobby_v2_role_skip() {
   _v2_set "$key" "$s" 완료 "" "할 일 없음 — $why"
   dobby_event "$key" "$role 할 일 없음 — $why" 2>/dev/null
 }
+
+# ── light (한 세션 실행) ──
+# 상태 문서 '- **진행 방식**: light' 줄이 표지다. 사람이 대화로 확인하면 "light", 확인 없이 스스로 판단하면 "light auto".
+# 대시보드·오피스가 이 줄을 읽어 light 오더임을 보이고, 판정 헬퍼가 설계 확인 차례를 light 확인으로 그린다.
+_v2_light() { grep -qE '^[ \t]*-[ \t]*\*\*진행 방식\*\*:[ \t]*light' "$(_order_dir "$1")/status.md" 2>/dev/null; }
+_v2_light_auto() { grep -qE '^[ \t]*-[ \t]*\*\*진행 방식\*\*:[ \t]*light auto' "$(_order_dir "$1")/status.md" 2>/dev/null; }
+
+# dobby_v2_light_mark KEY [auto] — light 오더 표지를 적는다. 담당자를 정하기(dobby_v2_set_roles) 전에 부른다.
+dobby_v2_light_mark() {
+  local key="$1" mode="${2:-}"
+  [ -f "$(_order_dir "$key")/status.md" ] || { _die "$key 의 상태 문서가 없습니다. dobby_bootstrap 을 먼저 부르세요"; return 1; }
+  case "$mode" in ''|auto) ;; *) _die "쓰임: dobby_v2_light_mark KEY [auto]"; return 1 ;; esac
+  _v2_set_line "$key" "진행 방식" "light${mode:+ $mode}"
+  dobby_event "$key" "light 실행${mode:+ (사람 확인 없이)}" 2>/dev/null
+  printf 'light%s\n' "${mode:+ $mode}"
+}
+
+# dobby_v2_light_off KEY "이유" — light 를 그만두고 일반 실행으로 넘긴다(문맥 상한·오래 기다림·PR 변경요청·입력과 코드가 맞지 않음).
+#   통합 전이면 리뷰어를 켜고 표지를 지워, 다음 /do 가 구현 → 리뷰 → 통합의 일반 흐름을 탄다.
+#   통합 뒤(배포·검증)면 리뷰할 것이 이미 나갔으므로 표지만 "light (중단)"으로 바꾼다. 화면에는 리뷰 없이 나간 오더로 남는다.
+dobby_v2_light_off() {
+  local key="$1" why="${2:-}"
+  [ -n "$why" ] || { _die "쓰임: dobby_v2_light_off KEY \"이유\""; return 1; }
+  _v2_light "$key" || { printf 'light 오더가 아닙니다\n'; return 0; }
+  case "$(_order_phase "$key")" in
+    ''|착수|분석|설계|설계확인|구현)
+      _v2_del_line "$key" "진행 방식"
+      dobby_v2_set_roles "$key" 리뷰어 "light 중단 — $why" >/dev/null || return 1
+      dobby_event "$key" "light 중단 — 일반 실행으로 넘김: $why" 2>/dev/null
+      printf '일반 실행으로 넘겼습니다(리뷰어를 켰습니다)\n' ;;
+    *)
+      _v2_set_line "$key" "진행 방식" "light (중단 — $why)"
+      dobby_event "$key" "light 중단 — 남은 배포·검증은 일반 실행이 잇습니다: $why" 2>/dev/null
+      printf '남은 배포·검증을 일반 실행으로 넘겼습니다\n' ;;
+  esac
+}
+
+# dobby_v2_set_intake KEY 종류 — 사람이 접수 때 정한 종류(개발·문서·조사)를 '- **접수 종류**:' 줄로 남긴다.
+#   설계가 정한 담당자와 사람이 고른 종류를 회고·대시보드가 가를 수 있게 한다.
+dobby_v2_set_intake() {
+  local key="$1" kind="${2:-}"
+  case "$kind" in 개발|문서|조사) ;; *) _die "쓰임: dobby_v2_set_intake KEY {개발|문서|조사}"; return 1 ;; esac
+  [ -f "$(_order_dir "$key")/status.md" ] || { _die "$key 의 상태 문서가 없습니다. dobby_bootstrap 을 먼저 부르세요"; return 1; }
+  _v2_set_line "$key" "접수 종류" "$kind (사람이 고름)"
+  printf '%s\n' "$kind"
+}
+_v2_intake() { sed -nE 's/^[ \t]*-[ \t]*\*\*접수 종류\*\*:[ \t]*(개발|문서|조사).*$/\1/p' "$(_order_dir "$1")/status.md" 2>/dev/null | head -1; }
 
 # _v2_del_line KEY 이름 — '- **이름**: …' 줄을 지운다. 줄이 없으면 파일을 건드리지 않는다.
 _v2_del_line() {
@@ -6337,6 +6396,8 @@ dobby_v2_step() {
       if _v2_takeover_pending "$key"; then _out 설계 analysis-agent "이어받기 설계" takeover.md
       elif [ ! -f "$d/design.md" ]; then _out 설계 analysis-agent "설계 작성" design.md
       elif _v2_design_approved "$key"; then _out_work
+      # light 오더의 확인 차례(사람이 세션을 닫았거나, 사람 확인 없이 돌던 light 가 질문을 남기고 답이 왔다)는 light 절차로 잇는다
+      elif _v2_light "$key"; then _out 설계확인 analysis-agent "light 확인 — 요약을 보고 답하기" light.md
       else _out 설계확인 analysis-agent "설계 확인 — 요약을 보고 답하기" design.md
       fi ;;
     구현) _out 구현 "$dev" "$(_v2_impl_desc "$key")" impl.md ;;
@@ -6648,7 +6709,11 @@ _dobby_v2_end_u() {
       [ -f "$d/design.md" ] || { _rej "설계 문서가 없습니다"; return 1; }
       _v2_design_approved "$key" && { _rej "이미 승인된 설계입니다. 확정으로 끝내세요"; return 1; }
       [ "$(_order_phase "$key")" = 설계확인 ] || dobby_phase "$key" 설계확인
-      _v2_set "$key" analysis-agent "사람 차례" "" "설계 확인 — 요약을 보고 답하기" "설계 세션 창에서 답하기(닫았으면 /do $key)"
+      if _v2_light "$key"; then
+        _v2_set "$key" analysis-agent "사람 차례" "" "light 확인 — 요약을 보고 '실행'이라고 답하기" "light 세션 창에서 답하기(닫았으면 /do $key)"
+      else
+        _v2_set "$key" analysis-agent "사람 차례" "" "설계 확인 — 요약을 보고 답하기" "설계 세션 창에서 답하기(닫았으면 /do $key)"
+      fi
       dobby_event "$key" "설계 초안 완료 — 사람 확인 차례" 2>/dev/null
       printf '사람 차례로 적었습니다. 요약을 보여 주고 답을 기다리세요.\n'
       return 0 ;;
@@ -6748,6 +6813,13 @@ _dobby_v2_end_u() {
         dobby_phase "$key" 리뷰
         _v2_set "$key" produce-agent 대기 "" "${rd}차 리뷰 기다림"
         _v2_set "$key" review-agent 대기 "" "${rd}차 리뷰 차례"
+      elif _v2_light "$key" && [ "$stage" = 구현 ] && ! _v2_on "$key" 리뷰어; then
+        # light 오더는 리뷰 없이 통합으로 간다. 커밋·푸시는 배포담당 차례로 따로 보인다
+        [ "$(_v2_wt_sig "$key")" != "$ws0" ] || { _rej "시작 뒤 작업 폴더에 바뀐 것이 없습니다"; return 1; }
+        [ "$(_v2_mtime "$d/implementation.md")" -gt "${t0:-0}" ] || { _rej "구현 기록(implementation.md)을 시작 뒤 고치지 않았습니다"; return 1; }
+        dobby_phase "$key" 통합
+        _v2_set "$key" "$dev" 완료 "" "light 구현 (리뷰 없음)"
+        _v2_set "$key" deploy-agent 대기 "" "커밋·푸시 차례 (light)"
       else
         [ "$(_v2_wt_sig "$key")" != "$ws0" ] || { _rej "시작 뒤 작업 폴더에 바뀐 것이 없습니다"; return 1; }
         [ "$(_v2_mtime "$d/implementation.md")" -gt "${t0:-0}" ] || { _rej "구현 기록(implementation.md)을 시작 뒤 고치지 않았습니다"; return 1; }
@@ -6840,7 +6912,9 @@ _dobby_v2_end_u() {
         fi
       else
         [ -f "$d/outcome.md" ] || { _rej "결과 문서(outcome.md)가 없습니다"; return 1; }
-        _v2_set "$key" "$dev" 완료 "" "리뷰 통과"
+        if _v2_light "$key" && ! _v2_on "$key" 리뷰어; then _v2_set "$key" "$dev" 완료 "" "light 구현 (리뷰 없음)"
+        else _v2_set "$key" "$dev" 완료 "" "리뷰 통과"
+        fi
         case "$key" in
           TASK-*)
             pr="$(_v2_pr_line "$key")"
