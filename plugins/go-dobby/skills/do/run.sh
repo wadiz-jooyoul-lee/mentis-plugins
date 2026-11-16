@@ -30,7 +30,10 @@
 # 브라우저 프로필을 하나 더 써서 두 검증 세션을 함께 띄운다. 두 세션은 회차를 마감하지 않고, 마감은 뒤에 띄우는 세션이 한다.
 # 함께 돈 뒤에도 그 묶음에 판정이 빈 시나리오가 남으면(질문·막힘) 이번 실행에서는 다시 동시에 띄우지 않는다.
 #
-# 역할별 모델: ~/.config/go-dobby/role-models.json 에 {"developer": "claude-opus-5-5", ...} 가 있으면 차례 담당자의 역할 모델을
+# 결과 문서 세션: auto 배포 오더의 통합은 커밋·푸시만 하고 `- **결과 문서**: 대기` 를 적는다. 이 셸은 그 줄을 보면
+# `/do {키} 결과 문서` 세션을 MCP 없이 백그라운드로 띄워 배포와 함께 돌리고, 검증 전·끝내기 전·완성 판정 전에 끝나기를 기다린다.
+#
+# 역할별 모델:~/.config/go-dobby/role-models.json 에 {"developer": "claude-opus-5-5", ...} 가 있으면 차례 담당자의 역할 모델을
 # `claude -p --model` 로 넘긴다. 담당자 슬러그로 역할을 가른다(analysis-agent 기획자, review-agent 리뷰어, deploy-agent 배포담당,
 # test-agent 테스터, produce-agent 산출자(producer), 나머지 개발자). 파일이 없거나 그 역할 값이 없으면 --model 없이 기본 모델로 돈다.
 #
@@ -53,7 +56,7 @@
 set -uo pipefail
 
 die() { END_NOTE="자동 실행 중단: $1"; END_KIND=멈춤; printf '%s\n' "$END_NOTE" >&2; exit "${2:-1}"; }
-finish() { END_NOTE="$1"; END_KIND=끝; echo "$END_NOTE"; exit 0; }
+finish() { docs_wait; END_NOTE="$1"; END_KIND=끝; echo "$END_NOTE"; exit 0; }
 END_KIND=멈춤
 
 KEY="${1:-}"; [ -n "$KEY" ] && shift || die "오더 키를 주세요. 예: run.sh FE1-1234"
@@ -243,6 +246,47 @@ run_pair() {
   dobby_v2_checkpoint "$KEY" >/dev/null 2>&1
 }
 
+# 결과 문서 세션 — 자동 배포 오더의 통합이 '- **결과 문서**: 대기' 를 적으면 배포와 함께 백그라운드로 쓴다(speedup.md 2절).
+# 프로세스 번호는 .docs-job 에 둔다(다시 띄운 자동 실행도 살아 있는 문서 세션을 알아본다). 세션 상한에는 넣지 않는다.
+DOCS_PID_F="$D/.docs-job"; DOCS_OUT="${TMPDIR:-/tmp}/dobby-docs-$KEY.json"; DOCS_SEEN=""
+docs_line() { sed -nE 's/^- \*\*결과 문서\*\*: *(.*)$/\1/p' "$D/status.md" | head -1; }
+docs_alive() { local p; p="$(cat "$DOCS_PID_F" 2>/dev/null)"; [ -n "$p" ] && kill -0 "$p" 2>/dev/null; }
+# 이 셸이 띄운 문서 세션이 끝났으면 기록하고, 띄울 때 본 줄 그대로이거나 작성 중으로 남았으면 멈춘다
+docs_reap() {
+  [ -n "$DOCS_SEEN" ] && ! docs_alive || return 0
+  local s cur; s="$(jq -r '.session_id // empty' "$DOCS_OUT" 2>/dev/null)"; cur="$(docs_line)"
+  dobby_event "$KEY" "결과 문서 세션 종료 — 결과 문서 ${cur:-줄 없음}, 세션 ${s:-알 수 없음}" 2>/dev/null
+  printf '━━ 결과 문서 세션 끝 · %s · 세션 아이디 %s\n' "${cur:-줄 없음}" "${s:-알 수 없음}"
+  case "$cur" in "$DOCS_SEEN"|"작성 중"*)
+    stop "결과 문서 세션이 결과 문서를 마치지 못했습니다. 복기: claude --resume ${s:-?} · 다시 쓰기: /do $KEY 결과 문서" ;;
+  esac
+  DOCS_SEEN=""; rm -f "$DOCS_PID_F" "$DOCS_OUT"
+}
+# 결과 문서가 남았고 쓰는 세션이 없으면 띄운다. 앞 문서 세션이 아직 돌면 띄우지 않는다(끝난 뒤 다음 차례에 띄운다).
+docs_start() {
+  [ -n "$AUTO_ENV" ] || return 0
+  docs_reap
+  case "$(docs_line)" in 대기*|"작성 중"*) ;; *) return 0 ;; esac
+  docs_alive && return 0
+  DOCS_SEEN="$(docs_line)"
+  local m; m="$(role_model deploy-agent)"
+  ( cd "$WT" && DOBBY_DOCS_JOB=1 DOBBY_SESSION_CWD="$WT" exec claude -p "/do $KEY 결과 문서" --strict-mcp-config ${m:+--model "$m"} \
+      --permission-mode "$MODE" --output-format json >"$DOCS_OUT" 2>/dev/null ) &
+  printf '%s' "$!" > "$DOCS_PID_F"
+  dobby_event "$KEY" "결과 문서 세션 띄움 — 배포와 함께 씀 (pid $!)" 2>/dev/null
+  printf '\n━━ %s · 결과 문서 세션을 배포와 함께 띄웁니다 · 모델 %s · %s\n' "$KEY" "${m:-기본}" "$(date '+%H:%M')"
+}
+# 결과 문서가 끝날 때까지 기다린다(검증 전·끝내기 전·완성 판정이 결과 문서를 기다릴 때).
+docs_wait() {
+  [ -n "$AUTO_ENV" ] || return 0
+  while :; do
+    docs_start
+    docs_alive || return 0
+    printf '결과 문서 세션을 기다립니다 · %s\n' "$(date '+%H:%M')"
+    sleep 10
+  done
+}
+
 # 이 셸이 띄운 세션은 자동 실행을 또 띄우지 않는다(설계 세션이 끝에 부르는 dobby_v2_autorun 이 아무것도 하지 않게).
 export DOBBY_V2_CHAINED=1
 n=0; sid=""; noted=""; extend=""
@@ -267,6 +311,7 @@ while :; do
   fi
   [ "$(dobby_v2_drift_apply "$KEY")" = design ] \
     && stop "단계 밖에서 설계 문서가 바뀌었습니다. 터미널에서 /do $KEY 로 바뀐 설계를 확인해 주세요"
+  docs_start
   ph="$(phase)"
   # 자동 배포 오더의 배포 차례 — 리뷰봇·빌드는 세션이 아니라 이 셸이 기다린다.
   if [ -n "$AUTO_ENV" ] && [ "$ph" = 배포 ]; then
@@ -323,6 +368,7 @@ while :; do
     멈춤)
       case "$slug" in
         완성*|끝난\ 오더*|PR\ 이\ 머지*|PR\ 머지\ 차례*|통합까지\ 끝났습니다*) finish "$slug" ;;
+        결과\ 문서\ 대기*) [ -n "$AUTO_ENV" ] && { docs_wait; continue; } ;;
       esac
       stop "$slug" ;;
     설계)
@@ -337,6 +383,7 @@ while :; do
       if [ -z "$AUTO_ENV" ] && [ "$WITH_TEST" != 1 ] && [ "$ph" = 배포 ]; then
         finish "통합까지 끝났습니다. 배포한 뒤 run.sh $KEY --with-test 또는 /do $KEY 로 검증하세요."
       fi
+      docs_wait
       # 열린 회차를 잇는 세션은 다음 검증 묶음이다. 묶음마다 세션 하나라 상한에 하나씩 더해 센다.
       _testrun_open "$KEY" >/dev/null && MAX=$((MAX + 1)) ;;
     *) stop "다음 할 일을 정하지 못했습니다: ${st:-빈 값}" ;;

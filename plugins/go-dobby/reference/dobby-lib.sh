@@ -5504,7 +5504,7 @@ _presence_done() {
   jq --arg t "$(_now)" '.state = "done" | .since = $t' "$f" > "$f.tmp" 2>/dev/null && mv "$f.tmp" "$f"
 }
 
-# _v2_presence KEY — 이 오더를 잡은 살아 있는 세션의 상태: working | waiting | 빈 값(없음).
+# _v2_presence KEY — 이 오더를 잡은 살아 있는 세션의 상태: working | waiting | 빈 값(없음). 결과 문서 세션(docs-job)은 세지 않는다.
 # 프로세스가 죽은 표시는 지운다. Esc 로 끊으면 응답 끝 훅이 안 돌아(실측) 기록의 끊김 표지로 waiting 을 가린다.
 _v2_presence() {
   local key="$1" d f pid ps st tr best=""
@@ -5518,7 +5518,7 @@ _v2_presence() {
       | grep -q '^\[Request interrupted by user'; then st=waiting; fi
     case "$st" in working) printf working; return 0 ;; waiting) best=waiting ;; esac
   done < <(for f in "$d"/*.json; do [ -f "$f" ] && jq -r --arg k "$key" --arg f "$f" \
-    'select(.keys | index($k)) | [$f, .pid, .pstart, .state, .transcript] | @tsv' "$f" 2>/dev/null; done)
+    'select((.keys | index($k)) and (.slug // "") != "docs-job") | [$f, .pid, .pstart, .state, .transcript] | @tsv' "$f" 2>/dev/null; done)
   printf '%s' "$best"
 }
 
@@ -5973,6 +5973,7 @@ dobby_testrun_update() { _dobby_locked "$1" _dobby_testrun_update_u "$@"; }
 dobby_v2_drift_apply() { _dobby_locked "$1" _dobby_v2_drift_apply_u "$@"; }
 dobby_v2_begin()       { _dobby_locked "$1" _dobby_v2_begin_u "$@"; }
 dobby_v2_end()         { _dobby_locked "$1" _dobby_v2_end_u "$@"; }
+dobby_v2_docs_end()    { _dobby_locked "$1" _dobby_v2_docs_end_u "$@"; }
 dobby_v2_wait_mark()   { _dobby_locked "$1" _dobby_v2_wait_mark_u "$@"; }
 dobby_v2_reconcile()   { _dobby_locked "$1" _dobby_v2_reconcile_u "$@"; }
 
@@ -6358,11 +6359,25 @@ _v2_all_done() {
 # _v2_finished KEY — 테스터 없이 끝난 오더면 0. 테스터가 켜진 오더는 지금처럼 검증 통과로 끝을 본다.
 _v2_finished() { [ -n "$(_v2_roles_line "$1")" ] && ! _v2_on "$1" 테스터 && _v2_all_done "$1"; }
 
+# 결과 문서 — 자동 배포 오더는 통합 뒤 결과 문서 세션(/do KEY 결과 문서)이 배포와 함께 쓴다.
+#   상태 문서 '- **결과 문서**:' 줄: 대기 · 시각(통합 끝) → 작성 중 · 시각 → 완료 · 시각. 대기·작성 중이면 완성으로 옮기지 않는다.
+_v2_docs_line() { sed -nE 's/^- \*\*결과 문서\*\*: *(.*)$/\1/p' "$(_order_dir "$1")/status.md" 2>/dev/null | head -1; }
+_v2_docs_pending() { case "$(_v2_docs_line "$1")" in 대기*|"작성 중"*) return 0 ;; esac; return 1; }
+# _v2_integrate_desc KEY — 통합 차례 설명. 자동 배포 오더는 결과 문서를 통합 세션이 쓰지 않는다(steps/integrate.md 가 이 설명으로 가른다).
+_v2_integrate_desc() {
+  if [ -n "$(dobby_v2_env "$1")" ] && case "$1" in TASK-*) false ;; *) true ;; esac; then printf '커밋·푸시 (결과 문서는 문서 세션이 씀)'
+  else printf '커밋·푸시와 결과 문서'
+  fi
+}
+
 # _v2_complete KEY "이유" — 단계를 완성으로 옮긴다. 자동으로 할 일이 모두 끝나 사람이 결과를 확인할 차례다.
 #   완성은 사람이 /dobby-resolve 로 해결하거나 /do KEY 변경 … 으로 고치기 전까지 머무는 자리다.
 #   '- **완성**' 줄에 시각과 이유를 남긴다(해결 취소가 이 줄을 보고 완성으로 되돌린다).
 _v2_complete() {
   local key="$1" why="${2:-할 일을 모두 마침}" gate
+  if _v2_docs_pending "$key"; then
+    dobby_event "$key" "완성 보류 — 결과 문서를 쓰는 중 (요청 이유: $why)" 2>/dev/null; return 0
+  fi
   gate="$(_v2_complete_gate "$key")"
   if [ -n "$gate" ]; then _v2_complete_hold "$key" "$why" "$gate"; return 0; fi
   dobby_event "$key" "완성 근거 — $(_v2_complete_basis "$key")" 2>/dev/null
@@ -6678,6 +6693,10 @@ dobby_v2_step() {
   }
   # 할 일을 모두 마친 오더: 단계가 완성이 아니면(이 단계가 생기기 전에 끝난 오더) 완성으로 옮긴 뒤 멈춘다
   _out_done() {
+    if _v2_docs_pending "$key"; then
+      printf '멈춤\t결과 문서 대기 — 결과 문서를 아직 쓰는 중입니다(%s). 자동 실행이 쓰고 있지 않으면 /do %s 결과 문서 로 쓰세요\n' "$(_v2_docs_line "$key")" "$key"
+      return 0
+    fi
     if [ "$(_order_phase "$key")" != 완성 ]; then
       if _v2_on "$key" 테스터 && _v2_test_passed "$key"; then _dobby_locked "$key" _v2_complete "$key" "검증 전부 통과"
       else _dobby_locked "$key" _v2_complete "$key" "켜진 담당자의 일이 모두 끝남"
@@ -6736,7 +6755,7 @@ dobby_v2_step() {
             esac
           fi
         elif [ "${k:-0}" -gt 0 ]; then _out 수정 "$dev" "${rd}차 리뷰 지적 ${k}건 수정" fix.md
-        else _out 통합 deploy-agent "커밋·푸시와 결과 문서" integrate.md
+        else _out 통합 deploy-agent "$(_v2_integrate_desc "$key")" integrate.md
         fi
       else
         _out 리뷰 review-agent "${rd:-1}차 리뷰" review.md
@@ -6755,7 +6774,7 @@ dobby_v2_step() {
       esac
       if [ "$ph" = 통합 ]; then
         if _v2_produce_mode "$key"; then _out 통합 deploy-agent "산출물 확정과 문서 올리기" integrate.md
-        else _out 통합 deploy-agent "커밋·푸시와 결과 문서" integrate.md
+        else _out 통합 deploy-agent "$(_v2_integrate_desc "$key")" integrate.md
         fi
         return 0
       fi
@@ -6819,6 +6838,7 @@ _v2_live_sessions() {
     [ -n "${sid:-}" ] && [ "$sid" != "$ex" ] || continue
     [ -n "$ps" ] && [ "$(_pstart "$pid")" = "$ps" ] || continue
     [ "$st" = done ] && continue
+    [ "$sl" = docs-job ] && continue   # 결과 문서 세션은 담당자 차례를 잡지 않는다
     printf '%s\t%s\t%s\n' "$sid" "$sl" "$st"
   done
 }
@@ -6857,6 +6877,49 @@ _v2_wt_sig() {
 
 _v2_mtime() { stat -f '%m' "$1" 2>/dev/null || printf '0'; }
 
+# ── 결과 문서 세션 (/do KEY 결과 문서) ──
+# 배포 세션과 함께 돌므로 공용 시작 기록(.v2-begin)·담당자 행·'## 세션' ID 를 건드리지 않는다. 작업 표시 담당자는 docs-job.
+_v2_docs_begin() {
+  local key="$1" d f sid cwd tr desc
+  d="$(_order_dir "$key")"; f="$d/status.md"
+  [ -f "$f" ] || { printf '멈춤\n이유: 메타가 없는 오더입니다\n'; return 2; }
+  sid="$(_session_id)"
+  if [ -n "$sid" ] && [ "$(cut -f1 "$d/.v2-docs-begin" 2>/dev/null)" = "$sid" ]; then
+    printf '이미 시작됨\n단계: 결과 문서\n담당자: 배포담당 (docs-job)\n설명: 결과 문서\n지시 문서: %s\n' "$(_v2_step_doc integrate-docs.md)"; return 0
+  fi
+  _v2_docs_pending "$key" || { printf '멈춤\n이유: 쓸 결과 문서가 없습니다(결과 문서 줄: %s)\n' "$(_v2_docs_line "$key")"; return 2; }
+  cwd="$(_order_worktree "$key")"; [ -d "$cwd" ] || cwd="$PWD"
+  if [ -f "$d/outcome.md" ]; then desc="결과 문서 후속 덧붙이기"; else desc="결과 문서 처음 쓰기"; fi
+  _v2_set_line "$key" "결과 문서" "작성 중 · $(_now)"
+  printf '%s\t%s\n' "${sid:-}" "$(date +%s)" > "$d/.v2-docs-begin"
+  _presence_claim "$key" docs-job
+  if [ -n "$sid" ]; then
+    grep -q "| 결과 문서 | \`$sid\` |" "$f" || _past_session_add "$f" "| $(_now) | 결과 문서 | \`$sid\` | $cwd |"
+    tr="$(_session_transcript "$sid")"
+    [ -n "$tr" ] && dobby_log "$key" deploy-agent "$tr" "docs-$(date '+%Y%m%d-%H%M')"
+  fi
+  dobby_event "$key" "결과 문서 세션 시작 — $desc" 2>/dev/null
+  printf '시작함\n단계: 결과 문서\n담당자: 배포담당 (docs-job)\n설명: %s\n지시 문서: %s\n' "$desc" "$(_v2_step_doc integrate-docs.md)"
+}
+
+# dobby_v2_docs_end KEY — 시작 뒤 outcome.md·explainer.md 를 썼으면 '결과 문서' 줄을 완료로 적는다. 아니면 "거부: 이유".
+#   그 사이 새 통합이 줄을 '대기' 로 바꿨으면 그대로 둔다(자동 실행이 문서 세션을 다시 띄운다).
+_dobby_v2_docs_end_u() {
+  local key="$1" d sid t0 cur
+  d="$(_order_dir "$key")"
+  [ -f "$d/.v2-docs-begin" ] || { printf '거부: 결과 문서 세션의 시작 기록이 없습니다. /do %s 결과 문서 로 시작하세요\n' "$key"; return 1; }
+  IFS=$'\t' read -r sid t0 < "$d/.v2-docs-begin"
+  [ "$(_v2_mtime "$d/outcome.md")" -ge "${t0:-0}" ] || { printf '거부: 결과 문서(outcome.md)를 시작 뒤 쓰지 않았습니다\n'; return 1; }
+  [ "$(_v2_mtime "$d/explainer.md")" -ge "${t0:-0}" ] || { printf '거부: 구현 내용 문서(explainer.md)를 시작 뒤 쓰지 않았습니다. dobby-explain %s 를 실행하세요\n' "$key"; return 1; }
+  cur="$(_v2_docs_line "$key")"
+  case "$cur" in
+    "작성 중"*) _v2_set_line "$key" "결과 문서" "완료 · $(_now)"; dobby_event "$key" "결과 문서 세션 끝 — 완료" 2>/dev/null ;;
+    *) dobby_event "$key" "결과 문서 세션 끝 — 그 사이 새 통합이 있어 줄을 그대로 둠($cur)" 2>/dev/null ;;
+  esac
+  rm -f "$d/.v2-docs-begin"
+  printf '다음\n  - 이 세션을 닫아 주세요. (/clear 또는 터미널 종료)\n'
+}
+
 # ── 시작 헬퍼 ──
 # dobby_v2_begin KEY [인자…] — 단계를 판정하고 이 세션의 담당자를 작업중으로 적는다. 결과를 사람이 읽는 줄로 낸다.
 #   반환 0 = 시작함(또는 이미 시작됨) · 2 = 멈춤(이유 출력) · 3 = 다른 세션이 이 오더를 작업 중
@@ -6866,6 +6929,7 @@ _v2_mtime() { stat -f '%m' "$1" 2>/dev/null || printf '0'; }
 _dobby_v2_begin_u() {
   local key="$1"; shift
   local line stage slug desc doc d sid rec sub name cwd rd m other round now t0 cc0 ws0 rname why
+  case "$*" in 결과\ 문서*|결과문서*) _v2_docs_begin "$key"; return $? ;; esac
   # "테스트 건너뛰기 {이유}" — 단계를 판정하기 전에 테스터를 끝낸다(배포가 확인된 오더는 여기서 완성이 된다)
   case "$*" in
     테스트\ 건너뛰기*|테스트건너뛰기*)
@@ -7235,7 +7299,10 @@ _dobby_v2_end_u() {
           _tail_done "산출물 확정"
         fi
       else
-        [ -f "$d/outcome.md" ] || { _rej "결과 문서(outcome.md)가 없습니다"; return 1; }
+        # 자동 배포 오더는 결과 문서를 문서 세션이 배포와 함께 쓴다(자동 실행이 '대기' 줄을 보고 띄운다)
+        if [ "$(_v2_integrate_desc "$key")" != "커밋·푸시와 결과 문서" ]; then _v2_set_line "$key" "결과 문서" "대기 · $(_now)"
+        else [ -f "$d/outcome.md" ] || { _rej "결과 문서(outcome.md)가 없습니다"; return 1; }
+        fi
         if _v2_light "$key" && ! _v2_on "$key" 리뷰어; then _v2_set "$key" "$dev" 완료 "" "light 구현 (리뷰 없음)"
         else _v2_set "$key" "$dev" 완료 "" "리뷰 통과"
         fi
