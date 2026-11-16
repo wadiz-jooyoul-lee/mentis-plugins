@@ -3382,6 +3382,7 @@ dobby_v2_wait() {
 # 답이 "멈추기" 면 run.sh 가 끝낸다. 비밀번호는 받지 않는다(시험 계정은 config.env 에 있다).
 # 파일 형식(v 2): {v, id, kind, title, what, why, tried[], options[{label,does,effect,recommended,reason}], choices[],
 #   todo, after, from{role,session,cwd,resume}, check, created, answer{value,at}|null, note}
+#   방법에 redesign:true 가 있으면 그 방법은 설계부터 다시 도는 길이다(dobby_ship_close_pr 가 본다).
 #   옛 형식(v 없음: kind action·choice·input, title, why, todo, choices)도 그대로 읽고 답할 수 있다.
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -3466,7 +3467,8 @@ _v2_ask_file() {
     | { v: 2, id: $id, kind: .kind, title: (.title | s), what: (.what | s), why: (.why | s),
       tried: [(.tried // [])[] | s | select(. != "")],
       options: [((.options // []) | if type == "array" then .[] else empty end)
-        | {label: (.label | s), does: (.does | s), effect: (.effect | s), recommended: (.recommended == true), reason: (.reason | s)}],
+        | {label: (.label | s), does: (.does | s), effect: (.effect | s), recommended: (.recommended == true), reason: (.reason | s)}
+        + (if .redesign == true then {redesign: true} else {} end)],
       todo: (.todo | s), after: (.after | s),
       from: {role: $role, session: $sess, cwd: $cwd, resume: $res},
       created: $at, answer: null, note: "" }
@@ -3981,20 +3983,39 @@ $dirty"
 # dobby_ship_close_pr KEY 워크트리 환경 PR번호 "지적 요약" — 변경요청(CHANGES_REQUESTED)이 달린 PR 을 고치지 않고 닫는다.
 #
 # /do 오더에서 변경요청은 설계 오류로 본다. 배포담당은 고치지 않고 PR 을 닫아 기획자에게 넘긴다.
-#   · 변경요청이 아닌 PR 은 닫지 않는다(승인·코멘트의 지적은 지금처럼 범위 안에서 고친다).
+#   · 변경요청이 아니어도, 이 PR 이 만들어진 뒤 배포담당이 남긴 질문에 사람이 redesign:true 방법을 골랐으면 닫는다
+#     (의견 리뷰가 설계 결정과 부딪힌 경우. 실측 FE1-2668 #31290: 이 길이 없어 자동 실행이 멈췄다).
+#   · 둘 다 아니면 닫지 않는다(승인·코멘트의 지적은 지금처럼 범위 안에서 고친다).
 #   · 배포 표의 그 저장소·환경 줄을 지운다. 줄이 없으면 통합 뒤 PR 생성부터 다시 한다(dobby_v2_ship_next 가 ship 을 낸다).
 #   · 닫은 번호와 이유는 이벤트 기록과 오더 폴더의 .v2-pr-closed(저장소<TAB>환경<TAB>#번호<TAB>요약)에 남긴다.
 #     끝 헬퍼의 리뷰지적 결과가 이 기록을 확인하고, dobby_ship_pr 이 새 PR 을 만들 때 지운다.
+# _ship_redesign_answer KEY 시각(YYYYmmdd-HHMMSS) — 그 시각 뒤 배포담당의 질문에 사람이 redesign 방법을 골랐으면 그 이름을 내고 0.
+#   열린 질문(ask.json)을 먼저 보고, 없으면 닫힌 질문(asks/) 가운데 가장 최근 것을 본다.
+_ship_redesign_answer() {
+  local d f since="$2"
+  d="$(_order_dir "$1")"; f="$d/ask.json"
+  [ -f "$f" ] || f="$(ls "$d"/asks/*.json 2>/dev/null | sort | tail -1)"
+  [ -n "$since" ] && [ -n "$f" ] && [ -f "$f" ] || return 1
+  jq -er --arg since "$since" '
+    select(.from.role == "deploy-agent" and (.id // "") > $since)
+    | (.answer.value // "") as $a
+    | [.options[]? | select(.redesign == true and .label == $a) | .label][0] // empty' "$f"
+}
+
 dobby_ship_close_pr() {
-  local key="$1" wt="$2" env="$3" pr="${4#\#}" why="${5:-}" name rp f d
+  local key="$1" wt="$2" env="$3" pr="${4#\#}" why="${5:-}" name rp f d how=변경요청 since ans
   [ -n "$pr" ] && [ -n "$why" ] || { _die "쓰임: dobby_ship_close_pr KEY 워크트리 환경 PR번호 \"지적 요약\""; return 1; }
   [ -d "$wt" ] || { _die "워크트리가 없다: $wt"; return 1; }
   rp="$(_ship_repo "$wt")"; name="$(basename "$rp")"
   d="$(_order_dir "$key")"; f="$d/status.md"
   [ "$(gh pr view "$pr" --repo "$rp" --json state -q .state 2>/dev/null)" = OPEN ] || { _die "PR #$pr 이 열려 있지 않다."; return 1; }
-  [ "$(gh pr view "$pr" --repo "$rp" --json reviewDecision -q .reviewDecision 2>/dev/null)" = CHANGES_REQUESTED ] \
-    || { _die "PR #$pr 은 변경요청 상태가 아니다. 승인이나 코멘트의 지적은 닫지 않고 범위 안에서 고친다."; return 1; }
-  gh pr close "$pr" --repo "$rp" --comment "변경 요청을 설계부터 다시 반영하기 위해 닫습니다. 반영한 뒤 새 PR 로 다시 올립니다." >&2 || return 1
+  if [ "$(gh pr view "$pr" --repo "$rp" --json reviewDecision -q .reviewDecision 2>/dev/null)" != CHANGES_REQUESTED ]; then
+    since="$(gh pr view "$pr" --repo "$rp" --json createdAt -q .createdAt 2>/dev/null | jq -Rr 'fromdateiso8601 | strflocaltime("%Y%m%d-%H%M%S")' 2>/dev/null)"
+    ans="$(_ship_redesign_answer "$key" "$since")" \
+      || { _die "PR #$pr 은 변경요청 상태가 아니고, 이 PR 뒤 설계 변경(redesign)을 고른 사람의 답도 없다. 승인이나 코멘트의 지적은 닫지 않고 범위 안에서 고친다."; return 1; }
+    how="사람이 설계 변경을 고름(답: $ans)"
+  fi
+  gh pr close "$pr" --repo "$rp" --comment "리뷰 지적을 설계부터 다시 반영하기 위해 닫습니다($how). 반영한 뒤 새 PR 로 다시 올립니다." >&2 || return 1
   if [ -f "$f" ]; then
     awk -F'|' -v rp="$name" -v env="$env" '
       function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
@@ -4003,7 +4024,7 @@ dobby_ship_close_pr() {
       {print}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
   fi
   printf '%s\t%s\t#%s\t%s\n' "$name" "$env" "$pr" "${why//$'\n'/ }" >> "$d/.v2-pr-closed"
-  dobby_event "$key" "PR 닫음 — $name #$pr ($env): 변경요청 — ${why%%$'\n'*}"
+  dobby_event "$key" "PR 닫음 — $name #$pr ($env): $how — ${why%%$'\n'*}"
   printf '%s\n' "$pr"
 }
 
