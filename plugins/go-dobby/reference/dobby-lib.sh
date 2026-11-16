@@ -7678,4 +7678,290 @@ dobby_retro_office() {
   _office_notify "$(_office_json kind retro op "$2" key "$1" result "${3:-}")"
 }
 
+# ── 효과 측정 (dobby-perf) ──
+# 기준값: skills/do/speedup.md 1절(2026-11-17, /do 오더 63개). 단계별 세션 하나 평균 분·캐시 읽기·새 입력·출력. 바꾸면 그 표도 함께 고친다.
+DOBBY_PERF_BASE='{"구현":{"min":6.0,"cacheRead":2350000,"input":90000,"output":15000},
+"리뷰":{"min":3.6,"cacheRead":1620000,"input":90000,"output":12000},
+"통합":{"min":1.6,"cacheRead":1160000,"input":40000,"output":9000},
+"배포":{"min":2.1,"cacheRead":1280000,"input":50000,"output":7000},
+"검증":{"min":6.3,"cacheRead":8380000,"input":110000,"output":26000}}'
+
+# _perf_session SID 파일 — 세션 기록 하나에서 측정에 쓸 사실만 뽑는다(사건 시각·종류, 응답별 토큰, 타입 검사·설치 명령과 걸린 시간).
+#   사건 종류: a 모델 응답, r 도구 결과, h 사람이 친 줄, m 그 밖.
+_perf_session() {
+  jq -sc --arg s "$1" '
+    def ts: sub("\\.[0-9]+Z$";"Z") | fromdateiso8601;
+    def body: if type == "string" then . elif type == "array" then map(.text? // "") | join("\n") else "" end;
+    [.[] | select((.type == "user" or .type == "assistant") and (.isSidechain | not) and .timestamp != null)
+      | . + {t:(.timestamp | ts)}] | sort_by(.t) as $E
+    | ([$E[] | select(.type == "user") | .t as $t | (.message.content | if type == "array" then .[] else empty end)
+        | select(.type? == "tool_result") | {key:.tool_use_id, value:{t:$t, out:(.content | body | .[0:400])}}] | from_entries) as $R
+    | {sid:$s, start:([$E[] | select(.type == "user")][0].t),
+       ev:[$E[] | {t, k:(if .type == "assistant" then "a"
+           elif (.message.content | type) == "array" and any(.message.content[]; .type? == "tool_result") then "r"
+           elif .isMeta then "m"
+           elif ((.message.content | if type == "string" then . else (map(.text? // "") | join("")) end)
+                 | test("^\\s*(<local-command|<task-notification|<system-reminder|<command-name>/clear|Caveat:|\\[Request interrupted|This session is being continued)") or . == "") then "m"
+           else "h" end)}],
+       calls:[$E[] | select(.type == "assistant" and .message.usage != null) | .message.usage as $x
+           | {id:.message.id, t, cr:($x.cache_read_input_tokens // 0),
+              inp:(($x.input_tokens // 0) + ($x.cache_creation_input_tokens // 0)), out:($x.output_tokens // 0)}]
+         | group_by(.id) | map(.[0] + {out:(map(.out) | max)}) | sort_by(.t),
+       tools:[$E[] | select(.type == "assistant") | .t as $t | .message.content[]?
+           | select(.type? == "tool_use" and .name == "Bash") | {id, t:$t, cmd:(.input.command // "")}
+           | select(.cmd | test("(^|[ /;&|(])tsc( |$)|dobby_typecheck|pnpm install|npm install|yarn install"))
+           | . + {end:($R[.id].t // null), out:($R[.id].out // "")}
+           | {t, end, out, kind:(if (.cmd | test("dobby_typecheck|(^|[ /;&|(])tsc( |$)")) then "tc" else "install" end)}]}' "$2"
+}
+
+# dobby_perf_measure KEY — 오더 하나의 시간·토큰을 세션 기록으로 재서 perf.json 을 새로 쓴다(summary 만 빈칸). 요약을 출력한다.
+#   세션 구간은 지난 세션 표의 행에서 같은 세션의 다음 행까지다. 사람이 친 줄이 2개 이상인 구간은 사람과 대화한 세션으로 따로 둔다.
+dobby_perf_measure() {
+  local key="$1" d rows off sess sid f out runlog waits ver scen ev pm
+  d="$(_order_dir "$key")"
+  rows="$(awk -F'|' 'function t(x){gsub(/^[ \t`]+|[ \t`]+$/,"",x);return x}
+    /^## /{ins=($0 ~ /^## 지난 세션/); next}
+    ins && /^\| *[0-9][0-9][0-9][0-9]-/{print t($2) "\t" t($3) "\t" t($4) "\t" t($5)}' "$d/status.md" 2>/dev/null)"
+  [ -n "$rows" ] || { echo "측정 불가: 지난 세션 표가 없습니다(/do 오더가 아님)"; return 1; }
+  off="$(date +%z | awk '{s=substr($0,1,1)=="-"?-1:1; print s*(substr($0,2,2)*3600+substr($0,4,2)*60)}')"
+  sess="$(mktemp)"
+  printf '%s\n' "$rows" | cut -f3 | awk 'NF && !s[$0]++' | while read -r sid; do
+    f="$(ls ~/.claude/projects/*/"$sid".jsonl 2>/dev/null | head -1)"
+    if [ -z "$f" ]; then jq -nc --arg s "$sid" '{sid:$s, missing:true}'; else _perf_session "$sid" "$f"; fi
+  done > "$sess"
+  ev="$(awk '/^## /{i=($0 ~ /이벤트 로그/); next} i && /^- [0-9][0-9][0-9][0-9]-/{print substr($0, 3)}' "$d/orchestration.md" 2>/dev/null)"
+  # 배포 대기 확인 간격은 대시보드 자동 실행 기록에만 남는다(마지막 실행분). 줄: "…를 기다립니다(저장소 PR #N, M분째) · HH:MM"
+  runlog="$(_meta)/.mentis-jobs/$key/run.log"
+  waits="$( [ -f "$runlog" ] && grep -oE '(리뷰봇 리뷰|빌드)를 기다립니다\([^)]*\) · [0-9]{2}:[0-9]{2}' "$runlog" \
+    | sed -E 's/^(리뷰봇 리뷰|빌드)를 기다립니다\(([^,]*), [0-9]+분째\) · ([0-9]{2}):([0-9]{2})$/\1\t\2\t\3\t\4/' | awk '!s[$0]++')"
+  scen="$(for f in "$d"/test-runs/*/result.md; do [ -f "$f" ] && awk '/^## /{i=($0 ~ /시나리오별 결과/); next} i && /^\| *S[0-9]/' "$f"; done | wc -l | tr -d ' ')"
+  ver="$(jq -r '.version // empty' "$DOBBY_LIB_DIR/../.claude-plugin/plugin.json" 2>/dev/null)"
+  # 컴퓨터가 잠든 구간(잠듦 줄부터 다음 깨어남 줄까지). 이 기록은 약 일주일만 남는다
+  pm="$(pmset -g log 2>/dev/null | awk '$1 ~ /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/ && $3 ~ /^[+-][0-9]{4}$/ {
+      if (!first) first = $1 " " substr($2, 1, 5)
+      if (!match($0, / (Sleep|Wake|DarkWake) *\t/)) next
+      k = substr($0, RSTART + 1, RLENGTH - 1); sub(/ *\t$/, "", k)
+      if (k == "Sleep") s = $1 " " $2
+      else if (s != "") { print s "\t" $1 " " $2; s = "" } }
+    END { print "FIRST\t" first }')"
+  out="$d/perf.json"
+  jq -n --slurpfile S "$sess" --arg rows "$rows" --arg ev "$ev" --arg waits "$waits" --argjson off "${off:-0}" \
+    --arg key "$key" --arg ver "${ver:-알 수 없음}" --arg phase "$(_order_phase "$key")" --argjson base "$DOBBY_PERF_BASE" \
+    --argjson scen "${scen:-0}" --arg pm "$pm" \
+    --arg tcOn "$(grep -m1 '^- \*\*타입 검사\*\*:' "$d/status.md" 2>/dev/null)" \
+    --arg docLine "$(grep -m1 '^- \*\*결과 문서\*\*:' "$d/status.md" 2>/dev/null)" \
+    --arg deps "$(printf '%s\n' "$rows" | cut -f4 | awk 'NF && !s[$0]++' | while read -r p; do [ -e "$p/.deps-ready" ] && echo "$p"; done; [ -e "$d/.deps-ready" ] && echo "$d")" '
+    def r1: if . == null then null else (. * 10 | round / 10) end;
+    def mins: if . == null then null else (. / 60 | r1) end;
+    def loc: strflocaltime("%Y-%m-%d %H:%M:%S");
+    def at: (strptime("%Y-%m-%d %H:%M") | mktime) - $off;
+    def grp: if test("차 리뷰$") then "리뷰"
+      elif test("(^|[ ])구현$|차 수정$|^검증 실패 수정$") then "구현"
+      elif test("통합") then "통합" elif test("^배포") then "배포"
+      elif test("^검증") and (test("^검증 실패 분석") | not) then "검증" else "기타" end;
+    # 겹치는 구간을 합쳐 실제로 흐른 초를 낸다
+    def merged: sort_by(.[0]) | reduce .[] as $x ([]; if length > 0 and $x[0] <= .[-1][1]
+      then .[-1][1] = ([.[-1][1], $x[1]] | max) else . + [$x] end);
+    def union: merged | map(.[1] - .[0]) | add // 0;
+    def lat: (strptime("%Y-%m-%d %H:%M:%S") | mktime) - $off;
+    [$pm | split("\n")[] | select(length > 0 and (startswith("FIRST") | not)) | split("\t") | [(.[0] | lat), (.[1] | lat)]] as $SL
+    | ([$pm | split("\n")[] | select(startswith("FIRST\t")) | .[6:] | select(length > 0) | at] | first // null) as $slFirst
+    # 구간 [a,b] 가운데 잠든 초
+    | def slept($a; $b): [$SL[] | ([.[1], $b] | min) - ([.[0], $a] | max) | select(. > 0)] | add // 0;
+    ($S | map({key:.sid, value:.}) | from_entries) as $SS
+    | [$rows | split("\n")[] | select(length > 0) | split("\t") | {at:(.[0] | at), stage:.[1], sid:.[2]}] as $R
+    | [range(0; $R | length) as $i | $R[$i] as $r
+        | ([range($i + 1; $R | length) | select($R[.].sid == $r.sid) | $R[.].at] | first // 1e12) as $until
+        | ([range(0; $i) | select($R[.].sid == $r.sid)] | length > 0) as $resumed
+        | ($SS[$r.sid] // {missing:true}) as $s
+        | (if $resumed or $s.start == null then $r.at else ([$s.start, $r.at] | min) end) as $from
+        | (if $s.missing then [] else [$s.ev[] | select(.t >= $from and .t < $until)] end) as $e
+        | (if $s.missing then [] else [$s.calls[] | select(.t >= $from and .t < $until)] end) as $c
+        | (if $s.missing then [] else [$s.tools[] | select(.t >= $from and .t < $until)] end) as $tl
+        | ([range(1; $e | length) | {k:$e[.].k, g:(($e[.].t - $e[. - 1].t) - slept($e[. - 1].t; $e[.].t))} | select(.g <= 1800)]) as $gaps
+        | {sid:$r.sid, stage:$r.stage, group:($r.stage | grp), missing:($s.missing // false),
+           start:($e[0].t // null), end:($e[-1].t // null), calls:($c | length),
+           human:([$e[] | select(.k == "h")] | length),
+           modelSec:([$gaps[] | select(.k == "a") | .g] | add // 0), toolSec:([$gaps[] | select(.k == "r") | .g] | add // 0),
+           tok:{cacheRead:($c | map(.cr) | add // 0), input:($c | map(.inp) | add // 0), output:($c | map(.out) | add // 0)},
+           tools:$tl}
+        | . + {interactive:(.human >= 2)}
+        | . + {sleepSec:(if .start == null then 0 else slept(.start; .end) end)}
+        | . + {sec:(if .start == null then null elif .interactive then .modelSec + .toolSec else .end - .start - .sleepSec end)}] as $G
+    | [$G[] | select(.interactive | not) | select(.sec != null)] as $A
+    | [$G[] | select(.interactive)] as $H
+    | [range(0; $G | length) as $i | $G[$i] | . + {i:$i}] as $GI
+    | [$GI[] | select((.interactive | not) and .sec != null) | . as $x
+        | {i:$x.i, with:[$GI[] | select(.i != $x.i and (.interactive | not) and .sec != null
+            and .start < $x.end and $x.start < .end) | .sid]}] as $PAR
+    # 이벤트 로그: "YYYY-MM-DD HH:MM 본문"
+    | [$ev | split("\n")[] | select(length > 16) | {t:(.[0:16] | at), x:.[17:]}] as $EV
+    | [range(0; $EV | length) as $i | $EV[$i] | select(.x | test("^[^ ]+ → (사람 차례|막힘)")) as $w
+        | ($w.x | capture("^(?<a>[^ ]+) → ").a) as $who
+        | ([$EV[$i + 1:][] | select((.x | startswith($who + " → ")) and (.x | test(" → (사람 차례|막힘)") | not)) | .t] | first) as $e1
+        | ([$R[] | select(.at > $w.t) | .at] | first) as $e2
+        | ([$e1, $e2] | map(select(. != null)) | min) as $end
+        | select($end != null) | [$w.t, $end]] as $HW
+    # 배포 대기 확인: 같은 대상의 줄 사이 간격(분)
+    | [$waits | split("\n")[] | select(length > 0) | split("\t")
+        | {kind:.[0], tgt:.[1], m:((.[2] | tonumber) * 60 + (.[3] | tonumber))}] as $W
+    | ([$W | group_by(.kind + .tgt)[] | [range(1; length) as $k | (.[$k].m - .[$k - 1].m + 1440) % 1440]] | add // []) as $WD
+    | ($WD | sort | if length == 0 then null else .[length / 2 | floor] end) as $wint
+    | ($W | group_by(.kind + .tgt) | map({kind:.[0].kind, n:length})) as $WE
+    | [$A[] | .tools[] | select(.kind == "tc")] as $TC
+    | [$TC[] | .out | scan("검사 ([0-9]+)초") | .[0] | tonumber] as $TCS
+    | ([$TC[] | select(.out | test("저장된 결과"))] | length) as $TCC
+    | ([$TC[] | select(.out | test("타입 검사 건너뜀"))] | length) as $TCSKIP
+    | ([$TC[] | select(.out | test("타입 검사 건너뜀") | not) | select(.end != null) | .end - .t] | add // 0) as $TCSEC
+    | ($tcOn | test("켬")) as $tcon
+    | [$A[] | select(.group == "검증" and (.stage | test("\\+")))] as $MERGED
+    | ([$MERGED[] | .stage | [scan("\\+")] | length] | add // 0) as $NMERGE
+    | ([$EV[] | select(.x | test("검증 동시 실행\\("))] | length > 0) as $PARON
+    | ([$A[] | select(.group == "검증") | [.start, .end]]) as $V
+    | ([range(0; $V | length) as $a | range($a + 1; $V | length) as $b
+        | ([$V[$a][1], $V[$b][1]] | min) - ([$V[$a][0], $V[$b][0]] | max) | select(. > 0)] | add // 0) as $OVL
+    | [$A[] | select(.group == "구현") | .tools[] | select(.kind == "install" and .end != null) | .end - .t] as $INST
+    | ([$A[] | select(.group == "검증") | .calls] | add // 0) as $VCALLS
+    | [$A[] | select(.group == "통합")] as $INTEG
+    | ($A | map([.start, .end]) | merged) as $AU
+    | ($AU | map(slept(.[0]; .[1])) | add // 0) as $sleepAll
+    | (($AU | map(.[1] - .[0]) | add // 0) - $sleepAll) as $wall
+    | (["구현","리뷰","통합","배포","검증","기타"] | map(. as $g | [$A[] | select(.group == $g)] as $x | select($x | length > 0)
+        | {stage:$g, sessions:($x | length), min:($x | map(.sec) | add | mins),
+           baselineMin:(if $g == "기타" then ($x | map(.sec) | add | mins) else ($base[$g].min * ($x | length) | r1) end),
+           modelMin:($x | map(.modelSec) | add | mins), toolMin:($x | map(.toolSec) | add | mins),
+           tokens:{cacheRead:($x | map(.tok.cacheRead) | add), input:($x | map(.tok.input) | add), output:($x | map(.tok.output) | add)}})) as $BS
+    | ($BS | map(.baselineMin) | add // 0) as $bmin
+    | ([$A[] | .tok] | {cacheRead:(map(.cacheRead) | add // 0), input:(map(.input) | add // 0), output:(map(.output) | add // 0)}) as $tok
+    | ($A | map(.group as $g | if $g == "기타" then .tok else {cacheRead:$base[$g].cacheRead, input:$base[$g].input, output:$base[$g].output} end)
+        | {cacheRead:(map(.cacheRead) | add // 0), input:(map(.input) | add // 0), output:(map(.output) | add // 0)}) as $btok
+    | {key:$key, measuredAt:(now | strflocaltime("%Y-%m-%d %H:%M")), pluginVersion:$ver,
+       status:(if ($phase | IN("완성","해결")) then "완성" else "진행 중" end),
+       totals:{wallMin:($wall | mins), baselineMin:($bmin | r1), savedMin:(($bmin - ($wall / 60)) | r1),
+               humanWaitMin:($HW | union | mins), sleepMin:($sleepAll | mins), tokens:$tok, baselineTokens:$btok},
+       sleepLog:(if $slFirst == null then "잠자기 기록을 읽지 못해 잠든 시간을 빼지 않았습니다"
+                 elif ($A | length) > 0 and $slFirst > ($A | map(.start) | min) then "잠자기 기록이 \($slFirst | strflocaltime("%Y-%m-%d %H:%M")) 부터만 있어 그 전 잠든 시간은 빼지 못했습니다"
+                 else "" end),
+       interactive:{sessions:($H | length), min:($H | map(.sec // 0) | add // 0 | mins),
+                    tokens:{cacheRead:($H | map(.tok.cacheRead) | add // 0), input:($H | map(.tok.input) | add // 0), output:($H | map(.tok.output) | add // 0)}},
+       byStage:$BS,
+       items:[
+         (if $tcon then {id:"typecheck-off", name:"타입 검사 기본 끔", applied:false,
+             evidence:"상태 문서에 타입 검사 켬 줄이 있음", savedMin:0, tokenDelta:null, note:"이 오더는 타입 검사를 켰습니다. 토큰 변화는 따로 잴 수 없습니다"}
+          elif $TCSKIP > 0 and $TCSEC > 0 then {id:"typecheck-off", name:"타입 검사 기본 끔", applied:true,
+             evidence:"개선 전 직접 검사 \([$TC[] | select(.out | test("타입 검사 건너뜀") | not)] | length)번 \($TCSEC | mins)분, 개선 뒤 건너뜀 \($TCSKIP)번",
+             savedMin:null, tokenDelta:null, note:"개선 전후 판이 섞여 돈 오더라 줄어든 시간을 계산하지 않았습니다"}
+          elif $TCSKIP > 0 then {id:"typecheck-off", name:"타입 검사 기본 끔", applied:true,
+             evidence:"상태 문서에 타입 검사 줄 없음, 건너뜀 출력 \($TCSKIP)번", savedMin:((12.3 - $TCSEC / 60) | r1), tokenDelta:null,
+             note:"추정 — 개선 전 오더 평균 12.3분과 비교했습니다. 토큰 변화는 따로 잴 수 없습니다"}
+          elif ($TC | length) > 0 then {id:"typecheck-off", name:"타입 검사 기본 끔", applied:false,
+             evidence:"개선 전 방식으로 타입 검사를 직접 \($TC | length)번 불렀고 \($TCSEC | mins)분 걸림", savedMin:0, tokenDelta:null,
+             note:"건너뜀 출력이 없어 개선 전에 돈 오더로 봅니다"}
+          else {id:"typecheck-off", name:"타입 검사 기본 끔", applied:false, evidence:"자동 세션에 타입 검사 호출이 없음",
+             savedMin:0, tokenDelta:null, note:"타입 검사를 할 일이 없던 오더입니다"} end),
+         (if $tcon then {id:"typecheck-reuse", name:"켠 오더의 타입 검사 재사용", applied:true,
+             evidence:"검사 \($TCS | length)번(\($TCS | map(tostring + "초") | join(", "))), 저장된 결과 \($TCC)번",
+             savedMin:((([$TCS[] | 480 - . | select(. > 0)] | add // 0) + 480 * $TCC) / 60 | r1), tokenDelta:null,
+             note:"추정 — 개선 전 한 번 6~10분의 가운데인 8분과 비교했습니다"}
+          else {id:"typecheck-reuse", name:"켠 오더의 타입 검사 재사용", applied:false, evidence:"상태 문서에 타입 검사 켬 줄이 없음",
+             savedMin:0, tokenDelta:null, note:"타입 검사를 켠 오더에만 해당합니다"} end),
+         {id:"verify-merge", name:"작은 검증 묶음 합치기", applied:($NMERGE > 0),
+          evidence:(if $NMERGE > 0 then "합쳐진 검증 세션: " + ($MERGED | map(.stage) | join(", ")) else "단계 이름에 + 가 든 검증 세션이 없음" end),
+          savedMin:(102 * $NMERGE / 60 | r1), tokenDelta:null,
+          note:(if $NMERGE > 0 then "추정 — 합쳐진 세션 하나당 102초로 계산했습니다" else "" end)},
+         {id:"verify-parallel", name:"검증 묶음 동시 실행", applied:$PARON,
+          evidence:(if $PARON then "이벤트 로그에 동시 실행 기록, 두 세션이 \($OVL | mins)분 겹침" else "이벤트 로그에 동시 실행 기록이 없음" end),
+          savedMin:(if $PARON then ($OVL | mins) else 0 end), tokenDelta:null, note:""},
+         (if ([$A[] | select(.group == "배포")] | length) == 0 then
+            {id:"deploy-poll", name:"배포 대기 확인 간격 줄이기", applied:false, evidence:"배포 세션이 없음", savedMin:0, tokenDelta:null, note:""}
+          elif $wint == null then
+            {id:"deploy-poll", name:"배포 대기 확인 간격 줄이기", applied:null, evidence:"자동 실행 기록에 기다림 줄이 없음",
+             savedMin:null, tokenDelta:null, note:"확인 간격은 대시보드 자동 실행 기록에만 남고, 그 기록은 마지막 실행분만 있습니다"}
+          elif $wint <= 1 then
+            {id:"deploy-poll", name:"배포 대기 확인 간격 줄이기", applied:true,
+             evidence:"기다림 줄 간격 \($wint)분 이하, 기다린 일 \($WE | length)번",
+             savedMin:(([$WE[] | if .kind == "빌드" then 15 else 45 end] | add // 0) / 60 | r1), tokenDelta:null,
+             note:"추정 — 리뷰봇은 45초, 빌드는 15초 덜 기다린 것으로 계산했습니다(줄인 간격의 절반)"}
+          else
+            {id:"deploy-poll", name:"배포 대기 확인 간격 줄이기", applied:false,
+             evidence:"기다림 줄 간격 \($wint)분 — 개선 전 간격, 기다린 일 \($WE | length)번", savedMin:0, tokenDelta:null,
+             note:"자동 실행 기록은 마지막 실행분만 봅니다"} end),
+         {id:"integrate-doc-split", name:"통합 단계 문서 쓰기 나누기", applied:($docLine != ""),
+          evidence:"통합 세션 \($INTEG | length)개, 합계 \($INTEG | map(.sec) | add // 0 | mins)분",
+          savedMin:(if $docLine != "" then ((1.6 * ($INTEG | length)) - ($INTEG | map(.sec) | add // 0) / 60 | r1) else 0 end), tokenDelta:null,
+          note:(if $docLine != "" then "추정 — 통합 세션 하나 1.6분과 비교했습니다" else "아직 적용 전 개선입니다. 위 값은 나중 비교용입니다" end)},
+         {id:"deps-preinstall", name:"의존성 미리 설치", applied:($deps != ""),
+          evidence:"구현 세션의 설치 \($INST | length)번, 합계 \($INST | add // 0 | mins)분",
+          savedMin:(if $deps != "" then (0.4 - ($INST | add // 0) / 60 | r1) else 0 end), tokenDelta:null,
+          note:(if $deps != "" then "추정 — 오더당 0.4분과 비교했습니다" else "아직 적용 전 개선입니다. 위 값은 나중 비교용입니다" end)},
+         {id:"verify-batch-screen", name:"화면 확인 묶기", applied:false,
+          evidence:(if $scen > 0 then "검증 응답 \($VCALLS)번, 판정한 시나리오 \($scen)개, 시나리오 하나당 \($VCALLS / $scen | r1)번"
+                    else "판정한 시나리오가 없음" end),
+          savedMin:0, tokenDelta:null, note:"아직 적용 전 개선입니다. 기준은 시나리오 하나당 응답 약 13번입니다"}],
+       sessions:[$GI[] | . as $g | {id:.sid, stage, group, interactive, missing,
+           start:(if .start then (.start | loc) else null end), end:(if .end then (.end | loc) else null end),
+           min:(.sec | mins), sleepMin:(.sleepSec | mins), calls, modelMin:(.modelSec | mins), toolMin:(.toolSec | mins), tokens:.tok,
+           parallelWith:(([$PAR[] | select(.i == $g.i) | .with[]] | first) // null)}],
+       humanWaits:[$HW | merged | .[] | {start:(.[0] | loc), end:(.[1] | loc), min:(.[1] - .[0] | mins)}],
+       method:("자동 실행 시간은 사람과 대화하지 않은 세션(사람이 친 줄 1개 이하)의 첫 사건부터 끝 사건까지를 더하되, 겹친 시간은 한 번만 셌다. "
+         + "기준 시간은 2026-11-17 실측(/do 오더 63개)의 단계별 세션 하나 평균에 이번 오더의 단계별 세션 수를 곱했다. "
+         + "구현 \($base["구현"].min)분, 리뷰 \($base["리뷰"].min)분, 통합 \($base["통합"].min)분, 배포 \($base["배포"].min)분, 검증 \($base["검증"].min)분이다. "
+         + "다섯 단계 밖의 자동 세션은 실제 시간을 기준에도 그대로 넣었다. 토큰 기준도 같은 방식이고, 새 입력은 캐시 안 쓴 입력과 캐시 쓰기를 더한 값이다. "
+         + "사람을 기다린 시간은 이벤트 로그의 사람 차례·막힘 줄부터 같은 담당자의 다음 줄 또는 다음 세션 시작까지이며 합계에 넣지 않았다. "
+         + "컴퓨터가 잠든 구간(잠자기 기록)은 세션 시간과 합계에서 빼고 sleepMin 에 따로 두었다. "
+         + "사람과 대화한 세션은 사람이 생각한 시간을 빼려고 모델 시간과 도구 시간의 합만 interactive 칸에 따로 두었다."),
+       summary:""}' > "$out.tmp" && mv "$out.tmp" "$out"
+  rm -f "$sess"
+  [ -s "$out" ] || { echo "측정 실패: perf.json 을 쓰지 못했습니다"; return 1; }
+  jq -r '"측정: \(.key) · \(.status) · 플러그인 \(.pluginVersion)",
+    "자동 실행 \(.totals.wallMin)분 · 기준 \(.totals.baselineMin)분 · 차이 \(.totals.savedMin)분 · 사람 기다림 \(.totals.humanWaitMin)분 · 잠든 시간 \(.totals.sleepMin)분 \(.sleepLog)",
+    "사람과 대화한 세션 \(.interactive.sessions)개 \(.interactive.min)분",
+    "단계별: " + ([.byStage[] | "\(.stage) \(.sessions)세션 \(.min)분(기준 \(.baselineMin))"] | join(" · ")),
+    "개선 항목:", (.items[] | "  \(.name): \(if .applied == true then "적용됨" elif .applied == false then "해당 없음" else "측정 못 함" end) · 줄어든 \(.savedMin)분 · \(.evidence)")' "$out"
+}
+
+# dobby_perf_put KEY 파일 — 모델이 쓴 해석(summary)만 perf.json 에 합친다. 숫자 칸은 덮어쓰지 못한다.
+dobby_perf_put() {
+  local key="$1" src="$2" f bad
+  f="$(_order_dir "$key")/perf.json"
+  [ -f "$f" ] || { echo "거부: perf.json 이 없습니다. dobby_perf_measure 를 먼저 부르세요"; return 1; }
+  jq -e 'type == "object"' "$src" >/dev/null 2>&1 || { echo "거부: $src 가 JSON 객체가 아닙니다"; return 1; }
+  bad="$(jq -r 'keys - ["summary"] | join(", ")' "$src")"
+  [ -z "$bad" ] || { echo "거부: 쓸 수 없는 항목입니다 — $bad"; return 1; }
+  jq -s '.[0] * .[1]' "$f" "$src" > "$f.tmp" && mv "$f.tmp" "$f"
+}
+
+# dobby_perf_lint KEY — 측정을 마칠 수 있는지 검사한다. 필수 칸·숫자 형식·null 의 이유·summary 문장을 본다. 어기면 이유를 내고 1.
+dobby_perf_lint() {
+  local key="$1" f errs
+  f="$(_order_dir "$key")/perf.json"
+  [ -f "$f" ] || { echo "실패: perf.json 이 없습니다"; return 1; }
+  errs="$(jq -r '
+    def num: type == "number";
+    def numnull: . == null or type == "number";
+    (["key","measuredAt","pluginVersion","status","totals","byStage","items","sessions","method","summary"][] as $k
+      | if has($k) | not then "\($k) 칸 없음" else empty end),
+    (if (.status | IN("완성","진행 중")) then empty else "status 는 완성·진행 중 중 하나" end),
+    (if (.measuredAt // "") | test("^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}$") then empty else "measuredAt 형식(YYYY-MM-DD HH:MM)" end),
+    (.totals | (["wallMin","baselineMin","savedMin","humanWaitMin"][] as $k | if (.[$k] | num) then empty else "totals.\($k) 가 숫자가 아님" end),
+      (["tokens","baselineTokens"][] as $t | ["cacheRead","input","output"][] as $k
+        | if (.[$t][$k] | num) then empty else "totals.\($t).\($k) 가 숫자가 아님" end)),
+    (.byStage[]? | select((.stage | IN("구현","리뷰","통합","배포","검증","기타") | not)
+      or ([.sessions, .min, .baselineMin, .modelMin, .toolMin] | all(num) | not)) | "byStage 행이 잘못됨: \(.stage // "?")"),
+    (.items[]? | select((.id // "") == "" or (.name // "") == "" or (.evidence // "") == "") | "개선 항목에 id·name·evidence 가 빠짐: \(.name // .id // "?")"),
+    (.items[]? | select((.applied | IN(true, false, null)) | not) | "applied 는 true·false·null: \(.name)"),
+    (.items[]? | select((.savedMin | numnull | not) or (.tokenDelta | numnull | not)) | "savedMin·tokenDelta 는 숫자나 null: \(.name)"),
+    (.items[]? | select((.savedMin == null or .applied == null) and (.note // "") == "") | "null 값의 이유(note)가 빠짐: \(.name)"),
+    (.sessions[]? | select((.id // "") == "" or (.stage // "") == "" or (.calls | num | not)) | "세션 행이 잘못됨: \(.stage // "?")"),
+    (if (.method // "") == "" then "method 비어 있음" else empty end),
+    ((.summary // "") as $s | [$s | splits("(?<=[.!?])\\s+") | select(length > 0)] as $x
+      | if $s == "" then "summary 비어 있음 — 해석 문장을 dobby_perf_put 으로 넣으세요"
+        elif ($x | length) < 3 or ($x | length) > 5 then "summary 는 3~5문장(지금 \($x | length)문장)"
+        else ($x[] | select(length > 100) | "100자 넘는 문장(60자 안팎으로 끊기): \(.[0:40])…") end),
+    ((.summary // "") | select(test("design\\.md|analysis\\.md|round-[0-9]|perf\\.json|baseline|savedMin|wallMin|P[0-9]\\b|→"))
+      | "summary 에 내부 용어나 화살표가 있음")' "$f" 2>&1)"
+  [ -z "$errs" ] && return 0
+  printf '%s\n' "$errs"; return 1
+}
+
 echo "dobby-lib loaded" >&2
