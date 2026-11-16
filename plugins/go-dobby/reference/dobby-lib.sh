@@ -3119,6 +3119,34 @@ dobby_v2_next_hint() {
   printf '  - 그 시각이 지났으면 /clear 후 같은 명령을 입력하세요.\n'
 }
 
+# _v2_ship_unblock KEY — 배포 표의 막힘(⚠) 줄을 정리한다. 변경 접수가 부른다.
+# 변경을 받으면 막힌 이유는 지나간 일이다. 남겨 두면 구현·리뷰·통합을 다 돈 뒤 자동 실행이
+# 배포 차례에서 그 ⚠ 를 보고 멈춘다(실측 FE1-2668 2026-11-16 16:07).
+#   · PR 이 열려 있으면 비고를 지우고 '리뷰 반영 N회차'로 적는다 — 배포 세션이 새 커밋을 새 PR 로 다시 리뷰받는다.
+#   · PR 이 없거나 닫혔으면 줄을 지운다 — 배포 세션이 PR 생성부터 다시 한다(dobby_ship_close_pr 와 같은 방식).
+_v2_ship_unblock() {
+  local key="$1" f rp env st pr nt
+  f="$(_order_dir "$key")/status.md"
+  [ -f "$f" ] || return 0
+  while IFS=$'\037' read -r rp env st pr nt; do
+    [ -n "$rp" ] || continue
+    if [ -n "$pr" ] && [ "$pr" != - ] \
+       && [ "$(gh pr view "${pr#\#}" --repo "$(_ship_owner "$rp")" --json state -q .state 2>/dev/null)" = OPEN ]; then
+      dobby_ship_round "$key" "$rp" "$env" >/dev/null || continue
+    else
+      awk -F'|' -v rp="$rp" -v env="$env" '
+        function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
+        /^## /{ins=($0 ~ /^##[ \t]*배포[ \t]*$/)}
+        ins && /^\|/ && NF>=9 && t($2)==rp && t($3)==env {next}
+        {print}' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+    fi
+    dobby_event "$key" "배포 막힘 정리 — $rp $env ($st): ${nt:-비고 없음}" 2>/dev/null
+  done < <(awk -F'|' '
+    function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
+    /^## /{ins=($0 ~ /^##[ \t]*배포[ \t]*$/); next}
+    ins && /^\|/ && NF>=9 && t($4) ~ /⚠/ {printf "%s\037%s\037%s\037%s\037%s\n", t($2),t($3),t($4),t($5),t($8)}' "$f")
+}
+
 # dobby_v2_change_open KEY [check] — v2 오더에 들어온 변경 요청(수정 지시·새 버그·추가 설계)을 구현 차례로 되돌린다.
 #
 # 설계 문서에 변경 절을 적고 사람이 확정한 **뒤에** 부른다. 그다음 dobby_design_ack 를 부르면
@@ -3127,6 +3155,7 @@ dobby_v2_next_hint() {
 #   · 단계가 해결이면 해결 표시를 무른다(dobby_resolve undo 와 같은 일).
 #   · 다음 리뷰 차수의 빈 폴더를 연다. 이걸 안 하면 리뷰 세션이 지난 차수의 결과 파일에 덮어쓰고,
 #     지적 0건인 옛 결과 때문에 리뷰 없이 통합으로 넘어간다. 마지막 차수 폴더가 비어 있으면 그대로 쓴다.
+#   · 배포 표의 막힘(⚠) 줄을 정리한다(_v2_ship_unblock). 남기면 자동 실행이 배포 차례에서 멈춘다.
 #   · 단계를 분석으로 바꾼다. stdout 으로 이번 변경의 리뷰 시작 차수를 낸다(설계 문서 변경 절에 적는다).
 #   · check 를 주면 자동 실행 확인만 하고 아무것도 바꾸지 않는다(변경 절을 쓰기 전에 부른다).
 dobby_v2_change_open() {
@@ -3150,6 +3179,7 @@ dobby_v2_change_open() {
   elif ls "$d/reviews/round-$rd"/*.md >/dev/null 2>&1; then rd=$((rd + 1))
   fi
   mkdir -p "$d/reviews/round-$rd"
+  _v2_ship_unblock "$key"
   _v2_del_line "$key" "완성"
   dobby_phase "$key" 설계
   dobby_event "$key" "변경 요청 접수 — 단계 $ph → 설계, 리뷰는 ${rd}차부터" 2>/dev/null
