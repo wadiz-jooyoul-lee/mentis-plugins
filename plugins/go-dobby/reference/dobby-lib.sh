@@ -885,7 +885,7 @@ dobby_testplan_scope_all() {
   return 0
 }
 
-# _testplan_batches KEY — "묶음<TAB>S1,S2,…" 줄들. `## 검증 묶음` 표를 따르고, 표에 없는 시나리오는 4개씩 덧붙인다.
+# _testplan_batches KEY — "묶음<TAB>S1,S2,…<TAB>공통 준비<TAB>동시 실행" 줄들. `## 검증 묶음` 표를 따르고, 표에 없는 시나리오는 4개씩 덧붙인다(뒤 두 칸 빈 값).
 # 검증 범위(_testplan_scope) 밖 시나리오는 빼고, 남는 것이 없는 묶음은 내지 않는다.
 _testplan_batches() {
   local p n=0 rest="" i=0 s name list kept scope run env=""
@@ -895,19 +895,19 @@ _testplan_batches() {
   run="$(_testrun_open "$1")"
   [ -n "$run" ] && env="$(sed -nE 's/^- \*\*환경\*\*: *([^ ]+) *$/\1/p' "$run/result.md" | head -1)"
   scope=" $(_testplan_scope "$1" "$env" "$run" | awk -F'\t' '$2=="in"{printf "%s ", $1}')"
-  local tbl; tbl="$(awk -F'|' '
+  local tbl prep; tbl="$(awk -F'|' '
     function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
     /^## /{ins=(t(substr($0,4))=="검증 묶음"); next}
-    ins && /^\|/ && t($2) !~ /^(묶음|-+)$/ {s=t($3); gsub(/[ \t]/,"",s); print t($2) "\t" s}' "$p")"
+    ins && /^\|/ && t($2) !~ /^(묶음|-+)$/ {s=t($3); gsub(/[ \t]/,"",s); c=t($4); gsub(/[ \t]+/," ",c); print t($2) "\t" s "\t" c "\t" t($6)}' "$p")"
   if [ -n "$tbl" ]; then
     n="$(printf '%s\n' "$tbl" | wc -l | tr -d ' ')"
-    while IFS=$'\t' read -r name list; do
+    while IFS=$'\t' read -r name list prep par; do
       kept=""
       # ⛔ `for s in ${list//,/ }` 를 쓰지 않는다 — zsh 는 따옴표 없는 확장을 나누지 않는다(_words 와 같은 이유)
       while IFS= read -r s; do
         case "$scope" in *" $s "*) kept="${kept:+$kept,}$s" ;; esac
       done <<<"$(printf '%s\n' "$list" | tr ',' '\n')"
-      [ -n "$kept" ] && printf '%s\t%s\n' "$name" "$kept"
+      [ -n "$kept" ] && printf '%s\t%s\t%s\t%s\n' "$name" "$kept" "$prep" "$par"
     done <<<"$tbl"
   fi
   while IFS= read -r s; do
@@ -921,26 +921,64 @@ _testplan_batches() {
   return 0
 }
 
-# dobby_verify_next KEY — 판정이 빈 시나리오가 든 첫 묶음 "묶음<TAB>S1,S2"(빈 것만). 다 찼으면 done.
-# 열린 회차가 없으면 전부 빈 것으로 보고 첫 묶음을 낸다.
-dobby_verify_next() {
-  local key="$1" run judged="" name list s left
-  run="$(_testrun_open "$key")"
-  [ -n "$run" ] && judged=" $(awk -F'|' '
+# _testrun_judged KEY — 열린 회차에서 판정이 찬 시나리오를 " S1 S2 " 꼴로 낸다. 열린 회차가 없으면 빈 값.
+_testrun_judged() {
+  local run; run="$(_testrun_open "$1")"
+  [ -n "$run" ] || return 0
+  printf ' %s' "$(awk -F'|' '
     function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
     /dobby:scenarios/{m=1; next}
     m && /^\|/ { if(!h){for(i=2;i<NF;i++) if(t($i)=="판정") j=i; h=1; next}
       id=t($2); if(id ~ /^S[0-9]+$/ && j && t($j)!="") print id; next }
     m && h {m=0}' "$run/result.md" | tr '\n' ' ')"
-  while IFS=$'\t' read -r name list; do
+}
+
+# _verify_pick KEY — dobby_verify_next 의 본체. "묶음<TAB>S1,S2<TAB>동시"(동시: 합친 묶음이 모두 `가능` 이면 가능).
+# DOBBY_VERIFY_SKIP="V2,V4" 면 그 묶음은 고르지 않는다(동시에 도는 다른 세션의 몫). 남은 것이 그 묶음뿐이면 "wait<TAB>…".
+_verify_pick() {
+  local key="$1" judged name list prep par s left pick="" pname="" pprep="" ppar="" pn=0 an skip=",${DOBBY_VERIFY_SKIP:-}," waiting=""
+  skip="${skip//+/,}"
+  judged="$(_testrun_judged "$key") "
+  while IFS=$'\t' read -r name list prep par; do
     left=""
     while IFS= read -r s; do
       [ -n "$s" ] || continue
       case "$judged" in *" $s "*) ;; *) left="${left:+$left,}$s" ;; esac
     done <<<"$(printf '%s\n' "$list" | tr ',' '\n')"
-    [ -n "$left" ] && { printf '%s\t%s\n' "$name" "$left"; return 0; }
+    [ -n "$left" ] || continue
+    case "$skip" in *",$name,"*) waiting=1; continue ;; esac
+    an="$(printf '%s\n' "$left" | tr ',' '\n' | grep -c .)"
+    if [ -z "$pick" ]; then
+      pick="$left"; pname="$name"; pprep="$prep"; ppar="$par"; pn="$an"
+      [ "$pn" -le 3 ] && [ -n "$prep" ] || break
+    elif [ -n "$prep" ] && [ "$prep" = "$pprep" ] && [ $((pn + an)) -le 6 ]; then
+      pick="$pick,$left"; pname="$pname+$name"; pn=$((pn + an)); [ "$par" = 가능 ] || ppar=""
+    fi
   done <<<"$(_testplan_batches "$key")"
+  [ -n "$pick" ] && { printf '%s\t%s\t%s\n' "$pname" "$pick" "$ppar"; return 0; }
+  # 동시에 도는 세션은 마감하지 않는다. 마감은 둘 다 끝난 뒤 자동 실행이 띄우는 세션이 한다.
+  [ -n "${DOBBY_VERIFY_SKIP:-}" ] && { printf 'wait\t%s\n' "${waiting:+$DOBBY_VERIFY_SKIP}"; return 0; }
   printf 'done\n'
+}
+
+# dobby_verify_next KEY — 판정이 빈 시나리오가 든 첫 묶음 "묶음<TAB>S1,S2"(빈 것만). 다 찼으면 done.
+# 열린 회차가 없으면 전부 빈 것으로 보고 첫 묶음을 낸다.
+# 그 묶음에 남은 시나리오가 3개 이하면 뒤 묶음 가운데 공통 준비 칸이 글자까지 같은 것을 합계 6개까지 붙인다("V1+V3").
+# 범위·판정으로 작아진 묶음이 세션 하나를 통째로 쓰지 않게 하기 위해서다. 공통 준비 칸이 빈 묶음은 합치지 않는다.
+# 동시 실행 세션(DOBBY_VERIFY_SKIP)은 다른 세션의 묶음을 건너뛰고, done 대신 wait 를 받는다.
+dobby_verify_next() { _verify_pick "$1" | cut -f1,2; }
+
+# dobby_verify_pair KEY — 자동 실행이 검증 묶음 둘을 동시에 띄울 수 있으면 "묶음<TAB>S…" 두 줄, 아니면 한 줄(또는 done).
+# 회차가 열려 있고(첫 묶음이 회차를 연 뒤), 고른 두 묶음이 모두 테스트 계획의 `동시 실행` 칸이 `가능` 일 때만 두 줄이다.
+dobby_verify_pair() {
+  local key="$1" a b
+  a="$(DOBBY_VERIFY_SKIP= _verify_pick "$key")"
+  case "$a" in done*) printf 'done\n'; return 0 ;; esac
+  if _testrun_open "$key" >/dev/null && [ "$(printf '%s' "$a" | cut -f3)" = 가능 ]; then
+    b="$(DOBBY_VERIFY_SKIP="$(printf '%s' "$a" | cut -f1)" _verify_pick "$key")"
+    case "$b" in wait*) ;; *) [ "$(printf '%s' "$b" | cut -f3)" = 가능 ] && { printf '%s\n%s\n' "$(printf '%s' "$a" | cut -f1,2)" "$(printf '%s' "$b" | cut -f1,2)"; return 0; } ;; esac
+  fi
+  printf '%s\n' "$a" | cut -f1,2
 }
 
 # dobby_testplan_slice KEY S1,S2 — 테스트 계획에서 제목·사전 준비·영향 번들과 그 시나리오 절만 낸다.
@@ -949,6 +987,145 @@ dobby_testplan_slice() {
     /^## /{ h=substr($0,4); id=h; sub(/\..*/,"",id)
       keep = (h ~ /^(사전 준비|영향 번들)/) || (id ~ /^S[0-9]+$/ && index(want, "," id ",") > 0) }
     NR==1 || keep' "$(_order_dir "$1")/test-plan.md"
+}
+
+# ── 타입 검사 — 기준선과 비교해 새 오류만 센다. 결과와 증분 기록은 $META/{키}/.typecheck/ 에 둔다 ──
+# 저장소에 원래 있던 타입 오류가 많아(wadiz-frontend apps/global 1,790줄) tsc 종료 코드로는 통과를 가를 수 없다.
+# 그래서 세션마다 변경을 되돌려 기준선을 다시 돌렸다(한 번 1.5~6분, 구현 세션에 2~3번). 이 헬퍼는
+#   · 증분 기록(--incremental)을 오더 메타에 남겨 두 번째부터 짧게 끝낸다(실측 91초 → 변경 없으면 9초)
+#   · 작업 폴더 내용의 지문이 같으면 저장된 결과를 그대로 낸다(구현 뒤 리뷰는 다시 검사하지 않는다)
+#   · 기준선은 HEAD 커밋 내용의 결과다. 통합으로 커밋하면 구현 끝 결과가 그대로 다음 변경의 기준선이 된다.
+
+# _tc_tree TOP — 작업 폴더 내용(커밋 안 한 변경·새 파일 포함, 무시 파일 제외)의 지문. 실제 인덱스는 건드리지 않는다.
+_tc_tree() {
+  local top="$1" idx real
+  idx="$(mktemp "${TMPDIR:-/tmp}/dobby-tc-idx.XXXXXX")" || return 1
+  real="$(git -C "$top" rev-parse --path-format=absolute --git-path index 2>/dev/null)"
+  if [ -f "$real" ]; then cp "$real" "$idx"; else rm -f "$idx"; fi
+  GIT_INDEX_FILE="$idx" git -C "$top" add -A . 2>/dev/null \
+    && GIT_INDEX_FILE="$idx" git -C "$top" write-tree
+  local rc=$?; rm -f "$idx"; return $rc
+}
+
+# _tc_run APP BUILDINFO OUT — 증분 타입 검사를 돌려 오류 줄을 "파일: error TSxxxx: 문구" 로 맞춰(줄·칸 번호 뺌) 정렬해 OUT 에 쓴다.
+_tc_run() {
+  local app="$1" info="$2" out="$3" raw rc
+  raw="$(mktemp "${TMPDIR:-/tmp}/dobby-tc-raw.XXXXXX")" || return 1
+  ( cd "$app" && "$TC_BIN" --noEmit -p tsconfig.json --incremental --tsBuildInfoFile "$info" ) >"$raw" 2>&1
+  rc=$?
+  # 0 오류 없음 · 1/2 오류 있음. 그 밖(설정 오류로 못 돎, 강제 종료)은 결과로 쓰지 않는다.
+  case "$rc" in 0|1|2) ;; *) tail -5 "$raw" >&2; rm -f "$raw"; return 1 ;; esac
+  grep -E '(^|: )error TS[0-9]+:' "$raw" | grep -v '^[[:space:]]' \
+    | sed -E 's/\([0-9]+,[0-9]+\): error /: error /' | LC_ALL=C sort > "$out"
+  rm -f "$raw"
+}
+
+# 타입 검사는 기본으로 하지 않는다. 사람이 `/do {키} 타입 검사` 로 켠 오더만 한다(상태 문서 `- **타입 검사**: 켬` 줄).
+# 근거(2026-11-17 실측): /do 오더 46개에서 타입 검사 357회, 그 오더의 변경이 만든 새 오류를 잡아 고친 것은 2건이고
+# 둘 다 타입 표기 문제였다. 비용은 구현 세션 시간의 절반이었다. 변경이 크면 켜기를 권하는 줄만 낸다.
+DOBBY_TC_RECOMMEND_FILES=15   # 바뀐 코드 파일(ts·tsx·js·jsx) 수가 이 이상이면 권한다
+DOBBY_TC_RECOMMEND_LINES=500  # 바뀐 코드 줄(더한 줄 + 지운 줄) 수가 이 이상이면 권한다
+
+_v2_typecheck_on() { grep -qE '^- \*\*타입 검사\*\*: *켬' "$(_order_dir "$1")/status.md" 2>/dev/null; }
+
+# dobby_v2_typecheck_on KEY [이유] — 이 오더의 타입 검사를 켠다. 사람이 `/do {키} 타입 검사` 로 명시했을 때만 부른다.
+dobby_v2_typecheck_on() {
+  local key="$1" why="${2:-사람 지시}"
+  [ -f "$(_order_dir "$key")/status.md" ] || { _die "$key 의 상태 문서가 없습니다. 설계 세션이 메타를 만든 뒤 다시 부르세요"; return 1; }
+  _dobby_locked "$key" _v2_set_line "$key" "타입 검사" "켬 — $why ($(_now))" || return 1
+  dobby_event "$key" "타입 검사 켬 — $why" >/dev/null 2>&1
+  printf '타입 검사를 켰습니다(%s)\n' "$key"
+}
+
+# _tc_skip_note KEY TOP — 타입 검사를 건너뛴다는 줄을 내고, 이번 변경(커밋 전 변경 + 새 파일)이 크면 켜기를 권한다.
+_tc_skip_note() {
+  local key="$1" top="$2" files lines nf nl
+  files="$( { git -C "$top" diff --name-only HEAD; git -C "$top" ls-files --others --exclude-standard; } 2>/dev/null \
+    | grep -E '\.(ts|tsx|js|jsx)$' | sort -u)"
+  nf="$(printf '%s' "$files" | grep -c .)"
+  nl="$( { git -C "$top" diff --numstat HEAD -- '*.ts' '*.tsx' '*.js' '*.jsx' 2>/dev/null | awk '{s+=$1+$2} END{print s+0}'
+           git -C "$top" ls-files --others --exclude-standard -- '*.ts' '*.tsx' '*.js' '*.jsx' 2>/dev/null \
+             | while IFS= read -r f; do wc -l < "$top/$f"; done; } | awk '{s+=$1} END{print s+0}')"
+  printf '타입 검사 건너뜀 — 이 오더는 타입 검사가 꺼져 있습니다(바뀐 코드 파일 %s개, %s줄)\n' "$nf" "$nl"
+  if [ "$nf" -ge "$DOBBY_TC_RECOMMEND_FILES" ] || [ "$nl" -ge "$DOBBY_TC_RECOMMEND_LINES" ]; then
+    printf '타입 검사 권함 — 변경이 큽니다(기준: 파일 %s개 또는 %s줄 이상). 켜려면: /do %s 타입 검사\n' \
+      "$DOBBY_TC_RECOMMEND_FILES" "$DOBBY_TC_RECOMMEND_LINES" "$key"
+  fi
+}
+
+# dobby_typecheck KEY 앱폴더 [base] — 앱폴더(tsconfig.json 이 있는 폴더)를 타입 검사해 기준선보다 늘어난 오류만 센다.
+#   타입 검사가 꺼진 오더(기본)는 검사하지 않고 "건너뜀" 줄(변경이 크면 "권함" 줄도)을 내고 0 을 돌려준다.
+#   출력 첫 줄: "타입 검사 {앱} — 새 오류 N건 (기준선 B건, 지금 C건, 없어진 오류 G건) · {저장된 결과|검사 S초}". 새 오류가 있으면 그 줄들(30줄까지).
+#   반환: 0 새 오류 없음 · 1 새 오류 있음 · 2 검사를 못 함(사유는 표준 오류).
+#   base: 기준선만 만든다(설계 세션이 고치기 전에 백그라운드로 부른다). 비교 줄은 내지 않는다.
+#   기준선이 없고 작업 폴더에 변경이 있으면 변경을 잠시 치우고(git stash -u) 검사한 뒤 되돌린다. 되돌린 뒤 지문이 다르면 멈춘다.
+#   의존성이 없으면 먼저 설치한다(CI=true NODE_ENV=development pnpm install --frozen-lockfile).
+dobby_typecheck() {
+  local key="$1" app="$2" mode="${3:-}" top rel slug dir info cur base_t cur_t t0 took="저장된 결과" n_b n_c n_new n_gone new TC_BIN
+  [ -n "$key" ] && [ -f "$app/tsconfig.json" ] || { _die "사용법: dobby_typecheck KEY 앱폴더 [base] (앱폴더에 tsconfig.json 이 있어야 합니다)"; return 2; }
+  app="$(cd "$app" && pwd)"
+  top="$(git -C "$app" rev-parse --show-toplevel 2>/dev/null)" || { _die "$app 은 git 작업 폴더가 아닙니다"; return 2; }
+  rel="${app#"$top"}"; rel="${rel#/}"
+  slug="$(basename "$top")__$(printf '%s' "${rel:-root}" | tr '/' '_')"
+  if ! _v2_typecheck_on "$key"; then
+    _tc_skip_note "$key" "$top"
+    return 0
+  fi
+  dir="$(_order_dir "$key")/.typecheck"; mkdir -p "$dir" || return 2
+  info="$dir/$slug.tsbuildinfo"
+  TC_BIN="$app/node_modules/.bin/tsc"; [ -x "$TC_BIN" ] || TC_BIN="$top/node_modules/.bin/tsc"
+  if [ ! -x "$TC_BIN" ]; then
+    printf '의존성 설치 중(%s)…\n' "$top" >&2
+    ( cd "$top" && CI=true NODE_ENV=development pnpm install --frozen-lockfile >/dev/null 2>&1 ) \
+      || { _die "의존성 설치에 실패했습니다: cd $top && pnpm install --frozen-lockfile"; return 2; }
+    TC_BIN="$app/node_modules/.bin/tsc"; [ -x "$TC_BIN" ] || TC_BIN="$top/node_modules/.bin/tsc"
+    [ -x "$TC_BIN" ] || { _die "설치 뒤에도 tsc 를 찾지 못했습니다($top/node_modules/.bin/tsc)"; return 2; }
+  fi
+  base_t="$(git -C "$top" rev-parse 'HEAD^{tree}')" || return 2
+  cur_t="$(_tc_tree "$top")" || { _die "작업 폴더 지문을 만들지 못했습니다"; return 2; }
+
+  # 기준선 — HEAD 커밋 내용의 결과
+  if [ ! -f "$dir/$slug-$base_t.txt" ]; then
+    t0=$(date +%s)
+    if [ "$cur_t" = "$base_t" ]; then
+      _tc_run "$app" "$info" "$dir/$slug-$base_t.txt" || { _die "타입 검사가 끝나지 않았습니다(위 출력 참고)"; return 2; }
+    else
+      git -C "$top" stash push -u -q -m "dobby-typecheck 기준선" || { _die "변경을 잠시 치우지 못했습니다(git stash)"; return 2; }
+      _tc_run "$app" "$info" "$dir/$slug-$base_t.txt"; local brc=$?
+      git -C "$top" stash pop -q || { _die "치운 변경을 되돌리지 못했습니다. git -C $top stash list 의 'dobby-typecheck 기준선' 을 직접 되돌려 주세요"; return 2; }
+      [ "$(_tc_tree "$top")" = "$cur_t" ] || { _die "되돌린 작업 폴더가 처음과 다릅니다. git -C $top status 로 확인해 주세요"; return 2; }
+      [ "$brc" -eq 0 ] || { rm -f "$dir/$slug-$base_t.txt"; _die "기준선 타입 검사가 끝나지 않았습니다"; return 2; }
+    fi
+    took="검사 $(( $(date +%s) - t0 ))초"
+  fi
+  if [ "$mode" = base ]; then
+    printf '타입 검사 기준선 %s — %s건 · %s\n' "${rel:-.}" "$(grep -c . "$dir/$slug-$base_t.txt")" "$took"
+    return 0
+  fi
+
+  # 지금 내용 — 같은 지문의 결과가 있으면 그대로 쓴다
+  cur="$dir/$slug-$cur_t.txt"
+  if [ ! -f "$cur" ]; then
+    t0=$(date +%s)
+    _tc_run "$app" "$info" "$cur.tmp" && mv "$cur.tmp" "$cur" || { rm -f "$cur.tmp"; _die "타입 검사가 끝나지 않았습니다(위 출력 참고)"; return 2; }
+    took="검사 $(( $(date +%s) - t0 ))초"
+  fi
+  # 비교는 "파일: 오류 코드" 로 한다. 문구는 증분 검사에서 검사 순서에 따라 합집합 타입의 나열 순서가 바뀌어
+  # 같은 오류가 다른 글로 찍힌다(실측: 다른 파일 한 줄 변경에 MakerFollowingButton.tsx 의 TS2322 문구가 바뀜).
+  local kb kc k
+  kb="$(sed -E 's/: error (TS[0-9]+):.*/: \1/' "$dir/$slug-$base_t.txt" | LC_ALL=C sort)"
+  kc="$(sed -E 's/: error (TS[0-9]+):.*/: \1/' "$cur" | LC_ALL=C sort)"
+  new="$(LC_ALL=C comm -13 <(printf '%s\n' "$kb") <(printf '%s\n' "$kc") | grep .)"
+  n_b="$(grep -c . "$dir/$slug-$base_t.txt")"; n_c="$(grep -c . "$cur")"
+  n_new="$(printf '%s' "$new" | grep -c .)"
+  n_gone="$(LC_ALL=C comm -23 <(printf '%s\n' "$kb") <(printf '%s\n' "$kc") | grep -c .)"
+  printf '타입 검사 %s — 새 오류 %s건 (기준선 %s건, 지금 %s건, 없어진 오류 %s건) · %s\n' "${rel:-.}" "$n_new" "$n_b" "$n_c" "$n_gone" "$took"
+  [ "$n_new" -eq 0 ] && return 0
+  # 새로 늘어난 "파일: 코드" 마다 지금 결과의 그 줄들을 보여 준다(같은 코드가 원래도 있었으면 그 줄도 함께 나온다)
+  printf '%s\n' "$new" | LC_ALL=C sort -u | while IFS= read -r k; do
+    grep -F "${k%%: TS*}: error ${k##*: }:" "$cur"
+  done | head -30
+  return 1
 }
 
 # ── 워크트리/커밋/통합 ───────────────────────────────────────────────
@@ -6479,7 +6656,7 @@ _v2_failed_ids() {
 
 _v2_verify_desc() {
   local v; v="$(dobby_verify_next "$1" 2>/dev/null)"
-  case "$v" in done|"") printf '검증 마감' ;; *) printf '묶음 %s · 시나리오 %s' "${v%%$'\t'*}" "${v#*$'\t'}" ;; esac
+  case "$v" in done|"") printf '검증 마감' ;; wait*) printf '함께 돌던 묶음이 끝나기를 기다림' ;; *) printf '묶음 %s · 시나리오 %s' "${v%%$'\t'*}" "${v#*$'\t'}" ;; esac
 }
 
 _v2_pr_line() { sed -nE 's/^- \*\*PR\*\*:[ \t]*(.*)$/\1/p' "$(_order_dir "$1")/status.md" 2>/dev/null | head -1; }
@@ -6725,6 +6902,8 @@ _dobby_v2_begin_u() {
     _show "이미 시작됨"; _deliver_ask; return 0
   fi
   other="$(_v2_live_sessions "$key" "$sid" | awk -F'\t' '$3=="working"' | head -1)"
+  # 검증 묶음 동시 실행(자동 실행이 DOBBY_VERIFY_SKIP 을 준 세션)은 다른 테스터 세션과 함께 돈다
+  [ "$stage" = 검증 ] && [ -n "${DOBBY_VERIFY_SKIP:-}" ] && other=""
   if [ -n "$other" ] && [ "$(_v2_state "$key" "$(printf '%s' "$other" | cut -f2)")" = 작업중 ]; then
     printf '겹침\n이유: 다른 세션(%s)이 이 오더를 작업 중입니다. 그 세션이 끝난 뒤 다시 실행해 주세요\n' "$(printf '%s' "$other" | cut -f1)"
     return 3
@@ -7112,7 +7291,8 @@ _dobby_v2_end_u() {
       case "$res" in
         묶음남음)
           [ -n "$open" ] && [ "$v" != done ] || { _rej "남은 묶음이 없습니다. 회차를 마감하고 통과나 실패로 끝내세요"; return 1; }
-          _v2_set "$key" test-agent 대기 "" "다음 묶음 ${v%%$'\t'*} 차례" ;;
+          case "$v" in wait*) _v2_set "$key" test-agent 대기 "" "함께 돌던 묶음이 끝나면 마감" ;;
+            *) _v2_set "$key" test-agent 대기 "" "다음 묶음 ${v%%$'\t'*} 차례" ;; esac ;;
         통과)
           [ -z "$open" ] && _v2_test_passed "$key" || { _rej "마지막 회차가 마감되지 않았거나 전부 통과가 아닙니다"; return 1; }
           _v2_set "$key" test-agent 완료 "" "전부 통과"

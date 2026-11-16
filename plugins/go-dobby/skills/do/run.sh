@@ -26,6 +26,10 @@
 #
 # MCP: 세션마다 크롬 도구 하나만 붙인다(--strict-mcp-config).
 #
+# 검증 묶음 동시 실행: 회차가 열린 뒤 남은 두 묶음이 모두 테스트 계획의 `동시 실행` 칸이 `가능` 이면(dobby_verify_pair)
+# 브라우저 프로필을 하나 더 써서 두 검증 세션을 함께 띄운다. 두 세션은 회차를 마감하지 않고, 마감은 뒤에 띄우는 세션이 한다.
+# 함께 돈 뒤에도 그 묶음에 판정이 빈 시나리오가 남으면(질문·막힘) 이번 실행에서는 다시 동시에 띄우지 않는다.
+#
 # 역할별 모델: ~/.config/go-dobby/role-models.json 에 {"developer": "claude-opus-5-5", ...} 가 있으면 차례 담당자의 역할 모델을
 # `claude -p --model` 로 넘긴다. 담당자 슬러그로 역할을 가른다(analysis-agent 기획자, review-agent 리뷰어, deploy-agent 배포담당,
 # test-agent 테스터, produce-agent 산출자(producer), 나머지 개발자). 파일이 없거나 그 역할 값이 없으면 --model 없이 기본 모델로 돈다.
@@ -159,17 +163,20 @@ WT="$(_order_worktree "$KEY")"
 mcp=()
 MCP_CFG="${TMPDIR:-/tmp}/dobby-mcp-$KEY.json"
 PROFILE="$HOME/.cache/dobby-chrome/$KEY"
+mcp2=(); MCP_CFG2="${TMPDIR:-/tmp}/dobby-mcp-$KEY-2.json"; PROFILE2="$PROFILE-2"; NOPAR=""
 # 사무실에 이 실행을 작업 단위 하나로 알린다. 끝날 때(멈춤·오류·완료 모두) 서류철이 캐비닛으로 간다
 UBY=auto; [ -n "$AUTO_ENV" ] && UBY=full
 dobby_unit_start "$KEY" "$UBY" "$UBY:$$"
 STARTED="$(date '+%m-%d %H:%M')"
 mark() { _dobby_locked "$KEY" _v2_set_line "$KEY" "자동 실행" "실행 중 · pid $$ · 시작 $STARTED · 세션 $1"; }
 mark 0
-trap 'rm -rf "$PROFILE"; _dobby_locked "$KEY" _v2_set_line "$KEY" "자동 실행" "$END_KIND — ${END_NOTE:-자동 실행이 끝났습니다}"; dobby_v2_reconcile "$KEY"; dobby_unit_end "$KEY" "$UBY" "${END_NOTE:-자동 실행이 끝났습니다}" "$UBY:$$"' EXIT
+trap 'rm -rf "$PROFILE" "$PROFILE2"; _dobby_locked "$KEY" _v2_set_line "$KEY" "자동 실행" "$END_KIND — ${END_NOTE:-자동 실행이 끝났습니다}"; dobby_v2_reconcile "$KEY"; dobby_unit_end "$KEY" "$UBY" "${END_NOTE:-자동 실행이 끝났습니다}" "$UBY:$$"' EXIT
 if jq -e '.mcpServers["chrome-devtools"]' ~/.claude.json >/dev/null 2>&1 \
    && jq --arg p "$PROFILE" '{mcpServers: {"chrome-devtools": (.mcpServers["chrome-devtools"]
         | .args = ([(.args // [])[] | select(. != "--isolated")] + ["--userDataDir", $p]))}}' ~/.claude.json >"$MCP_CFG" 2>/dev/null; then
   mcp=(--strict-mcp-config --mcp-config "$MCP_CFG")
+  jq --arg a "$PROFILE" --arg b "$PROFILE2" '.mcpServers["chrome-devtools"].args |= map(if . == $a then $b else . end)' "$MCP_CFG" >"$MCP_CFG2" 2>/dev/null \
+    && mcp2=(--strict-mcp-config --mcp-config "$MCP_CFG2")
 else
   dobby_event "$KEY" "자동 실행 MCP 제한 못 함 — ~/.claude.json 에 chrome-devtools 설정이 없어 모든 MCP 를 붙인 채 실행" 2>/dev/null
 fi
@@ -191,6 +198,49 @@ role_model() {
   local role=developer
   case "$1" in analysis-agent) role=planner ;; review-agent) role=reviewer ;; deploy-agent) role=deployer ;; test-agent) role=tester ;; produce-agent) role=producer ;; esac
   [ -f "$ROLE_MODELS" ] && jq -r --arg r "$role" '.[$r] // empty | strings | select(test("^claude-[a-z0-9-]+$"))' "$ROLE_MODELS" 2>/dev/null
+}
+
+# 검증 묶음 두 개를 동시에 돌린다. 인자는 dobby_verify_pair 의 두 줄이다. 끝나면 호출한 자리에서 다음 차례로 넘어간다.
+run_pair() {
+  local b1 b2 l1 l2 o1 o2 c1 c2 i o c psid perr before m judged left="" s
+  IFS=$'\t' read -r b1 l1 <<<"$(printf '%s\n' "$1" | sed -n 1p)"
+  IFS=$'\t' read -r b2 l2 <<<"$(printf '%s\n' "$1" | sed -n 2p)"
+  [ $((n + 2)) -le "$MAX" ] || stop "세션 상한(${MAX}개)에 닿았습니다. 상태 문서를 확인하세요"
+  MAX=$((MAX + 1))   # 세션 둘을 한 차례로 쓴다. 열린 회차를 잇는 묶음마다 하나씩 더하는 셈과 맞춘다
+  before="$(fingerprint)"; o1="$(mktemp)"; o2="$(mktemp)"
+  model=(); m="$(role_model test-agent)"; [ -n "$m" ] && model=(--model "$m")
+  mark "$((n + 2))"
+  printf '\n━━ %s · 세션 %d·%d · 검증 묶음 %s 와 %s 를 동시에 · 모델 %s · %s\n' "$KEY" $((n + 1)) $((n + 2)) "$b1" "$b2" "${m:-기본}" "$(date '+%H:%M')"
+  ( cd "$WT" && DOBBY_VERIFY_SKIP="$b2" DOBBY_SESSION_CWD="$WT" claude -p "/do $KEY" ${extra[@]+"${extra[@]}"} "${mcp[@]}" ${model[@]+"${model[@]}"} \
+      --permission-mode "$MODE" --output-format json >"$o1" 2>/dev/null; echo $? >"$o1.rc" ) &
+  sleep 5   # 시작 헬퍼가 같은 순간에 잠금을 다투지 않게 조금 늦춘다
+  ( cd "$WT" && DOBBY_VERIFY_SKIP="$b1" DOBBY_SESSION_CWD="$WT" claude -p "/do $KEY" ${extra[@]+"${extra[@]}"} "${mcp2[@]}" ${model[@]+"${model[@]}"} \
+      --permission-mode "$MODE" --output-format json >"$o2" 2>/dev/null; echo $? >"$o2.rc" ) &
+  wait
+  n=$((n + 2)); sid=""
+  for i in 1 2; do
+    o="$o1"; [ "$i" = 2 ] && o="$o2"
+    c="$(cat "$o.rc" 2>/dev/null || echo 1)"; [ "$i" = 1 ] && c1="$c" || c2="$c"
+    psid="$(jq -r '.session_id // empty' "$o" 2>/dev/null)"; perr="$(jq -r '.is_error // false' "$o" 2>/dev/null)"
+    [ "$perr" = true ] && { [ "$i" = 1 ] && c1=1 || c2=1; }
+    jq -r '.result // empty' "$o" 2>/dev/null
+    dobby_event "$KEY" "자동 실행 세션 $((n - 2 + i)) 종료 — 검증 동시 실행($( [ "$i" = 1 ] && echo "$b1" || echo "$b2")), 지금 단계 $(phase), 세션 ${psid:-알 수 없음}" 2>/dev/null
+    printf '━━ 세션 %d 끝 · 세션 아이디 %s\n' $((n - 2 + i)) "${psid:-알 수 없음}"
+  done
+  rm -f "$o1" "$o2" "$o1.rc" "$o2.rc"
+  dobby_v2_reconcile "$KEY"
+  [ "$c1" -eq 0 ] && [ "$c2" -eq 0 ] || stop "동시에 돈 검증 세션이 오류로 끝났습니다(종료 코드 $c1, $c2). 이벤트 로그의 세션 아이디로 복기하세요"
+  judged="$(_testrun_judged "$KEY") "
+  while IFS= read -r s; do
+    [ -n "$s" ] || continue
+    case "$judged" in *" $s "*) ;; *) left=1 ;; esac
+  done <<<"$(printf '%s,%s\n' "$l1" "$l2" | tr ',' '\n')"
+  if [ -n "$left" ]; then
+    NOPAR=1; dobby_event "$KEY" "검증 동시 실행 끔 — 함께 돈 묶음에 판정이 빈 시나리오가 남아 한 묶음씩 잇습니다" 2>/dev/null
+  fi
+  ask_open && { dobby_v2_checkpoint "$KEY" >/dev/null 2>&1; return 0; }
+  [ "$(fingerprint)" != "$before" ] || stop "동시에 돈 검증 세션이 아무것도 바꾸지 못했습니다. 상태 문서를 확인하세요"
+  dobby_v2_checkpoint "$KEY" >/dev/null 2>&1
 }
 
 # 이 셸이 띄운 세션은 자동 실행을 또 띄우지 않는다(설계 세션이 끝에 부르는 dobby_v2_autorun 이 아무것도 하지 않게).
@@ -256,7 +306,7 @@ while :; do
         fi
         dobby_v2_wait_mark "$KEY" "$repo" wait-review "$tgt" $((el / 60))
         printf '리뷰봇 리뷰를 기다립니다(%s PR %s, %d분째) · %s\n' "$repo" "$tgt" $((el / 60)) "$(date '+%H:%M')"
-        sleep 120; continue ;;
+        sleep 30; continue ;;
       wait-build)
         [ -z "$extend" ] || { ext_tgt="$tgt"; ext_lim=$(( el + 1800 )); extend=""; }
         lim=1800; [ "$ext_tgt" = "$tgt" ] && lim=$ext_lim
@@ -264,7 +314,7 @@ while :; do
           "빌드가 끝나야 배포 확인으로 넘어갑니다" "터미널에서 확인: gh run view $tgt"; continue; }
         dobby_v2_wait_mark "$KEY" "$repo" wait-build "$tgt" $((el / 60))
         printf '빌드를 기다립니다(%s run %s, %d분째) · %s\n' "$repo" "$tgt" $((el / 60)) "$(date '+%H:%M')"
-        sleep 60; continue ;;
+        sleep 30; continue ;;
     esac
   fi
   st="$(dobby_v2_step "$KEY")"
@@ -292,6 +342,10 @@ while :; do
     *) stop "다음 할 일을 정하지 못했습니다: ${st:-빈 값}" ;;
   esac
   [ "$n" -lt "$MAX" ] || stop "세션 상한(${MAX}개)에 닿았습니다. 상태 문서를 확인하세요"
+  if [ "$stg" = 검증 ] && [ -z "$NOPAR" ] && [ -z "$answered" ] && [ ${#mcp2[@]} -gt 0 ]; then
+    pr="$(dobby_verify_pair "$KEY")"
+    [ "$(printf '%s\n' "$pr" | grep -c .)" -eq 2 ] && { run_pair "$pr"; continue; }
+  fi
 
   n=$((n + 1))
   before="$(fingerprint)"
