@@ -3043,14 +3043,43 @@ dobby_fix_count() {
 DOBBY_REUSE_MAX_CTX=120000
 DOBBY_REUSE_MAX_GAP=300
 
-# _v2_test_passed KEY — 검증 이력 표의 마지막 행이 '완료'이고 실패가 0이면 0.
-_v2_test_passed() {
+# _v2_history_passed KEY — 검증 이력 표의 마지막 행이 '완료'이고 실패가 0이면 0. 어느 커밋을 시험했는지는 보지 않는다.
+_v2_history_passed() {
   awk -F'|' '
     function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
     /^## /{ins=(index($0,"테스트 실행 이력")>0)?1:0; next}
     ins && /^\|/ && $2 !~ /회차|---/ {st=t($4); split(t($5),c,"/")}
     END{exit (st=="완료" && c[2]+0==0)?0:1}' "$(_order_dir "$1")/status.md"
 }
+
+# _v2_tested_commit KEY — 이력 표 마지막 회차의 result.md 에 적힌 시험 커밋. 없으면 빈 출력.
+_v2_tested_commit() {
+  local run
+  run="$(awk -F'|' '
+    function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
+    /^## /{ins=(index($0,"테스트 실행 이력")>0)?1:0; next}
+    ins && /^\|/ && $2 !~ /회차|---/ {d=t($6)}
+    END{print d}' "$(_order_dir "$1")/status.md" 2>/dev/null)"
+  [ -f "$run/result.md" ] || return 0
+  grep -m1 -E '^- \*\*시험 커밋\*\*:' "$run/result.md" | grep -oE '`[0-9a-f]{7,40}`' | head -1 | tr -d '`'
+}
+
+# _v2_tested_tip KEY — 마지막 회차의 시험 커밋이 작업 브랜치 끝 커밋을 담고 있으면 0.
+#   시험 커밋 줄이 없는 옛 회차이거나 그 커밋을 가진 워크트리가 없으면 판정할 수 없어 0 이다.
+_v2_tested_tip() {
+  local c r b p tip
+  c="$(_v2_tested_commit "$1")"; [ -n "$c" ] || return 0
+  while IFS=$'\t' read -r r b p; do
+    [ -d "$p" ] && git -C "$p" cat-file -e "$c^{commit}" 2>/dev/null || continue
+    tip="origin/$b"; git -C "$p" rev-parse -q --verify "$tip" >/dev/null || tip="$b"
+    git -C "$p" merge-base --is-ancestor "$tip" "$c" 2>/dev/null; return $?
+  done < <(_v2_worktrees "$1")
+  return 0
+}
+
+# _v2_test_passed KEY — 마지막 회차가 전부 통과이고, 그 회차가 작업 브랜치의 끝 커밋을 시험했으면 0.
+#   변경 뒤 새 커밋을 아직 시험하지 않았으면 앞 회차가 통과여도 거짓이다.
+_v2_test_passed() { _v2_history_passed "$1" && _v2_tested_tip "$1"; }
 
 # _v2_next_is_fix KEY — 다음 세션이 할 일이 '수정'인가(단계 판정 헬퍼와 같은 답).
 _v2_next_is_fix() {
@@ -5641,6 +5670,8 @@ dobby_v2_next_all() {
           fi
         elif _v2_test_passed "$k"; then
           _v2_release_notice || continue
+        elif _v2_history_passed "$k"; then
+          kind=verify; text="검증 차례 — 마지막 회차는 지금 커밋 전에 시험함"; act=autorun
         elif ! awk -F'|' '/^## /{ins=(index($0,"테스트 실행 이력")>0); next} ins && /^\|/ && $2 !~ /회차|---/ {n++} END{exit n?0:1}' "$f"; then
           if _v2_test_skip "$k"; then grp=notice; kind=verify-skip; text="검증 필요 없음 — 릴리즈 노트 등록 차례"; cmd="/dobby-release $k"
           else kind=verify; text="검증 차례"; act=autorun
@@ -6100,13 +6131,66 @@ _v2_finished() { [ -n "$(_v2_roles_line "$1")" ] && ! _v2_on "$1" 테스터 && _
 #   완성은 사람이 /dobby-resolve 로 해결하거나 /do KEY 변경 … 으로 고치기 전까지 머무는 자리다.
 #   '- **완성**' 줄에 시각과 이유를 남긴다(해결 취소가 이 줄을 보고 완성으로 되돌린다).
 _v2_complete() {
-  local key="$1" why="${2:-할 일을 모두 마침}"
+  local key="$1" why="${2:-할 일을 모두 마침}" gate
+  gate="$(_v2_complete_gate "$key")"
+  if [ -n "$gate" ]; then _v2_complete_hold "$key" "$why" "$gate"; return 0; fi
+  dobby_event "$key" "완성 근거 — $(_v2_complete_basis "$key")" 2>/dev/null
   dobby_phase "$key" 완성
   _v2_set_line "$key" "완성" "$(_now) · $why"
   if [ -n "$(dobby_v2_env "$key")" ]; then dobby_v2_notify "$key" "완성 — $why. 결과를 확인해 주세요" >/dev/null
   else dobby_event "$key" "완성 — $why" 2>/dev/null
   fi
   return 0
+}
+
+# _v2_complete_gate KEY — 완성 전에 사실로 확인한다. 남은 일이 있으면 "단계<TAB>이유" 한 줄, 없으면 빈 출력.
+#   자동 배포 환경이 있으면 끝 커밋이 그 환경에 들어갔는지, 테스터가 켜졌으면 끝 커밋을 시험해 통과했는지 본다.
+_v2_complete_gate() {
+  local key="$1" env r b p
+  env="$(dobby_v2_env "$key")"
+  if [ -n "$env" ] && _v2_on "$key" 배포담당; then
+    while IFS=$'\t' read -r r b p; do
+      [ -d "$p" ] || continue
+      git -C "$p" fetch -q origin 2>/dev/null
+      _v2_in_env "$p" "$b" "$r" "$env" || { printf '배포\t%s 의 끝 커밋이 %s 에 없음\n' "$r" "$env"; return 0; }
+    done < <(_v2_ship_repos "$key")
+  fi
+  if _v2_on "$key" 테스터; then
+    if _testrun_open "$key" >/dev/null; then printf '검증\t시험 회차가 열려 있음\n'
+    elif ! _v2_history_passed "$key"; then printf '검증\t전부 통과한 시험 회차가 없음\n'
+    elif ! _v2_tested_tip "$key"; then printf '검증\t마지막 회차(시험 커밋 %s)가 끝 커밋을 시험하지 않음\n' "$(_v2_tested_commit "$key")"
+    fi
+  fi
+}
+
+# _v2_complete_hold KEY "요청 이유" "단계<TAB>이유" — 완성 대신 남은 일의 단계로 되돌린다. 잠금 안에서 부른다.
+_v2_complete_hold() {
+  local key="$1" why="$2" ph="${3%%$'\t'*}" miss="${3#*$'\t'}"
+  dobby_event "$key" "완성 보류 — $miss (요청 이유: $why) · $(_v2_complete_basis "$key")" 2>/dev/null
+  case "$ph" in
+    배포)
+      dobby_ship_reopen "$key" >/dev/null 2>&1
+      dobby_phase "$key" 배포
+      _v2_set "$key" deploy-agent 대기 "" "$(dobby_v2_env "$key") 배포 차례 (완성 보류 — $miss)" ;;
+    *)
+      dobby_phase "$key" 검증
+      [ -n "$(dobby_v2_env "$key")" ] && _v2_set "$key" deploy-agent 완료 "" "$(dobby_v2_env "$key") 배포 확인"
+      _v2_set "$key" test-agent 대기 "" "검증 차례 (완성 보류 — $miss)" ;;
+  esac
+}
+
+# _v2_complete_basis KEY — 완성 판정에 쓴 값 한 줄: 담당자별 상태 · 저장소별 끝 커밋 · 마지막 시험 커밋.
+_v2_complete_basis() {
+  local key="$1" r s out="" r2 b p
+  while IFS= read -r r; do
+    s="$(_v2_role_slug "$key" "$r")"
+    out="${out:+$out, }$r $(_v2_state "$key" "$s")"
+  done < <(dobby_v2_roles "$key")
+  out="담당자 ${out:-없음}"
+  while IFS=$'\t' read -r r2 b p; do
+    [ -d "$p" ] && out="$out · $r2@$(git -C "$p" rev-parse --short HEAD 2>/dev/null)"
+  done < <(_v2_worktrees "$key")
+  printf '%s · 시험 커밋 %s' "$out" "$(_v2_tested_commit "$key" | cut -c1-11)"
 }
 
 # _v2_complete_msg KEY — 완성 단계에서 단계 판정이 내는 멈춤 이유.
@@ -6249,7 +6333,7 @@ _v2_round_done() { [ -n "$2" ] && ls "$(_order_dir "$1")/reviews/round-$2"/*.md 
 # _v2_last_failed KEY — 마지막 회차가 마감됐고 실패가 있으면 0(열린 회차가 없고, 통과가 아니고, 이력이 있다).
 _v2_last_failed() {
   _testrun_open "$1" >/dev/null && return 1
-  _v2_test_passed "$1" && return 1
+  _v2_history_passed "$1" && return 1
   awk -F'|' '/^## /{ins=(index($0,"테스트 실행 이력")>0); next} ins && /^\|/ && $2 !~ /회차|---/ {n++} END{exit n?0:1}' \
     "$(_order_dir "$1")/status.md" 2>/dev/null
 }
@@ -6368,7 +6452,12 @@ dobby_v2_step() {
       else _dobby_locked "$key" _v2_complete "$key" "켜진 담당자의 일이 모두 끝남"
       fi
     fi
-    printf '멈춤\t%s\n' "$(_v2_complete_msg "$key")"
+    # 완성 관문이 남은 일을 찾아 되돌렸으면 그 일을 낸다
+    case "$(_order_phase "$key")" in
+      완성) printf '멈춤\t%s\n' "$(_v2_complete_msg "$key")" ;;
+      배포) _out 배포 deploy-agent "$(dobby_v2_env "$key") 배포 (완성 보류 뒤)" ship.md ;;
+      *)    _out 검증 test-agent "$(_v2_verify_desc "$key")" verify.md ;;
+    esac
   }
   if _qa_active "$key"; then
     printf '멈춤\tQA 감시가 진행 중입니다. QA 가 끝난 뒤(/dobby-qa stop %s 또는 해결 처리) 이어 가세요\n' "$key"; return 0
@@ -6481,7 +6570,7 @@ dobby_v2_step() {
     보류) _out 설계 analysis-agent "판단 답 반영" answer.md ;;
     완성) printf '멈춤\t%s\n' "$(_v2_complete_msg "$key")" ;;
     해결|종료) printf '멈춤\t끝난 오더입니다(단계 %s)\n' "$ph" ;;
-    완료) _dobby_locked "$key" _v2_complete "$key" "옛 단계값 완료를 옮김"; printf '멈춤\t%s\n' "$(_v2_complete_msg "$key")" ;;
+    완료) _dobby_locked "$key" _v2_complete "$key" "옛 단계값 완료를 옮김"; _out_done ;;
     *) printf '멈춤\t모르는 단계값입니다: %s. 상태 문서를 확인해 주세요\n' "$ph" ;;
   esac
 }
@@ -6758,6 +6847,8 @@ _dobby_v2_end_u() {
       if [ "$stage" = 실패분석 ]; then
         if [ -z "$(_v2_redo "$key")" ]; then _v2_set "$key" test-agent 대기 "" "변경 ${m:-?} 반영 뒤 다시 검증"; fi
         _v2_del_line "$key" "다시 설계"
+      elif _v2_on "$key" 테스터 && [ "$(_v2_state "$key" test-agent)" = 완료 ]; then
+        _v2_set "$key" test-agent 대기 "" "변경 ${m:-?} 반영 뒤 다시 검증"
       fi ;;
     실패분석:돌려보냄)
       [ -n "$(_v2_redo "$key")" ] || { _rej "검증 실패 분석에서는 쓰지 않는 결과입니다. 변경접수·재배포·재검증 가운데 하나로 끝내세요"; return 1; }
