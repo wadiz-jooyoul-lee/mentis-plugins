@@ -5846,14 +5846,17 @@ _v2_roles_line() {
   sed -nE 's/^[ \t]*-[ \t]*\*\*담당자\*\*:[ \t]*(.*)$/\1/p' "$(_order_dir "$1")/status.md" 2>/dev/null | head -1
 }
 
-# dobby_v2_roles KEY — 켜진 담당자를 한 줄에 하나씩 낸다(정해진 순서). 담당자 줄이 없으면 다섯.
+# dobby_v2_roles KEY — 켜진 담당자를 한 줄에 하나씩 낸다(정해진 순서).
+#   담당자 줄이 없거나 아는 이름을 하나도 못 읽으면 다섯으로 본다(빈 목록이면 완성 판정이 모두 통과해 버린다).
 dobby_v2_roles() {
-  local line r; line="$(_v2_roles_line "$1")"
-  if [ -z "$line" ]; then printf '기획자\n개발자\n리뷰어\n배포담당\n테스터\n'; return 0; fi
-  for r in $DOBBY_V2_ROLES; do
-    printf '%s\n' "$line" | tr ',' '\n' | sed 's/^[ \t]*//;s/[ \t]*$//' | grep -qxF -- "$r" && printf '%s\n' "$r"
-  done
-  return 0
+  local line r out=""; line="$(_v2_roles_line "$1")"
+  if [ -n "$line" ]; then
+    for r in 기획자 개발자 산출자 리뷰어 배포담당 테스터; do
+      printf '%s\n' "$line" | tr ',' '\n' | sed 's/^[ \t]*//;s/[ \t]*$//' | grep -qxF -- "$r" && out="$out$r"$'\n'
+    done
+  fi
+  [ -n "$out" ] && { printf '%s' "$out"; return 0; }
+  printf '기획자\n개발자\n리뷰어\n배포담당\n테스터\n'
 }
 
 # _v2_has KEY 담당자 — 그 담당자가 켜져 있으면 0.
