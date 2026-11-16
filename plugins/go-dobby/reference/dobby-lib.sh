@@ -1053,13 +1053,52 @@ _tc_skip_note() {
   fi
 }
 
+# dobby_deps_prefetch KEY 작업폴더 — pnpm 저장소(pnpm-lock.yaml 이 있음)의 의존성을 설치한다. 타입 검사를 켠 오더만 쓴다(dobby_typecheck 가 부른다).
+#   `$META/{키}/.deps-ready` 의 잠금 파일 지문이 같고 node_modules 가 있으면 설치하지 않는다. 같은 폴더를 다른 세션이 설치 중이면 기다린다.
+#   반환: 0 준비됨(pnpm 저장소가 아니어도 0) · 2 설치 실패.
+dobby_deps_prefetch() {
+  local key="$1" top lock fp dir ready lk log pid t0 msg waited=0
+  [ -n "$key" ] && [ -d "$2" ] || { _die "사용법: dobby_deps_prefetch KEY 작업폴더"; return 2; }
+  top="$(git -C "$2" rev-parse --show-toplevel 2>/dev/null)" || { _die "$2 은 git 작업 폴더가 아닙니다"; return 2; }
+  lock="$top/pnpm-lock.yaml"
+  [ -f "$lock" ] || { printf '의존성 설치 건너뜀 — pnpm 저장소가 아닙니다(%s)\n' "$top"; return 0; }
+  dir="$(_order_dir "$key")"; mkdir -p "$dir" || return 2
+  ready="$dir/.deps-ready"; log="$dir/.deps-install.log"
+  lk="$dir/.deps-lock-$(printf '%s' "$top" | shasum | cut -c1-12)"
+  until mkdir "$lk" 2>/dev/null; do
+    pid="$(cat "$lk/pid" 2>/dev/null)"
+    if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then rm -rf "$lk"; continue; fi
+    [ "$waited" -eq 0 ] && printf '다른 세션이 의존성을 설치하는 중입니다. 끝나기를 기다립니다(%s)\n' "$top" >&2
+    [ "$waited" -ge 1800 ] && { _die "30분을 기다려도 다른 설치가 끝나지 않았습니다. $lk 를 확인해 주세요"; return 2; }
+    sleep 5; waited=$((waited + 5))
+  done
+  printf '%s\n' "$$" > "$lk/pid"
+  fp="$(shasum "$lock" | cut -c1-40)"
+  if [ -d "$top/node_modules" ] && grep -qF "$fp $top " "$ready" 2>/dev/null; then
+    rm -rf "$lk"
+    printf '의존성 설치 건너뜀 — 잠금 파일 지문이 같습니다(%s)\n' "$top"
+    return 0
+  fi
+  if [ -f "$top/node_modules/.modules.yaml" ] && [ "$top/node_modules/.modules.yaml" -nt "$lock" ]; then
+    msg="의존성 설치 건너뜀 — 이미 설치돼 있습니다($top)"
+  else
+    t0=$(date +%s)
+    ( cd "$top" && CI=true NODE_ENV=development pnpm install --frozen-lockfile >"$log" 2>&1 ) \
+      || { rm -rf "$lk"; _die "의존성 설치에 실패했습니다(기록: $log): cd $top && pnpm install --frozen-lockfile"; return 2; }
+    msg="의존성 설치 $(( $(date +%s) - t0 ))초($top)"
+  fi
+  { grep -vF " $top " "$ready" 2>/dev/null; printf '%s %s %s\n' "$fp" "$top" "$(_now)"; } > "$ready.tmp" && mv "$ready.tmp" "$ready"
+  rm -rf "$lk"
+  printf '%s\n' "$msg"
+}
+
 # dobby_typecheck KEY 앱폴더 [base] — 앱폴더(tsconfig.json 이 있는 폴더)를 타입 검사해 기준선보다 늘어난 오류만 센다.
 #   타입 검사가 꺼진 오더(기본)는 검사하지 않고 "건너뜀" 줄(변경이 크면 "권함" 줄도)을 내고 0 을 돌려준다.
 #   출력 첫 줄: "타입 검사 {앱} — 새 오류 N건 (기준선 B건, 지금 C건, 없어진 오류 G건) · {저장된 결과|검사 S초}". 새 오류가 있으면 그 줄들(30줄까지).
 #   반환: 0 새 오류 없음 · 1 새 오류 있음 · 2 검사를 못 함(사유는 표준 오류).
 #   base: 기준선만 만든다(설계 세션이 고치기 전에 백그라운드로 부른다). 비교 줄은 내지 않는다.
 #   기준선이 없고 작업 폴더에 변경이 있으면 변경을 잠시 치우고(git stash -u) 검사한 뒤 되돌린다. 되돌린 뒤 지문이 다르면 멈춘다.
-#   의존성이 없으면 먼저 설치한다(CI=true NODE_ENV=development pnpm install --frozen-lockfile).
+#   의존성 설치는 dobby_deps_prefetch 로 한다(잠금 파일 지문이 같으면 건너뜀).
 dobby_typecheck() {
   local key="$1" app="$2" mode="${3:-}" top rel slug dir info cur base_t cur_t t0 took="저장된 결과" n_b n_c n_new n_gone new TC_BIN
   [ -n "$key" ] && [ -f "$app/tsconfig.json" ] || { _die "사용법: dobby_typecheck KEY 앱폴더 [base] (앱폴더에 tsconfig.json 이 있어야 합니다)"; return 2; }
@@ -1073,14 +1112,9 @@ dobby_typecheck() {
   fi
   dir="$(_order_dir "$key")/.typecheck"; mkdir -p "$dir" || return 2
   info="$dir/$slug.tsbuildinfo"
+  dobby_deps_prefetch "$key" "$top" >&2 || return 2
   TC_BIN="$app/node_modules/.bin/tsc"; [ -x "$TC_BIN" ] || TC_BIN="$top/node_modules/.bin/tsc"
-  if [ ! -x "$TC_BIN" ]; then
-    printf '의존성 설치 중(%s)…\n' "$top" >&2
-    ( cd "$top" && CI=true NODE_ENV=development pnpm install --frozen-lockfile >/dev/null 2>&1 ) \
-      || { _die "의존성 설치에 실패했습니다: cd $top && pnpm install --frozen-lockfile"; return 2; }
-    TC_BIN="$app/node_modules/.bin/tsc"; [ -x "$TC_BIN" ] || TC_BIN="$top/node_modules/.bin/tsc"
-    [ -x "$TC_BIN" ] || { _die "설치 뒤에도 tsc 를 찾지 못했습니다($top/node_modules/.bin/tsc)"; return 2; }
-  fi
+  [ -x "$TC_BIN" ] || { _die "설치 뒤에도 tsc 를 찾지 못했습니다($top/node_modules/.bin/tsc)"; return 2; }
   base_t="$(git -C "$top" rev-parse 'HEAD^{tree}')" || return 2
   cur_t="$(_tc_tree "$top")" || { _die "작업 폴더 지문을 만들지 못했습니다"; return 2; }
 
@@ -7753,6 +7787,8 @@ DOBBY_PERF_BASE='{"구현":{"min":6.0,"cacheRead":2350000,"input":90000,"output"
 "배포":{"min":2.1,"cacheRead":1280000,"input":50000,"output":7000},
 "검증":{"min":6.3,"cacheRead":8380000,"input":110000,"output":26000}}'
 
+DOBBY_PERF_V_DEPS=0.2.151   # 의존성 설치 줄이기·검증 화면 확인 묶기가 들어간 판
+
 # _perf_session SID 파일 — 세션 기록 하나에서 측정에 쓸 사실만 뽑는다(사건 시각·종류, 응답별 토큰, 타입 검사·설치 명령과 걸린 시간).
 #   사건 종류: a 모델 응답, r 도구 결과, h 사람이 친 줄, m 그 밖.
 _perf_session() {
@@ -7778,7 +7814,9 @@ _perf_session() {
            | select(.type? == "tool_use" and .name == "Bash") | {id, t:$t, cmd:(.input.command // "")}
            | select(.cmd | test("(^|[ /;&|(])tsc( |$)|dobby_typecheck|pnpm install|npm install|yarn install"))
            | . + {end:($R[.id].t // null), out:($R[.id].out // "")}
-           | {t, end, out, kind:(if (.cmd | test("dobby_typecheck|(^|[ /;&|(])tsc( |$)")) then "tc" else "install" end)}]}' "$2"
+           | {t, end, out, kind:(if (.cmd | test("dobby_typecheck|(^|[ /;&|(])tsc( |$)")) then "tc" else "install" end)}],
+       ver:([$E[] | select(.type == "assistant") | .message.content[]? | select(.type? == "tool_use" and .name == "Bash")
+           | (.input.command // "") | scan("go-dobby/(0\\.[0-9]+\\.[0-9]+)/") | .[0] | split(".") | map(tonumber)] | max)}' "$2"
 }
 
 # dobby_perf_measure KEY — 오더 하나의 시간·토큰을 세션 기록으로 재서 perf.json 을 새로 쓴다(summary 만 빈칸). 요약을 출력한다.
@@ -7817,7 +7855,7 @@ dobby_perf_measure() {
     --argjson scen "${scen:-0}" --arg pm "$pm" \
     --arg tcOn "$(grep -m1 '^- \*\*타입 검사\*\*:' "$d/status.md" 2>/dev/null)" \
     --arg docLine "$(grep -m1 '^- \*\*결과 문서\*\*:' "$d/status.md" 2>/dev/null)" \
-    --arg deps "$(printf '%s\n' "$rows" | cut -f4 | awk 'NF && !s[$0]++' | while read -r p; do [ -e "$p/.deps-ready" ] && echo "$p"; done; [ -e "$d/.deps-ready" ] && echo "$d")" '
+    --argjson vnew "[${DOBBY_PERF_V_DEPS//./,}]" '
     def r1: if . == null then null else (. * 10 | round / 10) end;
     def mins: if . == null then null else (. / 60 | r1) end;
     def loc: strflocaltime("%Y-%m-%d %H:%M:%S");
@@ -7851,7 +7889,7 @@ dobby_perf_measure() {
            human:([$e[] | select(.k == "h")] | length),
            modelSec:([$gaps[] | select(.k == "a") | .g] | add // 0), toolSec:([$gaps[] | select(.k == "r") | .g] | add // 0),
            tok:{cacheRead:($c | map(.cr) | add // 0), input:($c | map(.inp) | add // 0), output:($c | map(.out) | add // 0)},
-           tools:$tl}
+           tools:$tl, ver:($s.ver // null)}
         | . + {interactive:(.human >= 2)}
         | . + {sleepSec:(if .start == null then 0 else slept(.start; .end) end)}
         | . + {sec:(if .start == null then null elif .interactive then .modelSec + .toolSec else .end - .start - .sleepSec end)}] as $G
@@ -7889,6 +7927,11 @@ dobby_perf_measure() {
         | ([$V[$a][1], $V[$b][1]] | min) - ([$V[$a][0], $V[$b][0]] | max) | select(. > 0)] | add // 0) as $OVL
     | [$A[] | select(.group == "구현") | .tools[] | select(.kind == "install" and .end != null) | .end - .t] as $INST
     | ([$A[] | select(.group == "검증") | .calls] | add // 0) as $VCALLS
+    # 의존성 설치 줄이기와 검증 화면 확인 묶기는 그 단계 세션이 모두 적용 판 이상으로 돌았을 때만 적용으로 본다
+    | [$A[] | select(.group == "구현")] as $IMPL
+    | [$A[] | select(.group == "검증")] as $VERI
+    | (($IMPL | length) > 0 and all($IMPL[]; .ver != null and .ver >= $vnew)) as $depsOn
+    | (($VERI | length) > 0 and all($VERI[]; .ver != null and .ver >= $vnew)) as $scrOn
     | [$A[] | select(.group == "통합")] as $INTEG
     | ($A | map([.start, .end]) | merged) as $AU
     | ($AU | map(slept(.[0]; .[1])) | add // 0) as $sleepAll
@@ -7957,14 +8000,17 @@ dobby_perf_measure() {
           evidence:"통합 세션 \($INTEG | length)개, 합계 \($INTEG | map(.sec) | add // 0 | mins)분",
           savedMin:(if $docLine != "" then ((1.6 * ($INTEG | length)) - ($INTEG | map(.sec) | add // 0) / 60 | r1) else 0 end), tokenDelta:null,
           note:(if $docLine != "" then "추정 — 통합 세션 하나 1.6분과 비교했습니다" else "아직 적용 전 개선입니다. 위 값은 나중 비교용입니다" end)},
-         {id:"deps-preinstall", name:"의존성 미리 설치", applied:($deps != ""),
-          evidence:"구현 세션의 설치 \($INST | length)번, 합계 \($INST | add // 0 | mins)분",
-          savedMin:(if $deps != "" then (0.4 - ($INST | add // 0) / 60 | r1) else 0 end), tokenDelta:null,
-          note:(if $deps != "" then "추정 — 오더당 0.4분과 비교했습니다" else "아직 적용 전 개선입니다. 위 값은 나중 비교용입니다" end)},
-         {id:"verify-batch-screen", name:"화면 확인 묶기", applied:false,
+         {id:"deps-preinstall", name:"의존성 설치 줄이기", applied:$depsOn,
+          evidence:"구현 세션 \($IMPL | length)개의 설치 \($INST | length)번, 합계 \($INST | add // 0 | mins)분",
+          savedMin:(if $depsOn then (0.4 - ($INST | add // 0) / 60 | r1) else 0 end), tokenDelta:null,
+          note:(if $depsOn then "추정 — 오더당 0.4분과 비교했습니다" else "구현 세션이 개선 전 판으로 돌았습니다. 위 값은 나중 비교용입니다" end)},
+         {id:"verify-batch-screen", name:"검증 화면 확인 묶기", applied:$scrOn,
           evidence:(if $scen > 0 then "검증 응답 \($VCALLS)번, 판정한 시나리오 \($scen)개, 시나리오 하나당 \($VCALLS / $scen | r1)번"
                     else "판정한 시나리오가 없음" end),
-          savedMin:0, tokenDelta:null, note:"아직 적용 전 개선입니다. 기준은 시나리오 하나당 응답 약 13번입니다"}],
+          savedMin:(if $scrOn and $scen > 0 then ((13 * $scen - $VCALLS) * 2.6 / 60 | r1) elif $scrOn then null else 0 end), tokenDelta:null,
+          note:(if $scrOn and $scen > 0 then "추정 — 시나리오 하나당 응답 13번, 응답 하나 2.6초와 비교했습니다"
+                elif $scrOn then "판정한 시나리오가 없어 잴 수 없습니다"
+                else "검증 세션이 개선 전 판으로 돌았습니다. 기준은 시나리오 하나당 응답 약 13번입니다" end)}],
        sessions:[$GI[] | . as $g | {id:.sid, stage, group, interactive, missing,
            start:(if .start then (.start | loc) else null end), end:(if .end then (.end | loc) else null end),
            min:(.sec | mins), sleepMin:(.sleepSec | mins), calls, modelMin:(.modelSec | mins), toolMin:(.toolSec | mins), tokens:.tok,
