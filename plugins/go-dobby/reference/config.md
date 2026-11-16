@@ -62,7 +62,7 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 | `dobby_testrun_current KEY [전체시나리오수] [환경] [시험커밋]` | dobby-test 묶음 모드 시작 | 이력 표의 마지막 회차가 `테스트중` 이면 그 폴더, 아니면 `dobby_testrun_new` 로 새 회차(경로 stdout) |
 | `dobby_verify_next KEY` | /do 검증 세션 시작·끝 | 판정이 빈 시나리오가 든 첫 검증 묶음 `묶음<TAB>S1,S2`(빈 것만). 다 찼으면 `done`. 묶음은 테스트 계획의 `## 검증 묶음` 표를 따르고, 표에 없는 시나리오는 번호 순서로 4개씩 붙인다. `## 검증 범위` 밖 시나리오는 빼고, 비는 묶음은 내지 않는다 |
 | `_testplan_scope KEY [환경] [뺄회차폴더]` | 묶음·회차 헬퍼 안 | 계획의 시나리오마다 `S1<TAB>in` 또는 `S1<TAB>out<TAB>이유`. `## 검증 범위` 표의 `검증함` 행만 대상이고, 표가 없거나 `전체` 면 모두 대상. 환경을 주면 그 환경의 마지막 판정이 PASS 가 아닌 것(보류·실패·기록 없음)도 대상 |
-| `_testrun_last KEY 환경 [뺄회차폴더]` | 범위 헬퍼 안 | 같은 환경 회차를 최신순으로 훑어 시나리오마다 마지막 판정(SKIP 포함)을 `S1<TAB>판정` 으로 낸다 |
+| `_testrun_last KEY 환경 [뺄회차폴더]` | 범위 헬퍼 안 | 같은 환경 회차를 최신순으로 훑어 시나리오마다 마지막 판정(SKIP 포함, 범위 밖으로 깔린 `SKIP(범위)` 는 건너뜀)을 `S1<TAB>판정` 으로 낸다 |
 | `dobby_testplan_scope_all KEY "사람 지시"` | `/do {키} 전체 테스트`, 변경 접수에서 전체 테스트 지시 | `## 검증 범위` 절을 `전체` 로 덮어쓰고, 열린 회차의 `SKIP(범위)` 행 판정·근거를 비운다 |
 | `dobby_testplan_slice KEY S1,S2` | /do 검증 세션 | 테스트 계획에서 제목·`## 사전 준비`·`## 영향 번들` 과 그 시나리오 절만 출력. 그 밖의 `##` 절은 나가지 않으므로 공통 지시는 `## 사전 준비` 아래에 둔다 |
 | `dobby_ship_pr KEY 워크트리 브랜치 환경 "제목" "본문" ["이전 PR 의 지적과 처리 표"]` | dobby-ship 2단계 | PR 생성(번호 stdout). **환경이 dev·rc1·rc4·stage 가 아니면·그 저장소에 그 환경이 없으면·미커밋이 남아 있으면 거부**, 이미 열린 PR 은 재사용. 저장소는 워크트리에서 읽고 **베이스 브랜치를 저장소에 맞게 옮긴다**(com.wadiz.web 의 dev → `cloud_dev`). 리뷰봇이 있는 저장소(wadiz-frontend)의 dev 외 환경에만 `--reviewer wadiz-fe/fe1-team` 자동 부착 |
