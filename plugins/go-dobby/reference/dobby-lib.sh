@@ -804,7 +804,7 @@ dobby_testrun_current() {
 }
 
 # _testrun_last KEY 환경 [뺄회차폴더] — 같은 환경의 회차를 최신순으로 훑어 시나리오마다 마지막 판정을 "S1<TAB>판정" 으로 낸다.
-# 빈 칸만 건너뛰고 SKIP 도 판정으로 친다. 환경 줄이 다른 회차는 보지 않는다.
+# 빈 칸과 SKIP(범위)(시험하지 않은 범위 밖 행)는 건너뛰고, 그 밖의 SKIP 은 판정으로 친다. 환경 줄이 다른 회차는 보지 않는다.
 _testrun_last() {
   local key="$1" env="$2" skip="${3%/}" run seen=" " id v
   [ -n "$env" ] || return 0
@@ -818,7 +818,7 @@ _testrun_last() {
     done < <(awk -F'|' '
       function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
       /dobby:scenarios/ { m = 1; next }
-      m && /^\|/ { if (!h) { h = 1; next } id = t($2); if (id ~ /^S[0-9]+$/ && t($8) != "") print id "\t" t($8); next }
+      m && /^\|/ { if (!h) { h = 1; next } id = t($2); if (id ~ /^S[0-9]+$/ && t($8) != "" && t($8) != "SKIP(범위)") print id "\t" t($8); next }
       m && h && !/^\|/ { m = 0 }' "$run/result.md")
   done
 }
