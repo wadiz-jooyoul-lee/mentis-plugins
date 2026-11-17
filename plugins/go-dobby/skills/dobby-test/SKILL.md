@@ -222,10 +222,12 @@ window.__dobbyMark = (window.dataLayer || []).length;
 ```markdown
 | S2 | C2 | /b | 레이아웃 | 안 겹침 | 겹침 | FAIL | 아래 그림 — 버튼이 제목을 덮는다 |
 
-![S2 버튼이 제목을 덮음](s2-overlap.png)
+![S2 2단계 — 버튼이 제목을 덮음](s2-overlap.webp)
 ```
 
 띄우면 파일 이름은 그림이 있는 자리에 적히므로 근거 칸에 또 적을 필요가 없다.
+
+**그림 설명은 `S{번호} {단계}단계 — {무엇을 보라는 것인지}` 로 시작한다.** 여러 시나리오에 걸치면 `S72·S99 1단계 — …` 처럼 번호를 모두 적는다. 대시보드는 「—」 앞의 `S번호` 로 그림을 시나리오 표의 그 행에 붙이고, 설명을 그림 아래에 보여 준다. 번호가 없으면 어느 시험의 그림인지 알 수 없다.
 
    - **`조건` 칸에는 `C` 번호만 적는다**(`C1`, 여럿이면 `C1·C2`). 조건 문장을 옮겨 적지 않는다.
      이 시나리오가 어느 해결 조건을 확인하는지 대는 칸이고, 대시보드가 이 번호로 "조건 3가지 중
@@ -272,7 +274,7 @@ window.__dobbyMark = (window.dataLayer || []).length;
 6. **탭 제목에 이슈 키를 붙이기로 한다**: 아래 6-1의 `initScript` 를 그대로 쓴다. 테스트가 여러 개 동시에 돌 때 **어느 창이 어느 이슈인지** 알 수 없어서다.
 
 #### 6-1. 시나리오 루프 (각 시나리오 4스텝 한 세트)
-1. **조작**: `navigate_page`·`take_snapshot`·`click`/`fill`. 리다이렉트·상태코드는 `list_network_requests`(`includePreservedRequests: true`)로 확인. 화면은 `take_screenshot`으로 결과 폴더에 저장(확인용이다 — **근거로 쓰려면 본문에 띄워야 한다.** 띄우지 않은 그림은 마감 때 지워진다).
+1. **조작**: `navigate_page`·`take_snapshot`·`click`/`fill`. 리다이렉트·상태코드는 `list_network_requests`(`includePreservedRequests: true`)로 확인. 화면은 `take_screenshot`으로 결과 폴더에 저장하되 **`format: "webp"`, `quality: 80` 으로 찍고 파일 이름도 `.webp` 로 끝낸다**(png 는 같은 화면이 jpeg·webp 보다 수 배 크다. 실측 그림 267개: png 그대로 161.8MB, webp 품질 80 이면 24.2MB)(확인용이다 — **근거로 쓰려면 본문에 띄워야 한다.** 띄우지 않은 그림은 마감 때 지워진다).
    - **⛔ `navigate_page` 를 부를 때마다 `initScript` 로 탭 제목에 이슈 키를 붙인다.** 창을 여러 개 띄워 놓으면 어느 것이 어느 이슈의 테스트인지 알 수 없다.
 
      ```js
@@ -325,7 +327,7 @@ window.__dobbyMark = (window.dataLayer || []).length;
       기대  조건 충족 시 배지가 보인다
       실제  배지 없음 (콘솔 TypeError: coupon is undefined)
       재현  /funding/12345 → 쿠폰 탭 → 새로고침
-      화면  test-runs/20260923-0710/s4-fail.png
+      화면  test-runs/20260923-0710/s4-fail.webp
 
 ■ 보류 2건 — 왜 못 했나
   S7  구글 로그인 연동    SKIP(환경)  계정 선택창이 브라우저 밖(FedCM)이라 조작 불가
