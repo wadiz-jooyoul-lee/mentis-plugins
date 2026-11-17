@@ -3420,7 +3420,8 @@ dobby_v2_env() {
 dobby_v2_set_env() {
   local key="$1" env="$2" f
   case "$key" in TASK-*) _die "TASK- 오더는 자동 배포를 하지 않는다(통합에서 PR 을 만들고 끝난다): $key"; return 1 ;; esac
-  _v2_android "$key" && { _die "안드로이드 오더는 배포하지 않는다 — 전체 실행은 dobby_v2_set_device 로 적는다: $key"; return 1; }
+  # 안드로이드 오더는 배포가 없다 — 화면의 '배포까지' 버튼도 전체 실행(기기 시험까지)으로 받는다
+  _v2_android "$key" && { dobby_v2_set_device "$key"; return; }
   _ship_has "$env" "$DOBBY_SHIP_MERGE_ENVS" || { _die "자동 배포 환경은 dev·rc1·rc4 중 하나다: '$env'"; return 1; }
   f="$(_order_dir "$key")/status.md"
   [ -f "$f" ] || { _die "$key 의 상태 문서가 없습니다"; return 1; }
@@ -5956,6 +5957,8 @@ dobby_v2_next_all() {
           fi
         elif _v2_test_passed "$k"; then
           _v2_release_notice || continue
+        elif _v2_android "$k" && ! dobby_v2_device "$k" && ! _v2_last_failed "$k"; then
+          kind=verify; text="기기 시험 차례 — 기기를 연결하고 /dobby-test $k"; cmd="/dobby-test $k"
         elif _v2_history_passed "$k"; then
           kind=verify; text="검증 차례 — 마지막 회차는 지금 커밋 전에 시험함"; act=autorun
         elif ! awk -F'|' '/^## /{ins=(index($0,"테스트 실행 이력")>0); next} ins && /^\|/ && $2 !~ /회차|---/ {n++} END{exit n?0:1}' "$f"; then

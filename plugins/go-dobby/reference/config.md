@@ -68,7 +68,7 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 | `dobby_android_check KEY 작업폴더` | /do 구현·수정(wadiz-android) | 기준 브랜치 대비 바뀐 모듈만 `compileDebugKotlin` 하고, 바뀐 코드와 짝인 `{클래스}Test` 만 돌린다. 전체 빌드·lint 는 하지 않는다. 그래들 출력은 `$META/{키}/gradle/check-{시각}.log` 에 두고 통과 요약이나 실패 원인 줄만 낸다. 반환 0 통과 · 1 실패 · 2 준비 안 됨 |
 | `dobby_android_env 작업폴더` | 위 헬퍼와 `dobby_android_install` 안 | JDK 17~21 을 고르고(안드로이드 스튜디오 내장 우선), 없으면 `local.properties` 를 만들고, GitHub Packages 토큰이 없으면 gh 토큰(`read:packages` 권한이 있을 때)을 넘긴다. 토큰이 없으면 앱(:app) 빌드만 불가로 표시한다 |
 | `dobby_android_install KEY 작업폴더` | 검증 스킬 기기 시험(wadiz-android) | 연결된 기기에 `:app:installDebug`. 기기에 rc4 가 아닌 서버가 저장돼 있으면 앱 데이터를 지운다. 반환 0 설치 · 1 빌드 실패 · 2 준비 안 됨 · 3 기기 없음 · 4 앱 빌드 권한 없음 |
-| `dobby_v2_set_device KEY` · `dobby_v2_device KEY` | /do 설계(wadiz-android "전체 실행") · run.sh | 상태 문서에 `- **기기 시험**: 자동` 줄을 적는다/있는지 본다. 이 줄이 있으면 자동 실행이 통합 뒤 기기 시험까지 간다. 안드로이드 오더만 받고, `dobby_v2_unset_env` 가 함께 지운다 |
+| `dobby_v2_set_device KEY` · `dobby_v2_device KEY` | /do 설계(wadiz-android "전체 실행") · run.sh | 상태 문서에 `- **기기 시험**: 자동` 줄을 적는다/있는지 본다. 이 줄이 있으면 자동 실행이 통합 뒤 기기 시험까지 간다. 안드로이드 오더만 받고, `dobby_v2_unset_env` 가 함께 지운다. 안드로이드 오더에 `dobby_v2_set_env` 를 부르면 이 줄을 적는다 |
 | `dobby_android_ui [글자]` · `dobby_android_shot 결과폴더 이름` · `dobby_android_log [api\|crash\|정규식]` | 검증 스킬 기기 시험 | 화면 요소를 '글자 \| 아이디 \| 설명 \| 좌표' 로 추려 내기, 화면 갈무리를 webp 로 남기기, 기기 로그에서 서버 응답·강제 종료만 골라 내기 |
 | `dobby_perf_measure KEY` | dobby-perf | 오더의 세션 기록으로 자동 실행 시간·토큰·개선 항목별 적용 여부와 줄어든 시간을 재서 `perf.json` 을 새로 쓴다(`summary` 만 빈칸). 사람과 대화한 세션(사람이 친 줄 2개 이상)과 컴퓨터가 잠든 구간은 합계에서 빼고 따로 둔다. 기준값은 `skills/do/speedup.md` 1절 |
 | `dobby_perf_put KEY 파일` | dobby-perf | 모델이 쓴 해석(`summary`)만 `perf.json` 에 합친다. 다른 칸이 들어 있으면 거부한다 |
