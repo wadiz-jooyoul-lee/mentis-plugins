@@ -6775,14 +6775,19 @@ dobby_android_ui() {
 }
 
 # dobby_android_shot 결과폴더 이름 — 기기 화면을 {결과폴더}/{이름}.webp(품질 80)로 남기고 경로를 낸다.
+#   화면이 여럿인 기기(접는 폰)는 앱이 그려지는 화면을 골라 찍는다. 반환 0 성공 · 1 실패 · 3 기기 없음.
 dobby_android_shot() {
-  local dir="$1" name="${2%.webp}" s
+  local dir="$1" name="${2%.webp}" s id png
   [ -d "$dir" ] && [ -n "$name" ] || { _die "쓰임: dobby_android_shot 결과폴더 이름"; return 1; }
   s="$(dobby_android_device)" || { echo "기기 없음"; return 3; }
-  adb -s "$s" exec-out screencap -p > "$dir/$name.png" || return 1
-  if cwebp -quiet -q 80 "$dir/$name.png" -o "$dir/$name.webp" 2>/dev/null; then rm -f "$dir/$name.png"; printf '%s\n' "$dir/$name.webp"
-  else printf '%s\n' "$dir/$name.png"
+  id="$(adb -s "$s" shell dumpsys display 2>/dev/null | perl -ne 'if (/isActive=true, displayId=0, uniqueId=.local:(\d+)/) { print "$1"; exit }')"
+  png="$dir/$name.png"
+  adb -s "$s" exec-out screencap -p ${id:+-d "$id"} > "$png" || { rm -f "$png"; return 1; }
+  if [ "$(head -c 4 "$png" | od -An -tx1 | tr -d ' \n')" != "89504e47" ]; then
+    echo "갈무리 실패: $(head -c 120 "$png" | tr -d '\0' | head -1)"; rm -f "$png"; return 1
   fi
+  cwebp -quiet -q 80 "$png" -o "$dir/$name.webp" 2>/dev/null || { echo "webp 변환 실패: $png"; return 1; }
+  rm -f "$png"; printf '%s\n' "$dir/$name.webp"
 }
 
 # dobby_android_log [api|crash|정규식] [줄 수] — 기기 로그에서 그 줄만 끝부분을 낸다. api 는 앱의 서버 응답 기록, crash 는 강제 종료·응답 없음.
