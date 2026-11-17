@@ -733,10 +733,11 @@ _release_field() {
     "$1" > "$1.tmp" && mv "$1.tmp" "$1"
 }
 
-# dobby_release_init 날짜 요일 [페이지주소] — 목록 파일을 만든다. 이미 있으면 상태만 '진행 중'으로 되돌린다.
+# dobby_release_init 날짜 요일 [페이지주소] [정기배포|일간배포] — 목록 파일을 만든다. 이미 있으면 상태만 '진행 중'으로 되돌린다.
 dobby_release_init() {
-  local d="$1" wd="$2" page="${3:-}" f
-  printf '%s' "$d" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' || { _die "쓰임: dobby_release_init YYYY-MM-DD 요일 [페이지주소]"; return 1; }
+  local d="$1" wd="$2" page="${3:-}" kind="${4:-정기배포}" f
+  printf '%s' "$d" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' || { _die "쓰임: dobby_release_init YYYY-MM-DD 요일 [페이지주소] [정기배포|일간배포]"; return 1; }
+  case "$kind" in 정기배포|일간배포) ;; *) _die "종류는 정기배포·일간배포 중 하나: $kind"; return 1 ;; esac
   f="$(_release_file "$d")"
   if [ -f "$f" ]; then
     _release_field "$f" "상태" "진행 중"; _release_field "$f" "끝" ""
@@ -745,7 +746,7 @@ dobby_release_init() {
   fi
   mkdir -p "$(dirname "$f")"
   {
-    printf '# %s(%s) 정기배포 stage 검증\n\n' "$d" "$wd"
+    printf '# %s(%s) %s stage 검증\n\n' "$d" "$wd" "$kind"
     printf -- '- **배포일**: %s\n- **요일**: %s\n- **릴리즈 노트**: %s\n- **상태**: 진행 중\n- **시작**: %s\n- **끝**: \n\n' \
       "$d" "$wd" "$page" "$(_now)"
     printf '## 이슈\n\n<!-- dobby:release-issues -->\n'

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""WEB Release Note 의 요일별 정기배포 표에서 내 행을 찾고, stage 배포확인 칸만 체크하고, 전후를 검증한다.
+"""WEB Release Note 의 요일별 배포(화요일 정기·수/목/금 일간) 표에서 내 행을 찾고, stage 배포확인 칸만 체크하고, 전후를 검증한다.
 
 사용법
-  stage_note.py mine   <body.html> <화|목> <accountId>               내 행 목록(JSON)
-  stage_note.py build  <body.html> <화|목> <edits.json> <행localId>...  stage 칸 체크 수정 파일 + 계획(JSON)
+  stage_note.py mine   <body.html> <화|수|목|금> <accountId>         구역 제목과 내 행 목록(JSON)
+  stage_note.py build  <body.html> <화|수|목|금> <edits.json> <행localId>...  stage 칸 체크 수정 파일 + 계획(JSON)
   stage_note.py verify <before.html> <after.html> <행localId>...       바뀐 곳이 그 행들의 stage 칸뿐인지 (실패 시 종료 코드 1)
 """
 import html
@@ -23,13 +23,18 @@ def text(fragment):
     return re.sub(r"\s+", " ", t).strip()
 
 
+DAYS = ("화", "수", "목", "금")
+SECTION_KINDS = ("정기배포", "일간배포")  # 앞의 것을 먼저 찾는다 (update-release-note 와 같은 규칙)
+
+
 def day_section(body, day):
-    keyword = "화요일 정기배포" if day == "화" else "목요일 정기배포"
-    m = next((h for h in re.finditer(r"<h2[^>]*>.*?</h2>", body, re.S) if keyword in text(h.group(0))), None)
-    if not m:
-        return None
+    """(구역 제목, 구역 본문). 못 찾으면 (None, None)."""
+    heads = [(h, text(h.group(0)).replace(" ", "")) for h in re.finditer(r"<h2[^>]*>.*?</h2>", body, re.S)]
+    m = next((h for kind in SECTION_KINDS for h, t in heads if f"{day}요일{kind}" in t), None)
+    if day not in DAYS or not m:
+        return None, None
     nxt = re.search(r"<h2[^>]*>", body[m.end():])
-    return body[m.start(): m.end() + nxt.start() if nxt else len(body)]
+    return text(m.group(0)), body[m.start(): m.end() + nxt.start() if nxt else len(body)]
 
 
 def rows_in(fragment):
@@ -45,9 +50,9 @@ def load(path):
 
 
 def cmd_mine(path, day, account):
-    sec = day_section(load(path), day)
+    heading, sec = day_section(load(path), day)
     if sec is None:
-        print(f"{day}요일 정기배포 구역을 찾지 못했습니다", file=sys.stderr)
+        print(f"{day}요일 배포 구역(정기배포·일간배포)을 찾지 못했습니다", file=sys.stderr)
         return 1
     out = []
     for m in rows_in(sec):
@@ -67,14 +72,14 @@ def cmd_mine(path, day, account):
             "stageBoxes": len(boxes),
             "stageChecked": len(boxes) == 1 and bool(boxes[0]),
         })
-    print(json.dumps(out, ensure_ascii=False, indent=1))
+    print(json.dumps({"heading": heading, "rows": out}, ensure_ascii=False, indent=1))
     return 0
 
 
 def cmd_build(path, day, edits_path, *ids):
-    sec = day_section(load(path), day)
+    heading, sec = day_section(load(path), day)
     if sec is None:
-        print(f"{day}요일 정기배포 구역을 찾지 못했습니다", file=sys.stderr)
+        print(f"{day}요일 배포 구역(정기배포·일간배포)을 찾지 못했습니다", file=sys.stderr)
         return 1
     found = {m.group(1): m for m in rows_in(sec)}
     edits, plan = [], []
