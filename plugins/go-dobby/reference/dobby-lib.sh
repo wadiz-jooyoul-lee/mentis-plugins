@@ -1348,6 +1348,11 @@ dobby_ensure_worktree() {
   git -C "$src" rev-parse --git-dir >/dev/null 2>&1 || { _die "소스 repo 없음: $src"; return 1; }
   git -C "$src" worktree prune 2>/dev/null
   [ -f "$sf" ] && rec="$(_wt_row "$sf" "$repo")"
+  # 안드로이드 오더는 배포가 없어 다른 저장소와 한 오더에 섞지 않는다 — 하위 이슈로 나눈다
+  if [ -z "$rec" ] && _v2_worktrees "$key" | cut -f1 | grep -qvx "$repo" \
+     && { [ "$repo" = wadiz-android ] || _v2_android "$key"; }; then
+    _die "wadiz-android 는 다른 저장소와 한 오더에 섞지 않는다($(_v2_worktrees "$key" | cut -f1 | tr '\n' ' ')+ $repo) — 안드로이드용 하위 이슈로 나눈다"; return 1
+  fi
   if [ -n "$rec" ]; then
     branch="${rec%%$'\t'*}"; wt="${rec#*$'\t'}"; wt="${wt/#\~/$HOME}"
   else
@@ -1422,6 +1427,11 @@ dobby_commit_push() {
   if [ "${DOBBY_FORCE:-0}" != "1" ]; then
     if printf '%s' "$msg" | grep -qEi 'round-[0-9]|리뷰 반영|리뷰 피드백|슬러그|Co-Authored-By|Generated with'; then
       _die "커밋 메시지에 내부 용어/금지 서명 감지 — 그 수정이 '코드에 한 일'로 다시 쓰세요(우회: DOBBY_FORCE=1): $msg"
+      return 1
+    fi
+    # wadiz-android 는 제목이 '{이슈키}-{이슈-제목을-하이픈으로}' 다(저장소 docs/git-workflow.md)
+    if _android_repo "$wt" && ! printf '%s\n' "$msg" | head -1 | grep -qE '^(FE1|ANDROID)-[0-9]+-[^[:space:]]+$'; then
+      _die "wadiz-android 커밋 제목은 '{이슈키}-{이슈-제목을-하이픈으로}' 형식입니다(예: FE1-1234-설정화면-다크모드-추가): $(printf '%s' "$msg" | head -1)"
       return 1
     fi
   fi
@@ -3410,6 +3420,7 @@ dobby_v2_env() {
 dobby_v2_set_env() {
   local key="$1" env="$2" f
   case "$key" in TASK-*) _die "TASK- 오더는 자동 배포를 하지 않는다(통합에서 PR 을 만들고 끝난다): $key"; return 1 ;; esac
+  _v2_android "$key" && { _die "안드로이드 오더는 배포하지 않는다 — 전체 실행은 dobby_v2_set_device 로 적는다: $key"; return 1; }
   _ship_has "$env" "$DOBBY_SHIP_MERGE_ENVS" || { _die "자동 배포 환경은 dev·rc1·rc4 중 하나다: '$env'"; return 1; }
   f="$(_order_dir "$key")/status.md"
   [ -f "$f" ] || { _die "$key 의 상태 문서가 없습니다"; return 1; }
@@ -3426,9 +3437,22 @@ dobby_v2_unset_env() {
   local key="$1" f
   f="$(_order_dir "$key")/status.md"
   [ -f "$f" ] || { _die "$key 의 상태 문서가 없습니다"; return 1; }
-  [ -n "$(dobby_v2_env "$key")" ] || return 0
-  awk '/^[ \t]*-[ \t]*\*\*자동 배포 환경\*\*/ { next } { print }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  [ -n "$(dobby_v2_env "$key")" ] || dobby_v2_device "$key" || return 0
+  awk '/^[ \t]*-[ \t]*\*\*(자동 배포 환경|기기 시험)\*\*/ { next } { print }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
   dobby_event "$key" "자동 배포 환경 해제 — 통합에서 멈춤" 2>/dev/null
+}
+
+# dobby_v2_device KEY — '- **기기 시험**: 자동' 줄이 있으면 참. 안드로이드 오더의 전체 실행(통합 뒤 기기 시험까지) 표시다.
+dobby_v2_device() { grep -qE '^[ \t]*-[ \t]*\*\*기기 시험\*\*:[ \t]*자동' "$(_order_dir "$1")/status.md" 2>/dev/null; }
+
+# dobby_v2_set_device KEY — 그 줄을 '- **단계**:' 바로 아래에 적는다. 안드로이드 오더만 받는다.
+dobby_v2_set_device() {
+  local key="$1" f
+  _v2_android "$key" || { _die "기기 시험 표시는 안드로이드 오더만 받는다(웹 오더는 dobby_v2_set_env): $key"; return 1; }
+  f="$(_order_dir "$key")/status.md"
+  dobby_v2_device "$key" && return 0
+  awk '{ print } /^[ \t]*-[ \t]*\*\*단계\*\*/ && !done { print "- **기기 시험**: 자동"; done = 1 }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  dobby_event "$key" "전체 실행 — 통합 뒤 로컬 기기 시험까지" 2>/dev/null
 }
 
 # dobby_v2_set_base KEY REPO BASE — '- **기준 브랜치**: 저장소=브랜치, …' 줄에 그 저장소의 기준을 더한다. 이미 있으면 두지 않는다.
@@ -6554,6 +6578,221 @@ dobby_v2_test_skip() {
   esac
 }
 
+# ── 안드로이드(wadiz-android) 오더 ─────────────────────────────────────────────
+# 배포하지 않는다. 구현·수정은 바뀐 모듈만 그래들로 검사하고, 검증은 로컬에서 빌드해 연결된 기기에 설치해 한다.
+DOBBY_ANDROID_PKG="${DOBBY_ANDROID_PKG:-com.markmount.wadiz}"
+DOBBY_ANDROID_SERVER="${DOBBY_ANDROID_SERVER:-rc4}"
+
+# _v2_android KEY — 작업 폴더 표에 wadiz-android 가 있으면 참.
+_v2_android() { _v2_worktrees "$1" | cut -f1 | grep -qx 'wadiz-android'; }
+
+# _android_repo 작업폴더 — 그 폴더가 wadiz-android 저장소면 참.
+_android_repo() { git -C "$1" remote get-url origin 2>/dev/null | grep -q 'wadiz-android'; }
+
+# _android_jver JDK폴더 — 주 버전 숫자.
+_android_jver() { "$1/bin/java" -version 2>&1 | sed -nE '1s/.*version "(1\.)?([0-9]+).*/\2/p'; }
+
+# dobby_android_env 작업폴더 — 그래들을 돌릴 준비를 맞추고 상태를 줄로 낸다. 현재 셸에 export 하므로 $(...) 로 부르지 않는다.
+#   JDK 는 17~21 을 고른다(기본 java 가 11 이거나 25 인 맥이 있다). local.properties 는 Git 이 추적하지 않아 새 작업 폴더에 없으므로 만든다.
+#   GitHub Packages 토큰은 앱(:app) 빌드에만 필요하다 — 없으면 DOBBY_ANDROID_APP=0 으로 두고 '앱 빌드 불가' 줄을 낸다.
+#   반환 0 준비됨 · 2 JDK 나 SDK 가 없음.
+dobby_android_env() {
+  local wt="$1" jh v c sdk
+  [ -d "$wt" ] || { _die "쓰임: dobby_android_env 작업폴더"; return 2; }
+  jh="${JAVA_HOME:-}"; v=""; [ -n "$jh" ] && v="$(_android_jver "$jh")"
+  if [ -z "$v" ] || [ "$v" -lt 17 ] || [ "$v" -gt 21 ]; then
+    jh=""
+    for c in "/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
+             "$(/usr/libexec/java_home -V 2>&1 | awk '/^ +(21|17)[.]/{print $NF; exit}')"; do
+      [ -n "$c" ] && [ -x "$c/bin/java" ] && { jh="$c"; break; }
+    done
+    [ -n "$jh" ] || { echo "JDK: 17~21 이 없습니다 — 안드로이드 스튜디오나 JDK 21 을 설치해 주세요"; return 2; }
+    export JAVA_HOME="$jh"
+  fi
+  echo "JDK: $(_android_jver "$JAVA_HOME") ($JAVA_HOME)"
+  sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}}"
+  [ -d "$sdk/platforms" ] || [ -d "$sdk/build-tools" ] || { echo "SDK: $sdk 가 없습니다 — 안드로이드 SDK 를 설치해 주세요"; return 2; }
+  export ANDROID_HOME="$sdk"
+  [ -f "$wt/local.properties" ] || printf 'sdk.dir=%s\n' "$sdk" > "$wt/local.properties"
+  echo "SDK: $sdk"
+  DOBBY_ANDROID_APP=1
+  if [ -z "${ORG_GRADLE_PROJECT_wadizPackagesToken:-}" ] && ! grep -qE '^wadizPackagesToken=.+' "$HOME/.gradle/gradle.properties" 2>/dev/null; then
+    if gh auth status 2>&1 | grep -q 'read:packages'; then
+      export ORG_GRADLE_PROJECT_wadizPackagesUser="$(gh api user -q .login 2>/dev/null)"
+      export ORG_GRADLE_PROJECT_wadizPackagesToken="$(gh auth token 2>/dev/null)"
+    else
+      DOBBY_ANDROID_APP=0
+    fi
+  fi
+  if [ "$DOBBY_ANDROID_APP" = 1 ]; then echo "앱 빌드: 가능"
+  else echo "앱 빌드: 불가 — GitHub Packages 읽기 권한이 없습니다. 한 번만 실행해 주세요: gh auth refresh -h github.com -s read:packages"
+  fi
+  return 0
+}
+
+# _android_module 작업폴더 파일 — 그 파일이 속한 그래들 모듈 경로(:feature:detail). 모듈 밖(루트·buildSrc·gradle/)이면 ':'.
+_android_module() {
+  local wt="$1" d
+  d="$(dirname "$2")"
+  case "$2" in buildSrc/*|gradle/*) printf ':'; return ;; esac
+  while [ "$d" != . ] && [ "$d" != / ]; do
+    [ -f "$wt/$d/build.gradle.kts" ] && { printf ':%s' "$(printf '%s' "$d" | tr '/' ':')"; return; }
+    d="$(dirname "$d")"
+  done
+  printf ':'
+}
+
+# _android_gradle KEY 작업폴더 이름 인자… — 그래들을 돌려 출력은 오더 폴더 gradle/{이름}-{시각}.log 에 두고, 경로를 DOBBY_ANDROID_LOG 에 남긴다.
+_android_gradle() {
+  local key="$1" wt="$2" name="$3" dir; shift 3
+  dir="$(_order_dir "$key")/gradle"; mkdir -p "$dir"
+  DOBBY_ANDROID_LOG="$dir/$name-$(_ts).log"
+  (cd "$wt" && ./gradlew --console=plain "$@") > "$DOBBY_ANDROID_LOG" 2>&1
+}
+
+# _android_fail_lines 기록파일 — 실패 원인만 추린다(그래들 출력 전체를 세션 문맥에 싣지 않는다).
+_android_fail_lines() {
+  # 컴파일 오류(e:), 실패한 작업·시험(FAILED)과 그 뒤 두 줄, 그래들이 요약한 원인(What went wrong 뒤 세 줄)만 낸다
+  awk '/^e: |FAILED$/ { print; k = 2; next } /^\* What went wrong/ { print; k = 3; next } k > 0 && NF { print; k-- }' "$1" | head -40
+}
+
+# dobby_android_check KEY 작업폴더 — 기준 브랜치 대비 바뀐 모듈만 컴파일하고, 바뀐 코드와 짝인 단위 테스트(FooTest)만 돌린다.
+#   시간을 아끼려고 전체 빌드·전체 테스트·lint 는 하지 않는다(앱 전체 빌드는 검증의 기기 설치가 한 번 한다).
+#   반환 0 통과(또는 바뀐 코드 없음) · 1 실패 · 2 준비 안 됨.
+dobby_android_check() {
+  local key="$1" wt="$2" base mb f m md bn t s tasks="" mods="" args=() n_mod=0 n_test=0 skipped="" start rc el envf
+  [ -n "$key" ] && [ -d "$wt" ] || { _die "쓰임: dobby_android_check KEY 작업폴더"; return 2; }
+  _android_repo "$wt" || { _die "wadiz-android 작업 폴더가 아닙니다: $wt"; return 2; }
+  envf="$(_order_dir "$key")/.android-env"
+  dobby_android_env "$wt" > "$envf" || { cat "$envf"; rm -f "$envf"; return 2; }
+  rm -f "$envf"
+  base="$(_v2_base_of "$key" wadiz-android "$wt")"; base="${base:-develop}"
+  git -C "$wt" fetch -q origin "$base" 2>/dev/null
+  mb="$(git -C "$wt" merge-base HEAD "origin/$base" 2>/dev/null)" || mb=HEAD
+  while IFS= read -r f; do
+    case "$f" in *.kt|*.kts|*.java|*.xml|*.toml|*.properties) ;; *) continue ;; esac
+    m="$(_android_module "$wt" "$f")"
+    [ "$m" = : ] && m=":feature"   # 빌드 설정이 바뀌면 대부분의 core 를 끌어오는 :feature 로 확인한다
+    case " $mods " in *" $m "*) ;; *) mods="$mods $m" ;; esac
+    # 테스트 필터가 아무것도 못 찾으면 그래들이 실패하므로, 그 모듈 안의 *Test.kt 만 고른다
+    md="$(printf '%s' "${m#:}" | tr ':' '/')"
+    case "$f" in
+      */src/test/*Test.kt) t="$m:$(basename "$f" .kt)" ;;
+      */src/main/*.kt) bn="$(basename "$f" .kt)"
+                       s="$(find "$wt/$md/src/test" -name "${bn}Test.kt" 2>/dev/null | head -1)"
+                       if [ -n "$s" ]; then t="$m:${bn}Test"; else t=""; fi ;;
+      *) t="" ;;
+    esac
+    [ -n "$t" ] && case " $tasks " in *" $t "*) ;; *) tasks="$tasks $t" ;; esac
+  done < <( { git -C "$wt" diff --name-only "$mb"; git -C "$wt" ls-files --others --exclude-standard; } | sort -u)
+  [ -n "$mods" ] || { echo "그래들 검사: 바뀐 코드가 없어 건너뜀"; return 0; }
+  for m in $mods; do
+    if [ "$m" = ":app" ] && [ "$DOBBY_ANDROID_APP" != 1 ]; then skipped="$skipped $m"; continue; fi
+    md="$(printf '%s' "${m#:}" | tr ':' '/')"
+    if grep -qE 'android\.(library|application)' "$wt/$md/build.gradle.kts" 2>/dev/null; then args+=("$m:compileDebugKotlin")
+    else args+=("$m:compileKotlin"); fi
+    n_mod=$((n_mod + 1))
+    s=""
+    for t in $tasks; do [ "${t%:*}" = "$m" ] && s="$s ${t##*:}"; done
+    if [ -n "$s" ]; then
+      if grep -qE 'android\.(library|application)' "$wt/$md/build.gradle.kts" 2>/dev/null; then args+=("$m:testDebugUnitTest"); else args+=("$m:test"); fi
+      for t in $s; do args+=(--tests "*$t"); n_test=$((n_test + 1)); done
+    fi
+  done
+  [ ${#args[@]} -gt 0 ] || { echo "그래들 검사: 앱 모듈만 바뀌었는데 앱 빌드 권한이 없어 건너뜀 —$skipped"; return 0; }
+  start=$(date +%s)
+  _android_gradle "$key" "$wt" check "${args[@]}"; rc=$?
+  el=$(( $(date +%s) - start ))
+  if [ $rc -eq 0 ]; then
+    printf '그래들 검사: 통과 · 모듈 %s개 컴파일, 단위 테스트 %s개 · %s분 %s초 · 기록 %s\n' "$n_mod" "$n_test" $((el / 60)) $((el % 60)) "$DOBBY_ANDROID_LOG"
+    [ -n "$skipped" ] && echo "건너뜀(앱 빌드 권한 없음):$skipped"
+    return 0
+  fi
+  printf '그래들 검사: 실패 · %s분 %s초 · 기록 %s\n실행: ./gradlew %s\n' $((el / 60)) $((el % 60)) "$DOBBY_ANDROID_LOG" "${args[*]}"
+  _android_fail_lines "$DOBBY_ANDROID_LOG"
+  return 1
+}
+
+# dobby_android_device — 연결된 기기 하나의 시리얼(ANDROID_SERIAL 이 있으면 그것). 없으면 빈 출력과 1.
+dobby_android_device() {
+  local s
+  if [ -n "${ANDROID_SERIAL:-}" ]; then adb -s "$ANDROID_SERIAL" get-state 2>/dev/null | grep -q device && { printf '%s' "$ANDROID_SERIAL"; return 0; }; return 1; fi
+  s="$(adb devices 2>/dev/null | awk 'NR>1 && $2=="device" {print $1; exit}')"
+  [ -n "$s" ] && printf '%s' "$s"
+}
+
+# dobby_android_install KEY 작업폴더 — 작업 폴더를 디버그로 빌드해 연결된 기기에 설치하고, 서버가 rc4 인지 맞춘다.
+#   디버그 빌드는 처음 설치하면 rc4 를 본다(build-config 의 SERVER_MODE). 기기에 다른 서버가 저장돼 있으면 앱 데이터를 지워 rc4 로 돌린다(로그인도 풀린다).
+#   adb 연결은 끊지 않는다. 반환 0 설치됨 · 1 빌드 실패 · 2 준비 안 됨 · 3 기기 없음 · 4 앱 빌드 권한 없음.
+dobby_android_install() {
+  local key="$1" wt="$2" s cur start rc el envf
+  [ -n "$key" ] && [ -d "$wt" ] || { _die "쓰임: dobby_android_install KEY 작업폴더"; return 2; }
+  s="$(dobby_android_device)" || s=""
+  [ -n "$s" ] || { echo "기기 없음 — USB 디버깅을 켠 기기를 연결해 주세요(adb devices 에 device 로 보여야 합니다)"; return 3; }
+  envf="$(_order_dir "$key")/.android-env"
+  dobby_android_env "$wt" > "$envf" || { cat "$envf"; rm -f "$envf"; return 2; }
+  rm -f "$envf"
+  [ "$DOBBY_ANDROID_APP" = 1 ] || { echo "앱 빌드 불가 — GitHub Packages 읽기 권한이 없습니다. 한 번만 실행해 주세요: gh auth refresh -h github.com -s read:packages"; return 4; }
+  cur="$(adb -s "$s" shell run-as "$DOBBY_ANDROID_PKG" cat shared_prefs/HIDDEN_MENU.xml 2>/dev/null | sed -nE 's/.*name="SERVER_MODE">([^<]*)<.*/\1/p')"
+  if [ -n "$cur" ] && [ "$cur" != "$DOBBY_ANDROID_SERVER" ]; then
+    adb -s "$s" shell pm clear "$DOBBY_ANDROID_PKG" >/dev/null 2>&1
+    echo "서버: 기기에 $cur 가 저장돼 있어 앱 데이터를 지웠습니다(로그인이 풀렸습니다)"
+  fi
+  start=$(date +%s)
+  ANDROID_SERIAL="$s" _android_gradle "$key" "$wt" install :app:installDebug; rc=$?
+  el=$(( $(date +%s) - start ))
+  if [ $rc -ne 0 ]; then
+    printf '설치: 실패 · %s분 %s초 · 기록 %s\n' $((el / 60)) $((el % 60)) "$DOBBY_ANDROID_LOG"
+    _android_fail_lines "$DOBBY_ANDROID_LOG"
+    return 1
+  fi
+  printf '설치: 완료 · %s분 %s초 · 기록 %s\n' $((el / 60)) $((el % 60)) "$DOBBY_ANDROID_LOG"
+  printf '기기: %s (%s) · 앱 %s · 서버 %s · 시험 커밋 %s\n' \
+    "$(adb -s "$s" shell getprop ro.product.model 2>/dev/null | tr -d '\r')" "$s" \
+    "$(adb -s "$s" shell dumpsys package "$DOBBY_ANDROID_PKG" 2>/dev/null | sed -nE 's/.*versionName=([^ ]*).*/\1/p' | head -1 | tr -d '\r')" \
+    "$DOBBY_ANDROID_SERVER" "$(git -C "$wt" rev-parse --short HEAD)"
+  [ -n "$(git -C "$wt" status --porcelain)" ] && echo "주의: 커밋하지 않은 변경이 들어간 빌드입니다"
+  return 0
+}
+
+# dobby_android_ui [찾을 글자] — 기기의 지금 화면 요소를 '글자 | 아이디(testTag) | 설명 | 누를 좌표' 한 줄씩 낸다(80줄까지).
+#   uiautomator 덤프 원문(수백 줄 XML)을 문맥에 싣지 않으려고 쓸모 있는 칸만 추린다. 글자를 주면 그 글자가 든 줄만 낸다.
+dobby_android_ui() {
+  local s q="${1:-}"
+  s="$(dobby_android_device)" || { echo "기기 없음"; return 3; }
+  adb -s "$s" exec-out uiautomator dump /dev/tty 2>/dev/null | perl -pe 's/<node /\n<node /g' | awk -v q="$q" '
+    function a(n,  r) { r = ""; if (match($0, " " n "=\"[^\"]*\"")) r = substr($0, RSTART + length(n) + 3, RLENGTH - length(n) - 4); return r }
+    /^<node / {
+      t = a("text"); id = a("resource-id"); sub(/^.*:id\//, "", id); d = a("content-desc"); b = a("bounds")
+      if (t == "" && id == "" && d == "") next
+      if (q != "" && index(t " " id " " d, q) == 0) next
+      split(b, p, /[][,]/); printf "%s | %s | %s | %d,%d\n", t, id, d, (p[2] + p[5]) / 2, (p[3] + p[6]) / 2
+    }' | head -80
+}
+
+# dobby_android_shot 결과폴더 이름 — 기기 화면을 {결과폴더}/{이름}.webp(품질 80)로 남기고 경로를 낸다.
+dobby_android_shot() {
+  local dir="$1" name="${2%.webp}" s
+  [ -d "$dir" ] && [ -n "$name" ] || { _die "쓰임: dobby_android_shot 결과폴더 이름"; return 1; }
+  s="$(dobby_android_device)" || { echo "기기 없음"; return 3; }
+  adb -s "$s" exec-out screencap -p > "$dir/$name.png" || return 1
+  if cwebp -quiet -q 80 "$dir/$name.png" -o "$dir/$name.webp" 2>/dev/null; then rm -f "$dir/$name.png"; printf '%s\n' "$dir/$name.webp"
+  else printf '%s\n' "$dir/$name.png"
+  fi
+}
+
+# dobby_android_log [api|crash|정규식] [줄 수] — 기기 로그에서 그 줄만 끝부분을 낸다. api 는 앱의 서버 응답 기록, crash 는 강제 종료·응답 없음.
+#   로그를 비우려면 시나리오 시작 전에 `adb logcat -c` 를 한 번 부른다.
+dobby_android_log() {
+  local pat="${1:-crash}" n="${2:-40}" s
+  s="$(dobby_android_device)" || { echo "기기 없음"; return 3; }
+  case "$pat" in
+    api)   pat='BaseWadizAPIProvider' ;;
+    crash) pat='FATAL EXCEPTION|AndroidRuntime: |ANR in '"$DOBBY_ANDROID_PKG" ;;
+  esac
+  adb -s "$s" logcat -d 2>/dev/null | grep -E "$pat" | tail -n "$n" | cut -c1-400
+}
+
 # _v2_redo KEY — 기획자에게 넘어온 이유('- **다시 설계**:' 줄). 검증 실패로 넘어온 때에는 줄이 없다.
 _v2_redo() { _v2_get_line "$1" "다시 설계"; }
 
@@ -6718,6 +6957,7 @@ _v2_pr_line() { sed -nE 's/^- \*\*PR\*\*:[ \t]*(.*)$/\1/p' "$(_order_dir "$1")/s
 dobby_v2_step() {
   local key="$1" first="${2:-}" d f ph dev rd k env nx what repo tgt pr
   d="$(_order_dir "$key")"; f="$d/status.md"
+  # 안드로이드 오더의 검증은 브라우저가 아니라 로컬 기기로 한다
   _out() { printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$(_v2_step_doc "$4")"; }
   # 설계나 변경이 확정된 뒤의 첫 일: 구현 또는 산출
   _out_work() {
@@ -7350,6 +7590,15 @@ _dobby_v2_end_u() {
               _v2_set "$key" deploy-agent 완료 "" "기준 브랜치보다 앞선 커밋 없음"
             fi ;;
           *)
+            if [ -z "$env" ] && _v2_android "$key"; then
+              _v2_set "$key" deploy-agent 완료 "" "배포 없음 — 로컬 기기 시험"
+              if ! _v2_on "$key" 테스터; then _v2_complete "$key" "통합 끝 — 배포 없음(안드로이드)"
+              elif dobby_v2_device "$key"; then dobby_phase "$key" 검증; _v2_set "$key" test-agent 대기 "" "기기 시험 차례 (자동 실행)"
+              else dobby_phase "$key" 검증
+                _v2_set "$key" test-agent "사람 차례" "" "통합 끝 — 기기 시험하기" "/dobby-test $key"
+                _human test-agent "기기 시험: 기기를 연결하고 /dobby-test $key"
+              fi
+            else
             dobby_phase "$key" 배포
             if [ -n "$env" ]; then _v2_set "$key" deploy-agent 대기 "" "$env 배포 차례 (자동 실행)"
             elif _v2_on "$key" 테스터; then
@@ -7358,6 +7607,7 @@ _dobby_v2_end_u() {
             else
               _v2_set "$key" deploy-agent "사람 차례" "" "통합 끝 — 배포하기" "/dobby-ship $key {환경}"
               _human deploy-agent "배포: /dobby-ship $key {환경} — 이 오더는 화면 검증을 하지 않습니다"
+            fi
             fi ;;
         esac
       fi ;;
