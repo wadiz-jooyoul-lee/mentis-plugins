@@ -1,11 +1,11 @@
 ---
 name: dobby-stage
-description: 정기배포 날 stage 에 올라간 내 이슈를 확인하는 스킬. 오늘(또는 지정한 날) 정기배포 릴리즈 노트에서 개발 담당자가 나인 행을 찾고, 행마다 오더 메타(status.md·test-plan.md)를 읽어 무엇을 바꿨는지 파악한 뒤, 그 변경이 stage 에 들어갔는지 읽기로만 확인한다(wadiz-frontend 는 브랜치 끝 커밋이 origin/stage 에 포함되는지와 stage 빌드 성공, com.wadiz.web 은 stage CI 와 argocd 동기화 상태). 이어서 이슈마다 핵심 시험 2~3개를 스킬이 골라 https://stage.wadiz.io 에서 chrome-devtools 로 바로 실행한다. stage 는 라이브 데이터를 쓰므로 결제·알림 신청·찜·팔로우·쿠폰 받기처럼 데이터를 바꾸는 시나리오는 처음부터 고르지 않고, 새 코드가 stage 번들에는 있고 라이브 번들에는 없는지 비교하는 시험으로 대신한 뒤 보고에 "stage 에서 하지 않은 시험"으로 따로 적는다. 결과는 오더 메타에 시험 회차(test-runs/{시각}/result.md)와 배포 표(stage 행 '검증 완료' 또는 '검증 중')로 남긴다. 회차는 시험을 고른 직후 만들고 TC 하나가 끝날 때마다 판정 칸을 채운다. 배포일 목록($ORCHESTRATION_META/RELEASE-{날짜}/stage.md)에는 이슈와 회차 경로, stage 반영, stage 칸 결과를 적는다. 대시보드 릴리즈 화면이 이 두 가지를 읽어 배포일별 핵심 TC 진행도를 보여 준다. 그리고 모두 통과한 행은 릴리즈 노트의 stage 배포확인 칸을 자동으로 체크한다(보류나 스킵이 있는 행은 묻고, 실패한 행은 체크하지 않는다). 체크는 twg 부분 수정으로 그 칸만 바꾸고 미리 보기와 저장 뒤 다시 읽기로 두 번 검증한다. stage 머지·배포·argocd 동기화·live 칸·다른 사람 행·Jira 는 건드리지 않는다. 로그인·동기화처럼 사람이 해야 하는 일이 있어 대화형으로만 실행한다. 사용법 /dobby-stage [화|목] [{키} ...].
+description: 배포 날(화요일 정기·수/목/금 일간) stage 에 올라간 내 이슈를 확인하는 스킬. 오늘(또는 지정한 날) 릴리즈 노트의 그 요일 구역(정기배포, 없으면 일간배포)에서 개발 담당자가 나인 행을 찾고, 행마다 오더 메타(status.md·test-plan.md)를 읽어 무엇을 바꿨는지 파악한 뒤, 그 변경이 stage 에 들어갔는지 읽기로만 확인한다(wadiz-frontend 는 브랜치 끝 커밋이 origin/stage 에 포함되는지와 stage 빌드 성공, com.wadiz.web 은 stage CI 와 argocd 동기화 상태). 이어서 이슈마다 핵심 시험 2~3개를 스킬이 골라 https://stage.wadiz.io 에서 chrome-devtools 로 바로 실행한다. stage 는 라이브 데이터를 쓰므로 결제·알림 신청·찜·팔로우·쿠폰 받기처럼 데이터를 바꾸는 시나리오는 처음부터 고르지 않고, 새 코드가 stage 번들에는 있고 라이브 번들에는 없는지 비교하는 시험으로 대신한 뒤 보고에 "stage 에서 하지 않은 시험"으로 따로 적는다. 결과는 오더 메타에 시험 회차(test-runs/{시각}/result.md)와 배포 표(stage 행 '검증 완료' 또는 '검증 중')로 남긴다. 회차는 시험을 고른 직후 만들고 TC 하나가 끝날 때마다 판정 칸을 채운다. 배포일 목록($ORCHESTRATION_META/RELEASE-{날짜}/stage.md)에는 이슈와 회차 경로, stage 반영, stage 칸 결과를 적는다. 대시보드 릴리즈 화면이 이 두 가지를 읽어 배포일별 핵심 TC 진행도를 보여 준다. 그리고 모두 통과한 행은 릴리즈 노트의 stage 배포확인 칸을 자동으로 체크한다(보류나 스킵이 있는 행은 묻고, 실패한 행은 체크하지 않는다). 체크는 twg 부분 수정으로 그 칸만 바꾸고 미리 보기와 저장 뒤 다시 읽기로 두 번 검증한다. stage 머지·배포·argocd 동기화·live 칸·다른 사람 행·Jira 는 건드리지 않는다. 로그인·동기화처럼 사람이 해야 하는 일이 있어 대화형으로만 실행한다. 사용법 /dobby-stage [화|수|목|금] [{키} ...].
 ---
 
 # dobby-stage
 
-정기배포 날 **stage 에 올라간 내 이슈**가 제대로 들어갔는지 확인하고, 통과하면 **릴리즈 노트 stage 칸을 체크**한다.
+배포 날(화요일 정기배포·수/목/금 일간배포) **stage 에 올라간 내 이슈**가 제대로 들어갔는지 확인하고, 통과하면 **릴리즈 노트 stage 칸을 체크**한다.
 
 ```
 릴리즈 노트에서 내 행 찾기(배포일 목록 만들기) → 메타 읽기 → stage 반영 확인(읽기만)
@@ -24,15 +24,18 @@ description: 정기배포 날 stage 에 올라간 내 이슈를 확인하는 스
 ## 사용법
 
 ```
-/dobby-stage [화|목] [{키} ...]
+/dobby-stage [화|수|목|금] [{키} ...]
 ```
 
-- 요일을 빼면 오늘 요일로 정한다. 오늘이 화·목이 아니면 묻는다.
+- 요일을 빼면 오늘 요일로 정한다. 오늘이 월·토·일이면 묻는다.
+- 오늘이 화~금이어도 10시가 지났으면(`date +%H` 가 10 이상) 바로 정하지 않고 `AskUserQuestion` 으로 묻는다. 선택지는 **오늘({요일})** 과 **다음 배포일({날짜} {요일})** 이다. 오늘 배포는 9시에 시작해 이미 끝났을 수 있기 때문이다. 다음 배포일은 화·수·목이면 다음 날, 금이면 다음 주 화요일이다.
+- 배포일은 그 요일의 이번 주 날짜다. 아래 `{요일}` 은 이 요일이다.
+- 일간 배포는 09:40 에 stage 칸 체크를 마감한다(daily-release 의 stage 배포확인 관문). 수·목·금에는 그 전에 6절까지 끝내도록 서두른다.
 - 키를 주면 그 이슈의 행만 본다. 빼면 내 행 전부를 본다.
 
 ## 1. 릴리즈 노트에서 내 행 찾기
 
-1. 페이지 제목은 `{YYYY}-{N}W WEB Release Note` 다. 주차는 ISO 기준(`date +%G`, `date +%V`)으로 센다. ServiceDev 공간의 부모 페이지 17599528968 아래에서 찾는다.
+1. 페이지 제목은 `{YYYY}-{N}W WEB Release Note` 다. 주차는 배포일의 ISO 기준(`date -j -f %F {배포일} +%G`, `+%V`)으로 센다. ServiceDev 공간의 부모 페이지 17599528968 아래에서 찾는다.
    ```bash
    twg confluence search query --cql 'space = "ServiceDev" and ancestor = 17599528968 and title = "{YYYY}-{N}W WEB Release Note"' -o json --output-file $W/find.json
    jq -r '.data.results[0].content.id' $W/find.json
@@ -47,13 +50,14 @@ description: 정기배포 날 stage 에 올라간 내 이슈를 확인하는 스
    ```bash
    twg whoami -o json --output-file $W/who.json
    ME=$(jq -r '.data.accountId' $W/who.json)
-   python3 $NOTE mine $W/before.html 화 "$ME"
+   python3 $NOTE mine $W/before.html {요일} "$ME"
    ```
-   결과는 행마다 번호, 행 ID(localId), 이슈 키, 서비스, 브랜치, stage 칸 체크 여부다. 이미 체크된 행도 시험은 한다(체크만 건너뛴다).
+   스크립트는 `{요일}요일 정기배포` 구역을 먼저 찾고, 없으면 `{요일}요일 일간배포` 구역을 쓴다. 결과의 `heading` 이 찾은 구역 제목이고 `rows` 가 내 행이다. 제목 끝말(`정기배포`·`일간배포`)이 아래 `{종류}` 다.
+   `rows` 는 행마다 번호, 행 ID(localId), 이슈 키, 서비스, 브랜치, stage 칸 체크 여부다. 이미 체크된 행도 시험은 한다(체크만 건너뛴다).
 4. 내 행이 없으면 그렇게 알리고 끝낸다.
 5. **배포일 목록을 만든다.** 대시보드 릴리즈 화면이 이 파일로 배포일과 이슈를 찾는다. 한 행에 이슈가 여럿이면 이슈마다 부른다. 같은 날 다시 돌리면 있는 파일을 이어 쓴다.
    ```bash
-   dobby_release_init {YYYY-MM-DD} 화 "https://wadiz.atlassian.net/wiki/spaces/ServiceDev/pages/{페이지ID}"
+   dobby_release_init {YYYY-MM-DD} {요일} "https://wadiz.atlassian.net/wiki/spaces/ServiceDev/pages/{페이지ID}" {종류}
    dobby_release_row {YYYY-MM-DD} {번호} {키}
    ```
    `dobby_release_row 날짜 행 이슈 [저장소] [반영] [회차] [stage칸] [비고]` 는 빈 인자를 넘긴 칸을 그대로 둔다. 아래 절에서 칸을 하나씩 채운다.
@@ -77,6 +81,8 @@ description: 정기배포 날 stage 에 올라간 내 이슈를 확인하는 스
 | wadiz-frontend | `git fetch origin stage` 후 `git merge-base --is-ancestor origin/{브랜치} origin/stage` | 종료 코드 0, 그리고 그 뒤 stage CI/CD(static·global·global-account·studio 중 해당 서비스)가 성공 |
 | com.wadiz.web | `gh run list -R wadiz-web/com.wadiz.web --workflow 'web - CI - stage'` 와 `argocd app get argo/web-stage-web-server --grpc-web` | CI 성공, argocd Synced·Healthy, 배포된 커밋이 브랜치를 포함 |
 
+- 수·금에는 stage 브랜치를 다시 만드는 준비 작업(`schedule-prepare-branch-for-regular-release.yml`)이 자동으로 돌지 않는다. 오늘 stage CI/CD 실행이 없으면 "stage 미반영"으로 적고 비고에 "준비 작업 미실행"을 남긴다. 준비 작업은 돌리지 않는다. 배포 담당자가 돌린 뒤 다시 실행하면 된다.
+- 일간 배포라도 com.wadiz.web 행은 위 표대로 똑같이 확인한다. 일간 배포 절차가 com.wadiz.web 을 배포하지 않는 날이면 stage CI 나 argocd 가 맞지 않아 "stage 미반영"으로 남는다.
 - argocd 세션이 없거나(Unauthenticated) 아직 OutOfSync 면 **동기화하지 않는다.** 사람에게 동기화 여부를 묻고 답을 기다린다.
 - 반영되지 않은 이슈는 시험하지 않는다. 보고에 "stage 미반영"으로 적는다.
 - 확인한 결과를 배포일 목록에 적는다. 미반영이면 비고에 이유를 남긴다.
@@ -150,7 +156,7 @@ dobby_event {키} "stage 확인: 성공 {n} · 실패 {n} · 보류 {n} · 스�
 1. **다시 읽는다.** 시험하는 동안 다른 사람이 고쳤을 수 있으므로 1-2 를 다시 해 새 `before.html` 과 판 번호를 얻는다.
 2. **수정 파일을 만든다.** 대상 행의 stage 칸 체크박스만 바꾼 행 전체가 들어간다. 체크박스가 1개가 아니거나 칸을 하나로 집지 못하면 스크립트가 멈춘다. 그때는 손대지 않고 보고한다.
    ```bash
-   python3 $NOTE build $W/before.html 화 $W/edits.json {행ID} ...
+   python3 $NOTE build $W/before.html {요일} $W/edits.json {행ID} ...
    ```
 3. **미리 보기로 검증한다.**
    ```bash
@@ -180,7 +186,7 @@ dobby_release_done {YYYY-MM-DD}
 
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-stage 확인 · {배포일}({요일}) 정기배포
+stage 확인 · {배포일}({요일}) {종류}
 
 | 행 | 이슈 | 저장소 | stage 반영 | 시험 | 결과 | stage 칸 |
 |---|---|---|---|---|---|---|
