@@ -2,7 +2,7 @@
 """릴리즈 노트 요일 구역에서 이슈 키가 든 행을 읽어, update-release-note 의 build 가 받는 계획 파일 모양으로 출력한다.
 
 사용법
-  release-note-row.py extract <body.html> <화|목> <이슈 키>
+  release-note-row.py extract <body.html> <화|수|목|금> <이슈 키>
 표 칸 해석은 update-release-note 의 release_row.py 를 그대로 불러 쓴다(경로는 RELEASE_ROW 환경 변수).
 """
 import html
@@ -25,7 +25,7 @@ def cmd_extract(path, day, key):
     body = open(path, encoding="utf-8").read()
     start, end = rr.day_section(body, day)
     if start is None:
-        print(f"{day}요일 정기 배포 구역을 찾지 못했습니다", file=sys.stderr)
+        print(f"{day}요일 배포 구역(정기배포·일간배포)을 찾지 못했습니다", file=sys.stderr)
         return 1
     row = next((m for m in rr.rows_in(body[start:end])
                 if len(rr.cells_of(m.group(2))) >= 13 and rr.key_in(key, m.group(2))), None)
@@ -40,7 +40,7 @@ def cmd_extract(path, day, key):
     paras = lambda c: [rr.text(p) for p in re.findall(r"<p[^>]*>(.*?)</p>", c, re.S) if rr.text(p)]
     # 릴리즈 주요 내용: Jira 링크마다 바로 뒤 목록의 줄이 브랜치
     items = []
-    for m in re.finditer(r'<a href="([^"]+/browse/[A-Z][A-Z0-9]*-\d+)"[^>]*>.*?</a>(.*?)(?=<a href="[^"]+/browse/|$)',
+    for m in re.finditer(r'<a\b[^>]*?\bhref="([^"]+/browse/[A-Z][A-Z0-9]*-\d+)"[^>]*>.*?</a>(.*?)(?=<a\b[^>]*?\bhref="[^"]+/browse/|$)',
                          cells[4], re.S):
         ul = re.search(r"<ul[^>]*>(.*?)</ul>", m.group(2), re.S)
         branches = [rr.text(li) for li in re.findall(r"<li[^>]*>(.*?)</li>", ul.group(1), re.S)] if ul else []
