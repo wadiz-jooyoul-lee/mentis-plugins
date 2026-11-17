@@ -1,0 +1,392 @@
+<title>2026-11-17 주간회의</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* 레이아웃: 왼쪽 고정 목차 + 오른쪽 본문. 항목마다 "핵심 한 줄 → 이전/지금 → 어디서 → 코드" 순서 */
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --fg: #1c2230;
+  --muted: #5b6474;
+  --line: #e1e5ec;
+  --accent: #1f6feb;
+  --accent-soft: #e7f0fe;
+  --before: #b42318;
+  --before-soft: #fdecea;
+  --after: #12784a;
+  --after-soft: #e6f5ee;
+  --code-bg: #f0f2f6;
+  --font-body: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12151b; --surface: #1a1e26; --fg: #e6e9ef; --muted: #9aa3b2; --line: #2b313c;
+    --accent: #6ea8ff; --accent-soft: #1c2a42; --before: #ff8a80; --before-soft: #3a1f1f;
+    --after: #6fd3a0; --after-soft: #17322a; --code-bg: #222833; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12151b; --surface: #1a1e26; --fg: #e6e9ef; --muted: #9aa3b2; --line: #2b313c;
+  --accent: #6ea8ff; --accent-soft: #1c2a42; --before: #ff8a80; --before-soft: #3a1f1f;
+  --after: #6fd3a0; --after-soft: #17322a; --code-bg: #222833; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.7; }
+.wrap {
+  display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 40px;
+  max-width: 1180px; margin: 0 auto;
+  padding-block: 32px 80px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+nav.toc { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 24px); align-self: start; max-height: calc(100vh - 48px); overflow-y: auto; font-size: 13.5px; }
+nav.toc h2 { font-size: 12px; letter-spacing: .08em; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
+nav.toc ol { list-style: none; margin: 0 0 16px; padding: 0; display: grid; gap: 2px; }
+nav.toc a { display: block; padding: 4px 8px; border-radius: 6px; color: var(--fg); text-decoration: none; }
+nav.toc a:hover, nav.toc a:focus-visible { background: var(--accent-soft); color: var(--accent); outline: none; }
+nav.toc .grp { font-weight: 600; color: var(--muted); margin-top: 10px; padding: 0 8px; font-size: 12px; }
+nav.toc .k { font-family: var(--font-mono); font-size: 11.5px; color: var(--muted); margin-right: 4px; }
+nav.toc a.strong { font-weight: 700; }
+nav.toc a.strong .k { color: var(--accent); font-weight: 700; }
+nav.toc a.sub { padding-left: 22px; font-size: 12.5px; color: var(--muted); }
+/* FE1-2534 화면 모형 */
+.mocks { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.mock { display: grid; gap: 8px; min-width: 0; }
+.mock figcaption { font-size: 13px; line-height: 1.55; }
+.mock figcaption b { display: block; font-size: 13.5px; }
+.mock figcaption.bad b { color: var(--before); }
+.mock figcaption.good b { color: var(--after); }
+.phone { border: 2px solid var(--line); border-radius: 18px; background: var(--bg); padding: 10px 8px 12px; display: grid; gap: 8px; max-width: 220px; width: 100%; margin: 0 auto; position: relative; overflow: hidden; }
+.snb { display: flex; gap: 10px; font-size: 11px; color: var(--muted); border-bottom: 1px solid var(--line); padding: 0 4px 5px; white-space: nowrap; overflow: hidden; }
+.snb span.on { color: var(--fg); font-weight: 700; border-bottom: 2px solid var(--fg); padding-bottom: 3px; }
+.snb.shift span { transform: translateX(-38px); }
+.pagebody { display: grid; gap: 6px; }
+.pagebody.shift { transform: translateX(-26px); opacity: .55; }
+.kv { height: 48px; border-radius: 6px; background: var(--accent-soft); font-size: 10px; display: grid; place-items: center; color: var(--accent); }
+.row { height: 10px; border-radius: 3px; background: var(--line); }
+.row.short { width: 60%; }
+.slider { display: flex; gap: 6px; padding: 6px; border-radius: 8px; position: relative; overflow: hidden; }
+.slider.mark { outline: 2px dashed var(--after); outline-offset: -1px; }
+.slider .c { flex: 0 0 62%; height: 56px; border-radius: 6px; background: var(--surface); border: 1px solid var(--line); font-size: 10px; display: grid; place-items: center; color: var(--muted); }
+.slider.moved .c { transform: translateX(-70%); }
+.tag { position: absolute; right: 6px; top: 6px; font-family: var(--font-mono); font-size: 9px; background: var(--after); color: var(--surface); border-radius: 4px; padding: 0 4px; }
+.finger { position: absolute; width: 22px; height: 22px; border-radius: 50%; background: color-mix(in srgb, var(--accent) 35%, transparent); border: 2px solid var(--accent); }
+.drag { position: absolute; height: 2px; background: var(--accent); }
+.drag::before { content: ""; position: absolute; left: -6px; top: -4px; border: 5px solid transparent; border-right: 6px solid var(--accent); border-left: 0; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12.5px; color: var(--muted); }
+.legend i { display: inline-block; width: 14px; height: 10px; border-radius: 2px; vertical-align: -1px; margin-right: 4px; }
+.flow { display: grid; gap: 6px; counter-reset: s; }
+.flow li { list-style: none; padding: 8px 12px 8px 40px; position: relative; background: var(--code-bg); border-radius: 8px; font-size: 14px; }
+.flow li::before { counter-increment: s; content: counter(s); position: absolute; left: 12px; top: 8px; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: var(--surface); font-size: 12px; display: grid; place-items: center; font-weight: 700; }
+.guide { border-top: 1px dashed var(--line); padding-top: 14px; display: grid; gap: 12px; scroll-margin-top: 16px; }
+.guide h4 { margin: 0; font-size: 16px; }
+h4.sm { margin: 4px 0 0; font-size: 15px; }
+@media (max-width: 860px) { .mocks { grid-template-columns: 1fr; } }
+/* FE1-2450 결제 창 모형 */
+.mocks.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.pm { position: relative; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); padding: 14px 14px 12px; display: grid; gap: 8px; max-width: 260px; width: 100%; margin: 0 auto; min-height: 210px; align-content: start; overflow: hidden; }
+.pm .t { font-weight: 700; font-size: 13.5px; display: flex; justify-content: space-between; }
+.pm .t::after { content: "✕"; color: var(--muted); font-weight: 400; }
+.pm .d { font-size: 11.5px; color: var(--muted); }
+.pm .f { height: 22px; border: 1px solid var(--line); border-radius: 5px; font-size: 10.5px; color: var(--muted); padding: 3px 7px; }
+.pm .f.filled { color: var(--fg); }
+.pm .dots { display: flex; gap: 6px; justify-content: center; padding: 6px 0; }
+.pm .dots i { width: 10px; height: 10px; border-radius: 50%; background: var(--fg); }
+.pm .btn { margin-top: 4px; height: 28px; border-radius: 6px; background: #00b2b2; color: #fff; font-size: 12px; font-weight: 700; display: grid; place-items: center; }
+.pm .btn.dim { opacity: .45; }
+.pm .dim-layer { position: absolute; inset: 0; background: rgba(0,0,0,.42); display: grid; place-items: center; padding: 12px; }
+.pm .alert { background: var(--surface); border-radius: 10px; padding: 12px; width: 88%; display: grid; gap: 6px; box-shadow: 0 6px 20px rgba(0,0,0,.25); }
+.pm .alert b { font-size: 12.5px; }
+.pm .alert span { font-size: 11px; color: var(--muted); }
+.pm .alert .ok { justify-self: end; font-size: 11.5px; font-weight: 700; color: #00a0a0; }
+.pm .toast { position: absolute; left: 8px; right: 8px; bottom: 8px; background: #2b2f36; color: #fff; font-size: 10.5px; border-radius: 6px; padding: 6px 8px; line-height: 1.45; }
+.pm.sheet { border-radius: 14px 14px 0 0; border-bottom: none; margin-top: 30px; }
+.tagline { font-family: var(--font-mono); font-size: 11px; color: var(--muted); }
+.flowline { font-size: 12.5px; color: var(--muted); text-align: center; }
+@media (max-width: 860px) { .mocks.two { grid-template-columns: 1fr; } }
+/* FE1-2336 위험도 */
+.risk { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.risk > div { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: grid; gap: 4px; font-size: 14px; min-width: 0; }
+.risk .lv { font-size: 12px; font-weight: 700; color: var(--before); }
+.risk .lv.ok { color: var(--after); }
+.big { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+@media (max-width: 860px) { .risk { grid-template-columns: 1fr; } }
+main { min-width: 0; display: grid; gap: 40px; }
+header h1 { font-size: 28px; margin: 0 0 6px; text-wrap: balance; }
+header p { margin: 0; color: var(--muted); max-width: 68ch; }
+.sum { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 12.5px; color: var(--muted); font-weight: 600; }
+td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+section.group > h2 { font-size: 20px; margin: 0 0 4px; }
+section.group > p.lead { margin: 0 0 16px; color: var(--muted); }
+article.item { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 22px 24px; display: grid; gap: 12px; min-width: 0; scroll-margin-top: 16px; }
+article.item + article.item { margin-top: 16px; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12.5px; }
+.key { font-family: var(--font-mono); font-weight: 500; color: var(--accent); text-decoration: none; }
+.key:hover { text-decoration: underline; }
+.pill { padding: 1px 8px; border-radius: 999px; background: var(--code-bg); color: var(--muted); }
+article h3 { margin: 0; font-size: 17px; text-wrap: balance; }
+.core { margin: 0; font-weight: 500; }
+.ba { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.ba > div { border-radius: 8px; padding: 10px 14px; font-size: 14px; min-width: 0; }
+.ba .b { background: var(--before-soft); }
+.ba .a { background: var(--after-soft); }
+.ba strong { display: block; font-size: 12px; letter-spacing: .04em; margin-bottom: 2px; }
+.ba .b strong { color: var(--before); }
+.ba .a strong { color: var(--after); }
+.where { font-size: 13.5px; color: var(--muted); margin: 0; }
+.where code, p code, li code, td code { font-family: var(--font-mono); font-size: 12.5px; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; color: var(--fg); word-break: break-all; }
+pre { margin: 0; background: var(--code-bg); border-radius: 8px; padding: 12px 14px; overflow-x: auto; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.6; }
+ul.pts { margin: 0; padding-left: 20px; display: grid; gap: 2px; }
+.note { font-size: 13.5px; color: var(--muted); border-left: 3px solid var(--line); padding-left: 10px; margin: 0; }
+footer { color: var(--muted); font-size: 13px; }
+@media (max-width: 860px) {
+  .wrap { grid-template-columns: minmax(0, 1fr); gap: 24px; }
+  nav.toc { position: static; max-height: none; border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: var(--surface); }
+  .ba { grid-template-columns: 1fr; }
+  article.item { padding: 18px 16px; }
+}
+@media (prefers-reduced-motion: no-preference) { html { scroll-behavior: smooth; } }
+</style>
+
+<div class="wrap">
+<nav class="toc" aria-label="목차">
+  <h2>목차</h2>
+  <ol>
+    <li><a href="#summary">한눈에 보기</a></li>
+    <li class="grp">메이커 팔로우 버그</li>
+    <li><a href="#fe1-2663"><span class="k">2663</span>팔로우해도 소식받기가 안 켜짐</a></li>
+    <li class="grp">펀딩 상세 개선</li>
+    <li><a href="#fe1-2476"><span class="k">2476</span>종료 상세에서 앵콜로 연결</a></li>
+    <li><a href="#fe1-2362"><span class="k">2362</span>종료 추천 위치·오픈예정 버튼 고정</a></li>
+    <li class="grp">데이터 수집</li>
+    <li><a href="#fe1-2654"><span class="k">2654</span>참여내역 검색·하단 고정 버튼</a></li>
+    <li class="grp">옛 화면과 코드 정리</li>
+    <li><a href="#fe1-2372"><span class="k">2372</span>대체 화면이 있는 옛 화면 삭제</a></li>
+    <li><a href="#fe1-2373"><span class="k">2373</span>쓰지 않는 static 코드 삭제</a></li>
+    <li><a href="#fe1-2375"><span class="k">2375</span>쓰지 않는 약관 3종 삭제</a></li>
+  </ol>
+</nav>
+
+<main>
+<header>
+  <h1>2026-11-17 주간회의</h1>
+  <p>FE개발1 주간 회의 페이지의 이주열 "완료" 칸에 있는 이슈 7건을 정리했습니다. 항목마다 무엇이 문제였는지, 무엇을 바꿨는지, 어디를 고쳤는지를 적었습니다. 업무 기간은 2026-11-09부터 11-16까지입니다.</p>
+</header>
+
+<section id="summary" class="sum">
+  <h2 style="font-size:20px;margin:0 0 10px">한눈에 보기</h2>
+  <table>
+    <thead><tr><th>이슈</th><th>핵심 한 줄</th><th>배포</th></tr></thead>
+    <tbody>
+      <tr><td><a class="key" href="#fe1-2663">FE1-2663</a></td><td>국내 펀딩·스토어 상세에서 메이커를 팔로우하면 소식받기가 다시 함께 켜짐</td><td class="num">11-16 핫픽스</td></tr>
+      <tr><td><a class="key" href="#fe1-2476">FE1-2476</a></td><td>종료된 펀딩 상세에 공개 중인 앵콜 펀딩 배너와 앵콜 버튼을 보여 줌</td><td class="num">11-12</td></tr>
+      <tr><td><a class="key" href="#fe1-2362">FE1-2362</a></td><td>종료 상세 추천을 스토리 위로, 오픈예정 PC 알림 버튼을 하단 고정 (A/B 실험)</td><td class="num">11-12</td></tr>
+      <tr><td><a class="key" href="#fe1-2654">FE1-2654</a></td><td>참여내역 검색 결과 유무를 수집하고, 하단 고정 알림 버튼 클릭을 따로 셈</td><td class="num">11-17</td></tr>
+      <tr><td><a class="key" href="#fe1-2372">FE1-2372</a></td><td>새 화면이 있는 옛 화면 3종을 지우고 옛 주소는 새 화면이나 메인으로 보냄</td><td class="num">11-12</td></tr>
+      <tr><td><a class="key" href="#fe1-2373">FE1-2373</a></td><td>어디서도 쓰지 않던 static 코드 8건과 파일 4건을 지움</td><td class="num">11-12</td></tr>
+      <tr><td><a class="key" href="#fe1-2375">FE1-2375</a></td><td>쓰지 않는 약관 화면 3종을 지우고 옛 주소는 메인으로 보냄</td><td class="num">11-12</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ───────────── 메이커 팔로우 버그 ───────────── -->
+<section class="group">
+  <h2>메이커 팔로우 버그</h2>
+  <p class="lead">넉 달 넘게 이어진 문제를 핫픽스(정기 배포를 기다리지 않는 긴급 배포)로 고친 건입니다.</p>
+
+  <article class="item" id="fe1-2663">
+    <div class="meta"><a class="key" href="https://wadiz.atlassian.net/browse/FE1-2663">FE1-2663</a><span class="pill">11-16 핫픽스</span><span class="pill">펀딩 상세 · 스토어 상세</span></div>
+    <h3>펀딩 상세에서 메이커를 팔로우해도 소식받기가 켜지지 않던 문제</h3>
+    <p class="core">소식받기는 메이커가 새 프로젝트를 열 때 알림을 받는 설정입니다. 예전 국내 화면은 팔로우할 때 이 설정도 함께 켜 줬습니다. 7월 2일 국내 상세가 해외용 화면과 하나로 합쳐지면서 이 단계가 빠졌습니다.</p>
+    <div class="ba">
+      <div class="b"><strong>이전 (7/2 이후)</strong>팔로우만 되고 소식받기는 꺼진 채였습니다. 마케팅 수신에 동의한 사람도 메이커의 새 프로젝트 알림을 받지 못했습니다.</div>
+      <div class="a"><strong>지금</strong>국내에서 팔로우하면 마케팅 동의자는 소식받기가 켜지고 앱 알림 설정 안내가 뜹니다. 언팔로우하면 소식받기도 꺼집니다. 해외 화면은 예전 그대로입니다.</div>
+    </div>
+    <h4 class="sm">국내에서 팔로우 버튼을 누르면</h4>
+    <ol class="flow">
+      <li>로그인하지 않았으면 로그인 화면으로 보냅니다.</li>
+      <li>휴대폰 번호가 없으면 휴대폰 인증 창을 먼저 띄웁니다. 인증하면 소식받기와 마케팅 동의를 켭니다.</li>
+      <li>팔로우 요청을 보냅니다. 성공 응답(<code>SUSS000</code>)일 때만 다음으로 갑니다.</li>
+      <li>버튼을 누른 시점에 마케팅 동의 여부를 확인합니다. 동의자면 소식받기를 켭니다.</li>
+    </ol>
+    <ul class="pts">
+      <li><b>고친 곳</b>: 공용 팔로우 처리에 국내 전용 순서를 되살렸습니다. 펀딩 상세 메이커 프로필과 스토어 상세 메이커 정보의 팔로우 버튼이 이 처리를 씁니다.</li>
+      <li><b>함께 고쳐진 곳</b>: 알림신청이나 찜 뒤에 뜨는 팔로우 창은 원래 공용 처리를 써서 코드 변경 없이 같이 고쳐졌습니다.</li>
+      <li><b>핫픽스 리뷰에서 보강한 것</b>: 버튼 연타 막기(처리 중 로딩 표시), 로그인이 풀리면(401 응답) 로그인 화면으로 보내기, 소식받기만 실패하면 팔로우 결과 안내 띄우기, 팔로잉 목록과 개수를 바로 바꾸기.</li>
+      <li><b>서버</b>: 바꾼 것이 없습니다. 이미 있던 팔로우 요청과 소식받기 요청을 그대로 씁니다.</li>
+    </ul>
+    <p class="where">어디서: <code>packages/features/src/maker-following/lib/useMakerFollowMark.ts</code>, <code>apps/global/src/pages/funding/[projectNo]/_ui/MakerProfileSection/MakerProfileSection.tsx</code>, <code>packages/features/src/store/detail/ui/components/DetailHead/DetailInfo/DetailInfoFooter/MakerInfo/MakerInfo.tsx</code></p>
+    <p class="note">확인한 것: rc4 에서 PC(1280px)와 모바일(390px) 시험 15개를 모두 통과했습니다. 남은 일: 팔로우 유도 흐름과 수집 전체를 7/2 이전 국내 동작으로 되돌리는 일은 FE1-2668 에서 이어 합니다.</p>
+  </article>
+</section>
+
+<!-- ───────────── 펀딩 상세 개선 ───────────── -->
+<section class="group">
+  <h2>펀딩 상세 개선</h2>
+  <p class="lead">종료되거나 아직 열리지 않은 펀딩 상세에서, 사용자가 다음 행동으로 이어지게 만든 두 건입니다.</p>
+
+  <article class="item" id="fe1-2476">
+    <div class="meta"><a class="key" href="https://wadiz.atlassian.net/browse/FE1-2476">FE1-2476</a><span class="pill">11-12 배포</span><span class="pill">종료된 펀딩 상세</span></div>
+    <h3>종료된 원본 상세에서 공개 중인 앵콜 펀딩으로 연결</h3>
+    <p class="core">앵콜 펀딩은 종료된 펀딩을 같은 메이커가 다시 여는 펀딩입니다. 종료된 원본 상세에 들어온 사람이 앵콜이 열린 것을 알고 바로 넘어갈 수 있게 했습니다.</p>
+    <div class="ba">
+      <div class="b"><strong>이전</strong>종료된 원본 상세에는 앵콜 안내가 없었습니다. 스토어가 있으면 스토어 배너와 스토어 버튼만 보였습니다.</div>
+      <div class="a"><strong>지금</strong>스토어 배너 자리에 앵콜 배너가 보이고, 하단 버튼이 앵콜 버튼으로 바뀝니다. 스토어도 열려 있으면 같은 배너 아래에 "스토어에서 바로 구매" 줄이 붙습니다.</div>
+    </div>
+    <table>
+      <thead><tr><th>앵콜 상태</th><th>배너</th><th>하단 버튼</th></tr></thead>
+      <tbody>
+        <tr><td>진행 중</td><td>"앵콜 펀딩이 진행중이에요" + 달성률 + 남은 날(D-18 등)</td><td>앵콜 펀딩 참여하기</td></tr>
+        <tr><td>오픈예정</td><td>"앵콜 펀딩이 곧 열려요" + "11월 24일 오픈예정" + 알림 신청</td><td>앵콜 알림신청 하기</td></tr>
+        <tr><td>앵콜 없음</td><td colspan="2">지금 화면 그대로 (스토어 배너와 스토어 버튼)</td></tr>
+      </tbody>
+    </table>
+    <ul class="pts">
+      <li><b>우선순위</b>: 앵콜과 스토어가 둘 다 있으면 하단 버튼은 앵콜로 갑니다. 스토어는 배너 안의 줄로 남습니다.</li>
+      <li><b>앵콜 정보 받는 법</b>: 백엔드의 앵콜 목록 API(<code>/web/apip/funding/campaigns/encores</code>)를 종료된 원본에서만 부릅니다. 목록에서 스토어를 뺀 첫 항목을 앵콜로 씁니다. 스토어 번호도 같은 목록에서 읽습니다.</li>
+      <li><b>수집 태그 4종</b>: 배너 노출, 배너 클릭, 앵콜 버튼 클릭, 배너 안 스토어 줄 클릭. 분류는 모두 <code>펀딩_상세</code> 입니다. 노출 라벨 끝의 <code>_스토어</code> 로 스토어 줄이 함께 보였는지 나눠 볼 수 있습니다.</li>
+      <li><b>검색 엔진용 화면</b>: 검색 엔진이 읽는 서버 화면에도 앵콜 링크를 넣었습니다. 앵콜이 새로 생기면 검색 엔진이 새 화면을 받도록 "바뀌지 않음(304)" 판단 값에 앵콜 번호와 상태를 더했습니다.</li>
+    </ul>
+    <p class="where">어디서: <code>apps/global/src/pages/funding/[projectNo]/_ui/EncoreBanner/</code>(새 폴더), <code>.../_ui/FundingCTAButtonGroup/EncoreLinkButton/EncoreLinkButton.tsx</code>, <code>.../_model/useEncoreProjectQuery.ts</code>, <code>packages/event-tracker/src/funding-detail.tracker.ts</code>, 서버 <code>com.wadiz.web</code> 의 <code>GlobalKoreaFundingDetailController.java</code>, <code>detail-seo-body.jsp</code></p>
+    <p class="note">확인한 것: stage 에서 진행 중 앵콜(415137 → 429282), 오픈예정 앵콜(413239 → 416794), 앵콜과 스토어가 함께 있는 경우(368732 → 428733, 스토어 12073)를 모두 통과했습니다.</p>
+  </article>
+
+  <article class="item" id="fe1-2362">
+    <div class="meta"><a class="key" href="https://wadiz.atlassian.net/browse/FE1-2362">FE1-2362</a><span class="pill">11-12 배포</span><span class="pill">A/B 실험 2개</span></div>
+    <h3>종료 프로젝트 추천 강화와 오픈예정 PC 알림 버튼 고정</h3>
+    <p class="core">두 가지를 A/B 실험(사용자를 두 무리로 나눠 다른 화면을 보여 주고 성과를 비교하는 방법)으로 내보냈습니다. 지금 비율은 A 0 : B 100 이라 모두가 새 화면(B)을 봅니다.</p>
+    <table>
+      <thead><tr><th>실험</th><th>A (이전 화면)</th><th>B (새 화면)</th></tr></thead>
+      <tbody>
+        <tr><td><b>종료 상세 추천</b><br><code>funding-end-recommend-swipe</code></td><td>"같이 보면 좋은 프로젝트"가 스토리 맨 아래, 베스트 바로 위에 4칸 2줄 격자</td><td>스토리 <b>위</b>로 올라옴. PC 는 카드 8장 한 줄을 좌우 화살표로 넘김. 모바일 웹과 앱은 탭 막대 위(스토리 탭에서만)</td></tr>
+        <tr><td><b>오픈예정 PC 버튼 고정</b><br><code>comingsoon-pc-sticky-cta</code></td><td>스크롤하면 알림 신청 버튼 줄이 화면 위로 사라짐</td><td>원래 버튼 줄이 사라지면 오른쪽 영역 하단에 공유·응원·오픈 알림 신청 버튼 줄이 따라붙음. 다시 올라가면 사라짐</td></tr>
+      </tbody>
+    </table>
+    <ul class="pts">
+      <li><b>대상</b>: 국내 화면만입니다. 진행 중 펀딩 상세와 글로벌 오픈예정 상세는 그대로입니다.</li>
+      <li><b>하단 버튼 줄</b>: 위쪽 원래 줄과 같은 상태를 읽습니다. 아래에서 알림을 신청하면 위쪽 줄의 상태와 신청자 수도 함께 바뀝니다.</li>
+      <li><b>앱 화면</b>: 종료 추천 실험은 앱 안의 웹 화면도 모바일 웹과 같은 비율로 나눕니다. 오픈예정 버튼 실험은 PC 에만 있어 앱은 나누지 않습니다.</li>
+    </ul>
+    <p class="where">어디서: <code>apps/global/src/pages/funding/[projectNo]/_ui/DesktopAside/DesktopAside.tsx</code>, <code>.../story/FundingDetailStoryDesktopPage.tsx</code>, <code>.../FundingDetailMobileLayout.tsx</code>, <code>packages/widgets/src/recommendation/ui/RecommendationRelatedSection.tsx</code>, 실험 등록 <code>packages/features/src/ab-test/supportedExperiments.ts</code></p>
+    <p class="note">확인한 것: stage 에서 오픈예정 하단 버튼 줄이 나타났다 사라지는 것(430427), 종료 상세 추천이 스토리 위 한 줄로 그려지는 것(412000), 진행 중 상세는 그대로인 것(425303)을 통과했습니다. 앱 화면은 rc4 에서 안드로이드 앱으로 직접 확인했습니다.</p>
+  </article>
+</section>
+
+<!-- ───────────── 데이터 수집 ───────────── -->
+<section class="group">
+  <h2>데이터 수집</h2>
+  <p class="lead">화면 모양과 동작은 그대로이고, 분석용 기록만 더한 건입니다.</p>
+
+  <article class="item" id="fe1-2654">
+    <div class="meta"><a class="key" href="https://wadiz.atlassian.net/browse/FE1-2654">FE1-2654</a><span class="pill">11-17 배포</span><span class="pill">마이와디즈 참여내역 · 오픈예정 상세</span></div>
+    <h3>참여내역 검색 이벤트 추가와 오픈예정 하단 고정 버튼 수집 분리</h3>
+    <p class="core">참여내역에서 검색한 사람 중 결과를 찾지 못한 비율을 볼 수 있게 했습니다. FE1-2362 에서 새로 생긴 하단 고정 알림 버튼도 위쪽 버튼과 따로 셀 수 있게 했습니다.</p>
+    <h4 class="sm">① 참여내역 검색 이벤트</h4>
+    <table>
+      <thead><tr><th>라벨</th><th>뜻</th></tr></thead>
+      <tbody>
+        <tr><td><code>결과있음_text</code></td><td>결과가 있고, 검색어가 글자</td></tr>
+        <tr><td><code>결과있음_number</code></td><td>결과가 있고, 검색어가 숫자와 하이픈(-)만</td></tr>
+        <tr><td><code>결과없음_text</code></td><td>다섯 기간 모두 비었고, 검색어가 글자</td></tr>
+        <tr><td><code>결과없음_number</code></td><td>다섯 기간 모두 비었고, 검색어가 숫자와 하이픈(-)만</td></tr>
+      </tbody>
+    </table>
+    <ul class="pts">
+      <li>분류는 <code>마이와디즈_참여내역리스트_검색</code>, 동작은 <code>검색</code> 입니다.</li>
+      <li><b>한 번 검색에 한 번만</b> 보냅니다. 새로고침, 상세를 다녀온 경우, 같은 검색어를 다시 넣은 경우는 보내지 않습니다.</li>
+      <li>검색어 본문은 보내지 않습니다. 글자인지 숫자인지만 보냅니다.</li>
+      <li><b>바뀐 점</b>: 처음엔 검색어 종류를 "상세" 칸에 실었습니다. 다른 이슈(FE1-2634)가 공용 수집 함수의 상세 칸을 지워서, 어느 환경에서도 남는 라벨 칸으로 옮겼습니다.</li>
+    </ul>
+<pre>trackingCustomTag({
+  category: '마이와디즈_참여내역리스트_검색',
+  action: '검색',
+  label: `${hasResult ? '결과있음' : '결과없음'}_${searchRequest.keywordType}`,
+});</pre>
+    <h4 class="sm">② 오픈예정 PC 하단 고정 알림 버튼</h4>
+    <div class="ba">
+      <div class="b"><strong>이전</strong>위쪽 버튼과 하단 고정 버튼의 알림 신청이 같은 기록으로 쌓여 구분할 수 없었습니다.</div>
+      <div class="a"><strong>지금</strong>하단 고정 버튼에만 라벨 <code>하단고정</code> 이 붙습니다. 위쪽 버튼은 라벨이 빈 값 그대로라, 기존 "오픈예정 알림 신청 전체" 집계는 그대로 유지됩니다.</div>
+    </div>
+    <p class="where">어디서: <code>apps/global/src/pages/my-wadiz/orders/_ui/MyFundingList.tsx</code>, <code>.../_ui/MyFundingListContainer.tsx</code>, <code>apps/global/src/pages/funding/[projectNo]/_ui/DesktopAside/DesktopAside.tsx</code>, <code>.../FundingCTAButtonGroup/BaseCTAButtonGroup.tsx</code></p>
+    <p class="note">확인한 것: stage 시험 5개를 모두 통과했습니다. 검색 한 번에 <code>결과있음_text</code> 1건만 쌓이는 것을 화면에서 확인했고, 하단 고정 라벨은 알림 신청 후 바로 취소해 확인했습니다.</p>
+  </article>
+</section>
+
+<!-- ───────────── 옛 화면과 코드 정리 ───────────── -->
+<section class="group">
+  <h2>옛 화면과 코드 정리</h2>
+  <p class="lead">FE1-2370(static 잔여 화면 삭제 검토)의 하위 작업 세 건입니다. 사용자가 보는 화면은 바뀌지 않거나, 옛 주소로 들어오면 새 화면이나 메인으로 갑니다.</p>
+
+  <article class="item" id="fe1-2372">
+    <div class="meta"><a class="key" href="https://wadiz.atlassian.net/browse/FE1-2372">FE1-2372</a><span class="pill">11-12 배포</span><span class="pill">wadiz-frontend · com.wadiz.web</span></div>
+    <h3>대체 화면이 있는 옛 화면 삭제</h3>
+    <p class="core">새 화면이 이미 있는 옛 화면 세 가지를 지우고, 옛 주소로 들어오면 서버가 새 주소로 보내게 했습니다.</p>
+    <table>
+      <thead><tr><th>옛 화면</th><th>옛 주소</th><th>이제 가는 곳</th></tr></thead>
+      <tbody>
+        <tr><td>만든 프로젝트 목록</td><td><code>/web/wmypage/myfunding/makinglist</code>, <code>makingrewardlist</code></td><td><code>/web/maker/projects</code> (새 목록)</td></tr>
+        <tr><td>아이디·비밀번호 찾기</td><td><code>/web/waccount/find/id</code>, <code>find/pwd</code></td><td><code>/web/main</code></td></tr>
+        <tr><td>비밀번호 재설정</td><td><code>/web/account/resetPassword</code></td><td><code>/web/main</code></td></tr>
+      </tbody>
+    </table>
+    <ul class="pts">
+      <li><b>찾기 기능은 그대로</b>: 계정 서비스의 찾기 화면(<code>/find-password</code>)에서 합니다. 로그인 화면의 링크도 이 주소로 바로 가게 바꿨습니다.</li>
+      <li><b>링크 정리</b>: 스튜디오 나가기 버튼, 메이커 알림 링크, 별칭 주소가 모두 새 목록으로 바로 갑니다.</li>
+      <li><b>지운 것</b>: 옛 화면 파일(JSP) 5개, 그 화면만 쓰던 서버 코드와 옛 비밀번호 찾기 메일, 옛 목록 화면 스크립트와 스타일.</li>
+    </ul>
+    <p class="where">어디서: 서버 <code>com.wadiz.web/web/WEB-INF/urlrewrite.xml</code>(주소 이동 규칙), 화면 <code>apps/account/src/pages/(auth)/_ui/FindIDPasswordSection/FindIDPasswordSection.tsx</code>, <code>studio/funding/src/helpers/path.ts</code></p>
+    <p class="note">확인한 것: stage 에서 옛 주소 7개가 모두 새 주소로 이동(302)하고, 로그인 화면의 찾기 링크가 계정 서비스 찾기 화면으로 가는 것을 통과했습니다.</p>
+  </article>
+
+  <article class="item" id="fe1-2373">
+    <div class="meta"><a class="key" href="https://wadiz.atlassian.net/browse/FE1-2373">FE1-2373</a><span class="pill">11-12 배포</span><span class="pill">wadiz-frontend · com.wadiz.web</span></div>
+    <h3>static 죽은 코드 8건과 참조 없는 파일 삭제</h3>
+    <p class="core">어느 화면에서도 쓰이지 않던 static 코드 8건과 아무도 가리키지 않던 파일 4건을 지웠습니다. 사용자 화면은 그대로입니다.</p>
+    <table>
+      <thead><tr><th>지운 것</th><th>내용</th></tr></thead>
+      <tbody>
+        <tr><td>reward 묶음 전체</td><td><code>static/entries/reward/</code> 25개 파일. static 빌드 목록에서도 빠짐</td></tr>
+        <tr><td>account 의 화면 4개</td><td>follow, social, welcomepackage, empty</td></tr>
+        <tr><td>landing 의 about 화면</td><td>about 화면과 그 화면을 만들던 빌드 단계</td></tr>
+        <tr><td>참조 없는 파일 4개</td><td><code>funding2015</code>, <code>equity</code>, <code>pdfjs</code>, <code>landingEventList.json</code></td></tr>
+        <tr><td>서버 화면 틀 파일</td><td>지운 묶음을 부르던 줄, 쓰이지 않는 화면 틀 파일 2개</td></tr>
+      </tbody>
+    </table>
+    <ul class="pts">
+      <li><b>"정말 아무도 안 쓴다"를 확인한 방법</b>: 지운 파일 이름과 주소 22개를 두 저장소의 stage 브랜치와 다른 저장소 62개(앱, 메이커센터 등)에서 찾았습니다. 쓰는 코드는 0건이었습니다.</li>
+      <li><b>영향받는 화면 네 곳</b>: 참여내역 상세, 유입 이벤트, 로그인 주소, 옛 결제 완료 주소. 지운 줄은 원래부터 빈 코드이거나 붙을 자리가 없던 코드라 동작이 같습니다.</li>
+    </ul>
+    <p class="where">어디서: <code>static/entries/reward/</code>, <code>static/entries/account/webpack.config.js</code>, <code>static/entries/landing/</code>, 서버 <code>web/WEB-INF/jsp/winclude/_staticPaths.jsp</code>, <code>.frontend/chunks.config.js</code></p>
+    <p class="note">확인한 것: stage 빌드에 reward 묶음이 없고, 지운 파일은 더 만들어지지 않으며, 로그인 주소가 계정 서비스 로그인으로 정상 이동하는 것을 통과했습니다.</p>
+  </article>
+
+  <article class="item" id="fe1-2375">
+    <div class="meta"><a class="key" href="https://wadiz.atlassian.net/browse/FE1-2375">FE1-2375</a><span class="pill">11-12 배포</span><span class="pill">약관 화면</span></div>
+    <h3>쓰지 않는 약관 3종 삭제</h3>
+    <p class="core">운영에서 쓰지 않는 것을 확인한 약관 화면 세 가지를 지우고, 옛 주소로 들어오면 메인으로 보내게 했습니다.</p>
+    <table>
+      <thead><tr><th>지운 화면</th><th>옛 주소</th><th>이제 가는 곳</th></tr></thead>
+      <tbody>
+        <tr><td>개인정보 이용 동의서</td><td><code>/web/wterms/privacy-agreement/*</code></td><td><code>/web/main</code></td></tr>
+        <tr><td>앱 전용 약관</td><td><code>/web/wterms/app/*</code></td><td><code>/web/main</code></td></tr>
+        <tr><td>투자 게시판 운영정책</td><td><code>/web/wterms/equity_board_policy</code></td><td><code>/web/main</code></td></tr>
+      </tbody>
+    </table>
+    <ul class="pts">
+      <li><b>남긴 것</b>: 카카오 동의서 새 화면(<code>/policies/privacy-agreement/kakao</code>)은 그대로 열립니다. 영어나 일본어 사용자도 다른 주소로 튕기지 않게 했습니다.</li>
+      <li><b>손대지 않은 것</b>: 가입 약관 원문 파일과 다른 약관 화면(<code>/web/wterms/signup</code> 등).</li>
+    </ul>
+    <p class="where">어디서: 서버 <code>WWEBTermsController.java</code>, <code>web/WEB-INF/urlrewrite.xml</code>, <code>GlobalUrlMappingConfig.java</code>, 화면 스타일 <code>static/entries/landing/src/terms/equity-feedback.scss</code>(삭제)</p>
+    <p class="note">확인한 것: stage 에서 옛 주소 7개가 메인으로 이동하고, 카카오 동의서가 한국어·영어·일본어로 모두 열리고, 남긴 약관 화면이 그대로 열리는 것을 통과했습니다.</p>
+  </article>
+</section>
+
+<footer>
+  <p>근거: FE개발1 주간 회의 2026-11-17 페이지, 이슈마다 남긴 구현 결과 문서와 검증 기록, Jira 이슈. 배포일은 회의 페이지 기준입니다.</p>
+</footer>
+</main>
+</div>
