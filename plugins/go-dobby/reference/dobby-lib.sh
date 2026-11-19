@@ -4902,6 +4902,19 @@ _ship_cell_run() {
 #    화면은 완벽히 멀쩡하고 데이터만 사라진다.
 DOBBY_TRACK_SYMBOLS='trackingEvent|trackingCustomTag|trackingBraze|@wadiz/metrics|@wadiz/event-tracker|useTrackingEventRef|EventTracker|dataLayer|gaEvt|appboy'
 DOBBY_AD_SYMBOLS='AdBoundary|_refer_section_st|adTracking|parseAdSection'
+# CRM — 서포터의 수신 동의·알림 설정·관계(팔로우·찜·알림 신청)를 바꾸는 호출. 지워지면 화면은 멀쩡하고
+# 마케팅 대상에서만 조용히 빠진다(실측 FE1-2668: 7/2 이관에서 팔로우 뒤 알림 동의 유도가 통째로 빠졌다).
+DOBBY_CRM_SYMBOLS='setMarketingAgreements|setMarketingTerms|postMarketingTerms|MarketingTermsMutation|setChannelNotification|ChannelNotificationMutation|postInboxAgree|marketingConsentsService|termService|notificationService|marketing/terms|marketing/consent|marketingconsents|ajaxSubscribe|setting/alarm|postMakerFollow|postMakerNoticeReceive|postFollow|deleteFollow|ajaxFollow|ajaxUnFollow|maker/follow/request|setMakerFollowing|setMakerNotificationStatus|useMakerFollow\b|handleMakerFollow|ComingSoonNotification|FundingReopenRequest|postWish|deleteWish|usePostWishAfterFlow|RestockSubscription|putCatchupNotification|news/notifications/settings|push\.setting\.|sendMakerFollowPushMessage|usePostActionModalFlow|MakerNoticeReceiveModal|MakerNotificationSettingModal|InducingMakerFollowModal|InducingModal|useMarketingNotificationOn|useMarketingAgreement|MarketingNotificationSettings'
+# 부수 효과 목록(side-effects.py)만 쓰는 갈래 — 서버에 무언가를 쓰는 요청과 브라우저 저장소 쓰기
+DOBBY_WRITE_SYMBOLS='\b(axios|api|http|client|fetcher|instance|request)\.(post|put|patch|delete)\(|method: *.(POST|PUT|PATCH|DELETE)|useMutation\(|navigator\.sendBeacon'
+DOBBY_STORAGE_SYMBOLS='(localStorage|sessionStorage)\.(setItem|removeItem)|Cookies?\.(set|remove)\(|document\.cookie *='
+
+# _side_effects_py 하위명령 … — side-effects.py 를 부른다. 이름 목록은 이 파일 한 곳에 두고 환경 변수로 넘긴다.
+_side_effects_py() {
+  DOBBY_TRACK_SYMBOLS="$DOBBY_TRACK_SYMBOLS" DOBBY_AD_SYMBOLS="$DOBBY_AD_SYMBOLS" DOBBY_CRM_SYMBOLS="$DOBBY_CRM_SYMBOLS" \
+  DOBBY_WRITE_SYMBOLS="$DOBBY_WRITE_SYMBOLS" DOBBY_STORAGE_SYMBOLS="$DOBBY_STORAGE_SYMBOLS" \
+    python3 "$DOBBY_LIB_DIR/side-effects.py" "$@"
+}
 
 # 그 파일 자체가 광고·수집 코드인 경로(정규식). 저장소 두 곳을 함께 본다.
 DOBBY_TRACK_PATHS='^packages/core/src/metrics/|^packages/event-tracker/|^static/packages/shared/utils/tracking\.js|^static/packages/react-common/src/utils/gaData\.js|^web/WEB-INF/jsp/winclude/tracking'
@@ -4918,12 +4931,13 @@ DOBBY_AD_PATHS='^static/libraries/react-ad-boundary/|^static/packages/banner/|^s
 dobby_track_scan() {
   # ⛔ local 을 반복문 안에서 다시 선언하지 않는다 — zsh 는 이미 있는 이름을 다시 local 하면
   #    `d=''` 처럼 **값을 출력한다**(실측: 그 줄이 보고 출력에 섞여 나왔다).
-  local key="$1" base="${2:-}" f out wt br rp rel cmp d pr owner envbr body n unseen=""
+  local key="$1" base="${2:-}" f out wt br rp rel cmp d pr prs own owner envbr body n unseen="" imp src spec specs
   [ -n "$key" ] || { _die "쓰임: dobby_track_scan KEY [베이스브랜치]"; return 1; }
   f="$(_order_dir "$key")/track-scan.md"
   [ -d "$(_order_dir "$key")" ] || { _die "오더 폴더가 없다: $key"; return 1; }
 
   out="$(mktemp -t dobbytrack)" || return 1
+  imp="$(mktemp -t dobbyimp)" || return 1
   : > "$out"
 
   # '## 워크트리 / 브랜치' 표: | repo | 브랜치 | 경로 |
@@ -4952,6 +4966,14 @@ dobby_track_scan() {
     # ① 아직 머지 전이면 3점 diff 가 이 브랜치의 변경을 그대로 준다. 미커밋도 함께 본다.
     [ -n "$cmp" ] && d="$( { git -C "$wt" diff -U0 "$cmp"...HEAD; git -C "$wt" diff -U0; git -C "$wt" diff -U0 --cached; } 2>/dev/null )"
 
+    # ①-2 환경 브랜치에 머지돼 비었으면 기준 브랜치(라이브 라인)와 비교한다. 라이브에 나가기 전이면
+    #     이 오더가 바꾼 것만 나온다. PR 은 기능 브랜치에 기준 브랜치를 합친 것까지 담아 남의 변경이
+    #     섞인다(실측 FE1-2378 rc4: #31398 "Merge origin/cloud_live into feature" 242파일).
+    if [ -z "$(printf '%s' "$d" | tr -d '[:space:]')" ] \
+       && git -C "$wt" rev-parse --verify -q "origin/$ORCHESTRATION_DEFAULT_BASE" >/dev/null 2>&1; then
+      d="$(git -C "$wt" diff -U0 "origin/$ORCHESTRATION_DEFAULT_BASE"...HEAD 2>/dev/null)"
+    fi
+
     # ② 비었으면 PR 의 diff 를 받는다 — 머지된 뒤에도 남아 있는 유일한 정본이다.
     #
     # ⛔ **베이스로 걸러야 한다.** 한 브랜치가 여러 PR 의 head 일 수 있고, 그중에는 릴리스
@@ -4960,20 +4982,33 @@ dobby_track_scan() {
     #    hotfix/v20261002 로 간 #29642 가 잡혀 event-tracker 전체가 걸렸다. 이 오더의
     #    rc4 PR 은 충돌 해결 브랜치로 올라간 #29639 이다).
     # 그래서 **충돌 해결 브랜치 + 그 환경 베이스**를 먼저 찾는다(dobby-ship 의 정상 경로다).
+    #
+    # ⛔ **그 환경으로 간 PR 을 전부 합친다.** 한 오더가 같은 환경으로 PR 을 여러 번 보낸다
+    #    (실측 FE1-2267 dev: #30557·#30562·#30646). 첫 PR 하나만 보면 뒤 PR 의 변경을 못 본다.
     if [ -z "$d" ] && [ -n "$br" ]; then
       owner="$(_ship_owner "$rp")"
       envbr="$(_ship_branch "$rp" "$base")"
-      pr=""
+      prs=""
       if [ -n "$envbr" ]; then
-        pr="$(gh pr list --repo "$owner" --head "${br}_into_${envbr}" --base "$envbr" --state all \
-          --json number -q '.[0].number' 2>/dev/null)"
-        [ -n "$pr" ] || pr="$(gh pr list --repo "$owner" --head "$br" --base "$envbr" --state all \
-          --json number -q '.[0].number' 2>/dev/null)"
+        prs="$( { gh pr list --repo "$owner" --head "${br}_into_${envbr}" --base "$envbr" --state all --json number -q '.[].number'
+                  gh pr list --repo "$owner" --head "$br" --base "$envbr" --state all --json number -q '.[].number'; } 2>/dev/null | sort -un)"
       fi
       # 베이스를 모를 때만 아무 PR 이나 받는다 — 그때는 섞여 들어올 수 있음을 감수한다.
-      [ -n "$pr" ] || pr="$(gh pr list --repo "$owner" --head "$br" --state all \
+      [ -n "$prs" ] || prs="$(gh pr list --repo "$owner" --head "$br" --state all \
         --json number -q '.[0].number' 2>/dev/null)"
-      [ -n "$pr" ] && d="$(gh pr diff "$pr" --repo "$owner" 2>/dev/null)"
+      for pr in $(printf '%s\n' "$prs" | tr '\n' ' '); do
+        d="$d
+$(gh pr diff "$pr" --repo "$owner" 2>/dev/null)"
+      done
+      # PR 은 기능 브랜치에 합친 기준 브랜치의 남의 변경까지 담는다(실측 FE1-2378 rc4 #31061: 남의 파일 123개).
+      # 이 오더 키가 메시지에 있는 커밋이 건드린 파일만 남긴다.
+      own="$(git -C "$wt" log --no-merges --grep="$key" --name-only --format= HEAD 2>/dev/null | sort -u)"
+      # 맥 awk 는 줄바꿈이 든 값을 -v 로 못 받는다 — 환경 변수로 넘긴다
+      [ -n "$own" ] && d="$(printf '%s\n' "$d" | OWN="$own" LC_ALL=C awk '
+        BEGIN { n = split(ENVIRON["OWN"], a, "\n"); for (i = 1; i <= n; i++) keep[a[i]] = 1 }
+        /^diff --git / { f = $3; sub(/^a\//, "", f); g = $4; sub(/^b\//, "", g); on = (f in keep) || (g in keep) }
+        on')"
+      [ -n "$(printf '%s' "$d" | tr -d '[:space:]')" ] || d=""
     fi
 
     # ③ 그래도 비었으면 dobby-end 가 남긴 코드 변경 스냅샷을 본다.
@@ -4991,16 +5026,22 @@ dobby_track_scan() {
       printf '%s' "$rel" | grep -qE "$DOBBY_TRACK_PATHS" && printf '| [수집] | %s | %s | 수집 코드 자체 |\n' "$rp" "$rel" >> "$out"
       printf '%s' "$rel" | grep -qE "$DOBBY_AD_PATHS"    && printf '| [광고] | %s | %s | 광고 코드 자체 |\n' "$rp" "$rel" >> "$out"
     done <<EOF
-$(printf '%s' "$d" | sed -nE 's#^\+\+\+ b/(.+)$#\1#p' | sort -u)
+$(printf '%s' "$d" | sed -nE 's#^\+\+\+ b/(.+)$#\1#p; s#^--- a/(.+)$#\1#p' | sort -u)
 EOF
 
     # ── B. 바뀐 줄의 심볼로 걸리는 것(연관) ─────────────────────────────
     #    awk 로 파일을 따라가며 +/- 줄만 본다. 같은 파일·같은 갈래는 한 번만 적는다.
     # LC_ALL=C — diff 안에 깨진 바이트가 있으면 awk 가 towc 변환 실패 경고를 쏟는다.
     # 바이트로만 다루면 그 일이 없고, shorten() 이 잘린 조각을 떼므로 출력은 멀쩡하다.
+    #    ⛔ 지운 파일은 `+++ /dev/null` 이라 `+++ b/` 로는 이름을 못 잡는다. 앞 줄 `--- a/` 에서 잡는다
+    #       (실측 FE1-2267 #30557: 지운 파일 세 개의 수집 9줄이 전부 앞 파일 이름으로 묶여 사라졌다).
     printf '%s' "$d" | LC_ALL=C awk -v rp="$rp" -v ts="$DOBBY_TRACK_SYMBOLS" -v as="$DOBBY_AD_SYMBOLS" \
+      -v cs="$DOBBY_CRM_SYMBOLS" -v imp="$imp" \
       -v strong='trackingEvent|trackingCustomTag|trackingBraze|@wadiz/event-tracker|useTrackingEventRef|EventTracker|dataLayer|gaEvt|appboy' '
-      /^\+\+\+ b\// { file = substr($0, 7); delete donet[file]; delete donea[file]; next }
+      /^diff --git / { file = ""; next }
+      /^--- a\// { file = substr($0, 7); delete donet[file]; delete donea[file]; delete donec[file]; next }
+      /^\+\+\+ b\// { file = substr($0, 7); delete donet[file]; delete donea[file]; delete donec[file]; next }
+      /^(\+\+\+|---) / { next }
       /^[+-][^+-]/ {
         line = substr($0, 2); sign = substr($0, 1, 1)
         if (file == "") next
@@ -5014,6 +5055,17 @@ EOF
           printf "| [수집] | %s | %s | %s %s |\n", rp, file, (sign == "-" ? "⛔ 지워짐 —" : "호출"), shorten(line) }
         if (line ~ as && !(file in donea)) { donea[file] = 1
           printf "| [광고] | %s | %s | %s %s |\n", rp, file, (sign == "-" ? "⛔ 지워짐 —" : "호출"), shorten(line) }
+        if (line ~ cs && !(file in donec)) { donec[file] = 1
+          printf "| [CRM] | %s | %s | %s %s |\n", rp, file, (sign == "-" ? "⛔ 지워짐 —" : "호출"), shorten(line) }
+        # 지운·더한 import 를 따로 적는다 — 지운 부품이 **안에서** 하던 일은 바뀐 줄에 안 보인다
+        if (line ~ /^[ \t]*(import|export)[^"\x27]*from[ \t]*["\x27]/ || line ~ /^[ \t]*import[ \t]*["\x27]/) {
+          sp = line; sub(/^[^"\x27]*["\x27]/, "", sp); sub(/["\x27].*$/, "", sp)
+          # 가져온 이름(`{ A, B as C }`·기본값)을 함께 넘긴다 — 묶음 패키지를 통째로 따라가면 남의 기능이 쏟아진다
+          nm = line; sub(/[ \t]*from[ \t]*["\x27].*$/, "", nm); sub(/^[ \t]*(import|export)[ \t]+(type[ \t]+)?/, "", nm)
+          if (nm ~ /^["\x27]/) nm = ""
+          gsub(/[ \t]+as[ \t]+/, "@", nm); gsub(/[ \t:]/, "", nm)
+          if (sp != "") printf "%s\t%s\t%s::%s\n", sign, file, sp, nm > imp
+        }
       }
       # ⛔ 맥 awk 는 substr 이 **바이트** 단위라 한글을 반 토막 낸다. 깨진 바이트가 섞이면
       #    아래 표시용 awk 가 towc 변환 실패로 죽는다(실측 FE1-2075). 잘린 조각을 떼어 낸다.
@@ -5029,6 +5081,41 @@ $(awk '/^## /{ins=(index($0,"워크트리")>0)?1:0; next}
      "$(_order_dir "$key")/status.md" 2>/dev/null)
 EOF
 
+  # ── C. 지운 import 가 안에서 하던 일 ────────────────────────────────────
+  # 옛 부품을 통째로 버리고 새 부품을 쓰면, 옛 부품 **안**의 수집·CRM 호출은 diff 에 한 줄도 안 나온다
+  # (실측 FE1-2267: 옛 만족도 창 안의 Braze `re_review_write_complete` 가 그렇게 사라졌다).
+  # 지운 import 를 저장소 안 패키지 끝까지 따라가, 그 안의 수집·광고·CRM 호출을 `⛔ 대체` 로 적는다.
+  # 같은 import 를 다른 곳에서 다시 더했으면(옮긴 것) 따라가지 않는다.
+  if [ -s "$imp" ] && command -v python3 >/dev/null 2>&1; then
+    while IFS='	' read -r rp wt; do
+      [ -n "$wt" ] && [ -d "$wt" ] || continue
+      while IFS='	' read -r src specs; do
+        [ -n "$src" ] || continue
+        # 명령 치환은 zsh 도 낱말로 나눈다(따옴표 없는 변수 확장은 안 나눈다)
+        _side_effects_py follow --repo "$wt" --from "$src" $(_words "$specs") 2>/dev/null \
+          | LC_ALL=C awk -F'\t' -v rp="$rp" -v src="$src" '!seen[$1 FS $3]++ {
+              # import 하나가 수집 코드 파일 전체로 이어지면 수십 줄이 된다 — 8줄까지만 적고 나머지는 개수로
+              sp = $2; sub(/::.*/, "", sp)
+              if (++cnt[sp] <= 8) printf "| [%s] | %s | %s | ⛔ 대체 — 지운 import `%s` 안의 %s: %s |\n", $1, rp, src, sp, $3, $4
+              else { more[sp]++; lane[sp] = $1 } }
+            END { for (sp in more) printf "| [%s] | %s | %s | ⛔ 대체 — 지운 import `%s` 안에 %d건 더 (dobby_side_effect_inventory 로 전부 본다) |\n", lane[sp], rp, src, sp, more[sp] }' >> "$out"
+      done <<EOF2
+$(LC_ALL=C awk -F'\t' '$1 == "+" { sub(/::.*/, "", $3); add[$3] = 1; next }
+                       $1 == "-" { del[$2 FS $3] = 1 }
+                       END { for (k in del) { split(k, a, FS); sp = a[2]; sub(/::.*/, "", sp)
+                                              if (!(sp in add)) s[a[1]] = s[a[1]] " " a[2] }
+                             for (f in s) printf "%s\t%s\n", f, s[f] }' FS='\t' "$imp")
+EOF2
+    done <<EOF
+$(awk '/^## /{ins=(index($0,"워크트리")>0)?1:0; next}
+       ins==1 && /^[ \t]*\|/{ n=split($0,a,"|")
+         if (n>=5) { r=a[2]; p=a[4]; gsub(/^[ \t]+|[ \t]+$/,"",r); gsub(/^[ \t`]+|[ \t`]+$/,"",p)
+           if (r !~ /repo|^[ \t:-]*$/ && p !~ /^[ \t:-]*$/) { sub(/^~/, ENVIRON["HOME"], p); printf "%s\t%s\n", r, p } } }' \
+     "$(_order_dir "$key")/status.md" 2>/dev/null)
+EOF
+  fi
+  rm -f "$imp"
+
   # 같은 (갈래, 저장소, 파일) 은 한 줄만 남긴다 — A(경로)와 B(심볼)가 같은 파일을 둘 다 잡는다.
   # 남길 때는 **더 알려 주는 쪽**을 고른다: `지워짐` > 심볼 호출 > "코드 자체".
   # ⛔ 파이프 전체를 LC_ALL=C 로 묶는다. 로케일이 UTF-8 이면 sort·cut 이 한글이 섞인 줄에서
@@ -5037,12 +5124,12 @@ EOF
   body="$( export LC_ALL=C
     awk -F'|' '{ r = ($0 ~ /지워짐/) ? 0 : (($0 ~ /코드 자체/) ? 2 : 1); print r "\t" $0 }' "$out" 2>/dev/null \
     | sort -t'	' -k1,1n | cut -f2- \
-    | awk -F'|' '{ k = $2 "|" $3 "|" $4 } !seen[k]++' \
+    | awk -F'|' '{ k = $2 "|" $3 "|" $4; if ($5 ~ /대체/) k = k "|" $5 } !seen[k]++' \
     | sort -t'|' -k2,2 -k3,3 -k4,4 )"
   rm -f "$out"
 
   {
-    printf '# %s — 광고·데이터 수집 접촉\n\n' "$key"
+    printf '# %s — 광고·데이터 수집·CRM 접촉\n\n' "$key"
     printf -- '- **갱신**: %s\n' "$(date '+%Y-%m-%d %H:%M')"
     printf -- '- **비교 대상**: %s\n' "${base:-기본 베이스}"
     [ -n "$unseen" ] && printf -- '- **변경을 보지 못한 저장소**:%s\n' "$unseen"
@@ -5061,23 +5148,24 @@ EOF
       printf '> 모든 회차에서 본다. 이 판정은 diff 로 보이는 것만 가린다 — 레이아웃 변경으로\n'
       printf '> 배너가 사라지는 것처럼 diff 에 안 드러나는 것은 그물이 받는다.\n'
     else
-      printf '**접촉 있음.** 아래 갈래마다 `[수집]`·`[광고]` 시나리오를 result.md 에 넣어야 한다.\n'
+      printf '**접촉 있음.** 아래 갈래마다 `[수집]`·`[광고]`·`[CRM]` 시나리오를 result.md 에 넣어야 한다.\n'
       printf '넣지 않으면 `dobby_testrun_lint` 가 회차 마감을 거부한다.\n\n'
       printf '| 갈래 | 저장소 | 파일 | 근거 |\n|---|---|---|---|\n'
       printf '%s\n' "$body"
       printf '\n⛔ `지워짐` 으로 표시된 줄은 **추적 호출이 사라진 것**이다. 의도한 것인지 반드시 확인한다 —\n'
       printf '화면은 멀쩡하고 데이터만 빠지므로 테스트로도 잡히지 않는다.\n'
+      printf '\n⛔ `대체` 로 표시된 줄은 **지운 부품 안에서 하던 일**이다. 새 코드에도 같은 호출이 있는지 확인한다.\n'
     fi
   } > "$f"
 
   if [ -z "$body" ] && [ -n "$unseen" ]; then
     # 하나도 못 봤는데 "탐지 없음" 이라고 하면 **없다는 말로 읽힌다.** 거짓 음성이 가장 나쁘다.
-    printf '%s — 광고·수집 접촉: ⚠ 확인 불가 (변경을 읽지 못했다)\n' "$key"
+    printf '%s — 광고·수집·CRM 접촉: ⚠ 확인 불가 (변경을 읽지 못했다)\n' "$key"
   elif [ -z "$body" ]; then
-    printf '%s — 광고·수집 접촉: 탐지 없음\n' "$key"
+    printf '%s — 광고·수집·CRM 접촉: 탐지 없음\n' "$key"
   else
     n="$(printf '%s\n' "$body" | LC_ALL=C grep -c . )"
-    printf '%s — 광고·수집 접촉: 있음 (%s건)\n' "$key" "$n"
+    printf '%s — 광고·수집·CRM 접촉: 있음 (%s건)\n' "$key" "$n"
     # 화면에는 12줄까지만. 전부는 track-scan.md 에 있다 — 쏟아지면 아무도 안 읽는다.
     printf '%s\n' "$body" | head -12 | awk -F'|' '{ g=$2; p=$4; e=$5
       gsub(/^[ \t]+|[ \t]+$/, "", g); gsub(/^[ \t]+|[ \t]+$/, "", p); gsub(/^[ \t]+|[ \t]+$/, "", e)
@@ -5095,7 +5183,75 @@ _track_scan_kinds() {
   f="$(_order_dir "$1")/track-scan.md"
   [ -f "$f" ] || return 0
   # 표의 갈래 칸만 읽는다 — 안내 문장의 `[수집]`·`[광고]` 까지 세면 늘 둘 다 요구한다
-  grep -oE '^\| *\[(수집|광고)\]' "$f" 2>/dev/null | grep -oE '\[(수집|광고)\]' | sort -u | tr '\n' ' '
+  grep -oE '^\| *\[(수집|광고|CRM)\]' "$f" 2>/dev/null | grep -oE '\[(수집|광고|CRM)\]' | sort -u | tr '\n' ' '
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 부수 효과 목록 — 옛 코드를 지우거나 새 부품으로 갈아끼울 때, 옛 코드가 하던 "안 보이는 일"
+# (수집·광고·CRM·쓰기 요청·저장소 쓰기)을 import 를 끝까지 따라가 줄마다 적고, 새 코드에서 닫게 한다.
+#
+# 왜: 설계가 화면만 대조하면 안 보이는 일은 빠진다. 실측 FE1-2267 은 옛 만족도 창 안의 Braze
+# `re_review_write_complete` 를, FE1-2668(7/2 이관)은 팔로우 뒤 알림 동의 유도를 잃었다. 둘 다
+# 바뀐 줄에는 한 글자도 안 보였다 — 지운 쪽은 import 한 줄이고, 일은 그 부품 안에 있었다.
+#
+# 파일: {오더}/side-effects-{저장소}.md. 줄마다 `판정`(옮김·뺌·무관)을 채워야 설계를 확정할 수 있고,
+# 통합 때는 설계 뒤 옛 코드에 들어온 커밋까지 닫아야 통합이 끝난다(끝 헬퍼가 막는다).
+# ─────────────────────────────────────────────────────────────────────────────
+
+_side_effect_files() { ls "$(_order_dir "$1")"/side-effects-*.md 2>/dev/null; }
+
+# _side_effect_wt KEY 저장소 — 그 저장소의 작업 폴더 경로
+_side_effect_wt() { _v2_worktrees "$1" | awk -F'\t' -v r="$2" '$1==r{print $3; exit}'; }
+
+# dobby_side_effect_inventory KEY 저장소 지울경로... — 기준 브랜치 끝 커밋의 코드로 목록을 만든다.
+# 다시 불러도 사람이 적은 `새 코드`·`판정` 칸은 (파일, 호출) 이 같으면 남는다.
+dobby_side_effect_inventory() {
+  local key="$1" repo="$2" wt base commit f
+  [ -n "$key" ] && [ -n "$repo" ] && [ $# -ge 3 ] || { _die "쓰임: dobby_side_effect_inventory KEY 저장소 지울경로..."; return 1; }
+  shift 2
+  command -v python3 >/dev/null 2>&1 || { _die "python3 가 없다"; return 1; }
+  wt="$(_side_effect_wt "$key" "$repo")"
+  [ -n "$wt" ] && [ -d "$wt" ] || { _die "$repo 작업 폴더가 상태 문서 워크트리 표에 없다"; return 1; }
+  base="$(_v2_base_of "$key" "$repo" "$wt")"
+  git -C "$wt" fetch -q origin "$base" 2>/dev/null
+  commit="$(git -C "$wt" rev-parse --short "origin/$base" 2>/dev/null)" || { _die "origin/$base 를 찾지 못했다"; return 1; }
+  f="$(_order_dir "$key")/side-effects-$repo.md"
+  _side_effects_py inventory --repo "$wt" --ref "$commit" --out "$f" --key "$key" \
+    --repo-name "$repo" --base-commit "$commit" "$@"
+}
+
+# dobby_side_effect_check KEY — 목록이 모두 닫혔나. 닫히지 않은 줄을 보이고 1. 목록이 없으면 0.
+dobby_side_effect_check() {
+  local key="$1" f rc=0
+  [ -n "$key" ] || { _die "쓰임: dobby_side_effect_check KEY"; return 1; }
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    printf '[%s]\n' "$(basename "$f")"
+    _side_effects_py check "$f" || rc=1
+  done <<EOF
+$(_side_effect_files "$key")
+EOF
+  return $rc
+}
+
+# dobby_migration_drift KEY — 목록을 만든 기준 커밋 뒤에 지울 경로를 고친 커밋을 표에 붙이고 닫혔나 본다.
+# 실측 FE1-2267: 설계 뒤 배포 전까지 옛 코드에 13커밋이 들어왔다(FE1-2568 수집 추가 등). 설계 때 대조는 그 전 코드다.
+dobby_migration_drift() {
+  local key="$1" f repo wt base rc=0
+  [ -n "$key" ] || { _die "쓰임: dobby_migration_drift KEY"; return 1; }
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    repo="$(sed -nE 's/^- \*\*저장소\*\*: *//p' "$f" | head -1)"
+    wt="$(_side_effect_wt "$key" "$repo")"
+    [ -n "$wt" ] && [ -d "$wt" ] || { printf '%s: %s 작업 폴더가 없다\n' "$(basename "$f")" "$repo"; rc=1; continue; }
+    base="$(_v2_base_of "$key" "$repo" "$wt")"
+    git -C "$wt" fetch -q origin "$base" 2>/dev/null
+    _side_effects_py drift --repo "$wt" --file "$f" --branch "origin/$base" || { rc=1; continue; }
+    _side_effects_py check "$f" || rc=1
+  done <<EOF
+$(_side_effect_files "$key")
+EOF
+  return $rc
 }
 
 # dobby_testrun_lint 결과폴더 — 근거 칸에 **파일 이름만** 적힌 행을 잡는다.
@@ -5152,7 +5308,7 @@ $bad
 $(_words "$tkinds")
 EOF
   if [ -n "$miss" ]; then
-    _die "광고·수집 접촉이 보고됐는데 result.md 에 해당 시나리오가 없다:$miss
+    _die "광고·수집·CRM 접촉이 보고됐는데 result.md 에 해당 시나리오가 없다:$miss
 
 $(sed -n '/^| 갈래/,$p' "$(_order_dir "$tkey")/track-scan.md" 2>/dev/null | head -12)
 
@@ -5162,6 +5318,8 @@ $(sed -n '/^| 갈래/,$p' "$(_order_dir "$tkey")/track-scan.md" 2>/dev/null | he
          조작 뒤 (window.dataLayer||[]).slice(window.__dobbyMark) 를 근거로 적는다.
   [광고] 배너가 **75% 보일 때까지 스크롤**한 뒤 ad.section.view 를 본다(threshold 0.75).
          링크에 _refer_section_st= 가 있는지도 함께 본다 — 없으면 추적 자체가 안 걸린다.
+  [CRM]  동의·알림·팔로우·찜이 갈리는 조건(예: 마케팅 미동의자)을 갖춘 계정으로 조작하고,
+         네트워크 요청 주소와 보낸 값을 근거로 적는다. 앱 전용 연결(appBridge)은 코드 대조로 닫는다.
 확인할 수 없는 사정이면 시나리오를 넣고 **판정을 보류**로, 사유를 함께 적어라(빼지 말 것)."
     return 1
   fi
@@ -7377,6 +7535,7 @@ _dobby_v2_end_u() {
     설계:사람확인|설계확인:사람확인)
       [ -f "$d/design.md" ] || { _rej "설계 문서가 없습니다"; return 1; }
       _v2_design_approved "$key" && { _rej "이미 승인된 설계입니다. 확정으로 끝내세요"; return 1; }
+      dobby_side_effect_check "$key" >&2 || { _rej "부수 효과 목록에 닫히지 않은 줄이 있습니다(위). 줄마다 판정을 채우세요 — 기획서에 뺀다는 말이 없으면 옮김입니다"; return 1; }
       [ "$(_order_phase "$key")" = 설계확인 ] || dobby_phase "$key" 설계확인
       if _v2_light "$key"; then
         _v2_set "$key" analysis-agent "사람 차례" "" "light 확인 — 요약을 보고 '실행'이라고 답하기" "light 세션 창에서 답하기(닫았으면 /do $key)"
@@ -7388,6 +7547,7 @@ _dobby_v2_end_u() {
       return 0 ;;
     설계:확정|설계확인:확정)
       _v2_design_approved "$key" || { _rej "승인 기록이 지금 설계와 다릅니다. dobby_design_ack $key 사용자(또는 auto)를 먼저 부르세요"; return 1; }
+      dobby_side_effect_check "$key" >&2 || { _rej "부수 효과 목록에 닫히지 않은 줄이 있습니다(위). 줄마다 판정을 채우세요 — 기획서에 뺀다는 말이 없으면 옮김입니다"; return 1; }
       # 개발자를 켰는데 테스터를 켜지 않았으면 이유가 있어야 한다(담당자 줄이 있는 오더만)
       if [ -n "$(_v2_roles_line "$key")" ] && _v2_has "$key" 개발자 && ! _v2_has "$key" 테스터 && ! _v2_test_skip "$key"; then
         _rej "테스터를 켜지 않은 이유가 없습니다. 테스트 계획 제목 아래에 '- **검증**: 필요 없음 — {이유}' 줄을 적거나 dobby_v2_set_roles $key 테스터 로 테스터를 켜세요"; return 1
@@ -7569,7 +7729,15 @@ _dobby_v2_end_u() {
         [ -z "$(git -C "$p" status --porcelain -uno 2>/dev/null)" ] || { _rej "$r 에 커밋하지 않은 변경이 있습니다"; return 1; }
         [ "$(git -C "$p" rev-parse HEAD 2>/dev/null)" = "$(git -C "$p" rev-parse '@{u}' 2>/dev/null)" ] \
           || { _rej "$r 의 끝 커밋이 원격 브랜치와 다릅니다(푸시 안 됨)"; return 1; }
+        # 코드 파일을 지웠으면 부수 효과 목록이 있어야 한다 — 지운 부품 안의 일은 diff 에 안 보인다
+        if [ ! -f "$d/side-effects-$r.md" ] && git -C "$p" diff --name-only --diff-filter=D \
+             "origin/$(_v2_base_of "$key" "$r" "$p")...HEAD" 2>/dev/null | grep -qE '\.(tsx?|jsx?)$'; then
+          _rej "$r 에서 코드 파일을 지웠는데 부수 효과 목록이 없습니다. dobby_side_effect_inventory $key $r {지운 경로...} 로 만들고 줄마다 판정을 채우세요"; return 1
+        fi
       done < <(_v2_worktrees "$key")
+      if [ -n "$(_side_effect_files "$key")" ]; then
+        dobby_migration_drift "$key" >&2 || { _rej "부수 효과 목록이 닫히지 않았습니다(위). 설계 뒤 옛 코드에 들어온 커밋까지 줄마다 판정을 채우세요"; return 1; }
+      fi
       if [ -n "$pm" ]; then
         # 산출물만 확정하는 통합 — 결과 문서는 요구하지 않는다. 산출 기록이 있어야 한다
         [ "$(_v2_newest_produce "$key")" -gt 0 ] || { _rej "산출 기록(produce.md)이 없습니다"; return 1; }
