@@ -3276,6 +3276,8 @@ dobby_fix_count() {
 # 마지막 호출 뒤 DOBBY_REUSE_MAX_GAP 초 안일 때만 이어 쓴다. 근거 수치는 skills/do/session-reuse.md.
 DOBBY_REUSE_MAX_CTX=120000
 DOBBY_REUSE_MAX_GAP=300
+# light 세션이 새 세션으로 넘어가는 선 — 그 세션 첫 호출 뒤로 늘어난 문맥(토큰). light 는 속도가 먼저라 넉넉히 둔다.
+DOBBY_LIGHT_MAX_GROWTH=300000
 
 # _v2_history_passed KEY — 검증 이력 표의 마지막 행이 '완료'이고 실패가 0이면 0. 어느 커밋을 시험했는지는 보지 않는다.
 _v2_history_passed() {
@@ -3870,11 +3872,80 @@ dobby_v2_ask_wait() {
   done
 }
 
-# dobby_v2_ctx — 지금 세션의 마지막 호출 문맥 크기(토큰). 기록을 못 찾으면 0. light 가 일반 실행으로 넘길지 가를 때 쓴다.
+# dobby_v2_ctx — 지금 세션의 마지막 호출 문맥 크기(토큰). 기록을 못 찾으면 0.
 dobby_v2_ctx() {
   local r; r="$(_v2_last_call "$(_session_id)")"
   r="${r%%$'\t'*}"
   case "$r" in ''|*[!0-9]*) echo 0 ;; *) echo "$r" ;; esac
+}
+
+# dobby_v2_ctx_growth — 이 세션 첫 호출 뒤로 늘어난 문맥(토큰). 기록이 없으면 0. light 가 새 세션으로 넘어갈지 가를 때 쓴다.
+dobby_v2_ctx_growth() {
+  local f r; f="$(ls ~/.claude/projects/*/"$(_session_id)".jsonl 2>/dev/null | head -1)"
+  [ -n "$f" ] || { echo 0; return 0; }
+  r="$(jq -rs '[.[] | select(.type == "assistant" and .message.usage != null and (.isSidechain | not))
+      | .message.usage | (.input_tokens // 0) + (.cache_creation_input_tokens // 0) + (.cache_read_input_tokens // 0)]
+      | if length == 0 then 0 else last - first end' "$f" 2>/dev/null)"
+  case "$r" in ''|*[!0-9]*) echo 0 ;; *) echo "$r" ;; esac
+}
+
+# _v2_role_model SLUG — 담당자별 모델(~/.config/go-dobby/role-models.json). run.sh 의 role_model 과 같은 규칙. 없으면 빈 출력.
+_v2_role_model() {
+  local role=developer f="$HOME/.config/go-dobby/role-models.json"
+  case "$1" in analysis-agent) role=planner ;; review-agent) role=reviewer ;; deploy-agent) role=deployer ;; test-agent) role=tester ;; produce-agent) role=producer ;; esac
+  [ -f "$f" ] && jq -r --arg r "$role" '.[$r] // empty | strings | select(test("^claude-[a-z0-9-]+$"))' "$f" 2>/dev/null
+}
+
+# _v2_parent_perm — 바깥 세션(CLAUDE_PID)의 권한 모드. 대시보드 잡은 bypassPermissions 로 띄운다. 인자에 없으면 auto.
+_v2_parent_perm() {
+  local a; a="$(ps -o args= -p "${CLAUDE_PID:-0}" 2>/dev/null)"
+  case "$a" in
+    *"--permission-mode "*) a="${a##*--permission-mode }"; printf '%s' "${a%% *}" ;;
+    *--dangerously-skip-permissions*) printf bypassPermissions ;;
+    *) printf auto ;;
+  esac
+}
+
+# _v2_child_claude ARGS… — 세션 안에서 새 claude 세션을 띄운다. 바깥 세션의 CLAUDE* 변수(세션 아이디 등)를 지워 섞이지 않게 한다.
+_v2_child_claude() {
+  local u=() v
+  while IFS= read -r v; do [ "$v" = CLAUDE_CODE_SHELL ] || u+=(-u "$v"); done < <(env | sed -n 's/^\(CLAUDE[A-Z_]*\)=.*/\1/p')
+  env ${u[@]+"${u[@]}"} claude "$@"
+}
+
+# dobby_v2_review_session KEY — light 세션이 리뷰를 새 세션(/do KEY)으로 돌리고 끝날 때까지 기다린다. 백그라운드로 부른다.
+#   출력 "지금 단계<TAB>리뷰 세션 아이디<TAB>종료 코드". 리뷰 차례가 아니면 거부.
+dobby_v2_review_session() {
+  local key="$1" wt st m out rc sid
+  st="$(dobby_v2_step "$key" | cut -f1)"
+  [ "$st" = 리뷰 ] || { _die "리뷰 차례가 아닙니다(다음 차례: ${st:-알 수 없음})"; return 1; }
+  wt="$(_order_worktree "$key")"; [ -d "$wt" ] || { _die "작업 폴더가 없습니다: ${wt:-빈 값}"; return 1; }
+  m="$(_v2_role_model review-agent)"
+  dobby_event "$key" "light 리뷰 세션 띄움" 2>/dev/null
+  out="$(cd "$wt" && DOBBY_V2_CHAINED=1 DOBBY_SESSION_CWD="$wt" _v2_child_claude -p "/do $key" --strict-mcp-config ${m:+--model "$m"} \
+    --permission-mode "$(_v2_parent_perm)" --output-format json 2>/dev/null)"; rc=$?
+  sid="$(printf '%s' "$out" | jq -r '.session_id // empty' 2>/dev/null)"
+  dobby_event "$key" "light 리뷰 세션 끝 — 지금 단계 $(_order_phase "$key"), 세션 ${sid:-알 수 없음}" 2>/dev/null
+  printf '%s\t%s\t%s\n' "$(_order_phase "$key")" "${sid:-?}" "$rc"
+}
+
+# dobby_v2_docs_session KEY — 결과 문서 세션(/do KEY 결과 문서)을 띄우고 끝날 때까지 기다린다. run.sh 의 docs_start 와 같은 명령. 백그라운드로 부른다.
+#   출력 "결과 문서 줄<TAB>종료 코드". 쓸 문서가 없으면 "없음", 다른 문서 세션이 돌면 "도는 중".
+dobby_v2_docs_session() {
+  local key="$1" d wt p m rc
+  d="$(_order_dir "$key")"
+  case "$(_v2_docs_line "$key")" in 대기*|"작성 중"*) ;; *) echo 없음; return 0 ;; esac
+  p="$(cat "$d/.docs-job" 2>/dev/null)"; [ -n "$p" ] && kill -0 "$p" 2>/dev/null && { echo "도는 중"; return 0; }
+  wt="$(_order_worktree "$key")"; [ -d "$wt" ] || { _die "작업 폴더가 없습니다: ${wt:-빈 값}"; return 1; }
+  m="$(_v2_role_model deploy-agent)"
+  ( cd "$wt" && DOBBY_DOCS_JOB=1 DOBBY_V2_CHAINED=1 DOBBY_SESSION_CWD="$wt" _v2_child_claude -p "/do $key 결과 문서" --strict-mcp-config ${m:+--model "$m"} \
+      --permission-mode "$(_v2_parent_perm)" --output-format json >/dev/null 2>&1 ) &
+  p=$!; printf '%s' "$p" > "$d/.docs-job"
+  dobby_event "$key" "결과 문서 세션 띄움 — light 배포와 함께 씀 (pid $p)" 2>/dev/null
+  wait "$p"; rc=$?
+  rm -f "$d/.docs-job"
+  dobby_event "$key" "결과 문서 세션 끝 — 결과 문서 $(_v2_docs_line "$key")" 2>/dev/null
+  printf '%s\t%s\n' "$(_v2_docs_line "$key")" "$rc"
 }
 
 # dobby_v2_test_fixes KEY — 검증 실패를 고친 횟수. 설계 문서의 '## 변경 N — 검증 실패' 절 수
@@ -6383,12 +6454,7 @@ _dobby_v2_set_roles_u() {
     esac
   fi
   want="$(printf '%s\n%s\n기획자\n' "$cur" "$asked")"
-  # light 오더는 리뷰를 하지 않는다. 개발자를 켜도 리뷰어를 함께 켜지 않는다(사람이 리뷰어를 적으면 켠다)
-  if printf '%s\n' "$want" | grep -qxF 개발자; then
-    if _v2_light "$key"; then want="$(printf '%s\n배포담당\n' "$want")"
-    else want="$(printf '%s\n리뷰어\n배포담당\n' "$want")"
-    fi
-  fi
+  if printf '%s\n' "$want" | grep -qxF 개발자; then want="$(printf '%s\n리뷰어\n배포담당\n' "$want")"; fi
   if printf '%s\n' "$want" | grep -qxF 테스터 && ! printf '%s\n' "$want" | grep -qxF 개발자; then
     _die "테스터는 개발자가 켜진 오더에만 켭니다(문서와 조사는 리뷰어가 확인합니다)"; return 1
   fi
@@ -6446,6 +6512,8 @@ dobby_v2_role_skip() {
 # 상태 문서 '- **진행 방식**: light' 줄이 표지다. 사람이 대화로 확인하면 "light", 확인 없이 스스로 판단하면 "light auto".
 # 대시보드·오피스가 이 줄을 읽어 light 오더임을 보이고, 판정 헬퍼가 설계 확인 차례를 light 확인으로 그린다.
 _v2_light() { grep -qE '^[ \t]*-[ \t]*\*\*진행 방식\*\*:[ \t]*light' "$(_order_dir "$1")/status.md" 2>/dev/null; }
+# 중단되지 않은 light(줄 값이 light 또는 light auto). 단계 판정이 리뷰를 뺀 구현부터 검증까지 light 절차로 보낸다.
+_v2_light_live() { grep -qE '^[ \t]*-[ \t]*\*\*진행 방식\*\*:[ \t]*light( auto)?[ \t]*$' "$(_order_dir "$1")/status.md" 2>/dev/null; }
 _v2_light_auto() { grep -qE '^[ \t]*-[ \t]*\*\*진행 방식\*\*:[ \t]*light auto' "$(_order_dir "$1")/status.md" 2>/dev/null; }
 
 # dobby_v2_light_mark KEY [auto] — light 오더 표지를 적는다. 담당자를 정하기(dobby_v2_set_roles) 전에 부른다.
@@ -7510,7 +7578,12 @@ dobby_v2_step() {
   local key="$1" first="${2:-}" d f ph dev rd k env nx what repo tgt pr
   d="$(_order_dir "$key")"; f="$d/status.md"
   # 안드로이드 오더의 검증은 브라우저가 아니라 로컬 기기로 한다
-  _out() { printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$(_v2_step_doc "$4")"; }
+  # 중단되지 않은 light 오더는 리뷰를 뺀 구현부터 검증까지 light 절차로 잇는다. 리뷰는 light 세션이 띄운 리뷰 세션이 받는다
+  _out() {
+    local doc="$4"
+    case "$1" in 구현|수정|통합|배포|검증) _v2_light_live "$key" && doc=light.md ;; esac
+    printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$(_v2_step_doc "$doc")"
+  }
   # 설계나 변경이 확정된 뒤의 첫 일: 구현 또는 산출
   _out_work() {
     if [ "$(_v2_next_work "$key")" = 산출 ]; then _out 산출 produce-agent "$(_v2_produce_desc "$key")" produce.md
@@ -7754,7 +7827,7 @@ _dobby_v2_docs_end_u() {
 #   답이 달린 질문(ask.json)이 있으면 `질문과 답:` 으로 붙이고 그 질문을 닫는다. 세션은 그 답을 받아 이어 간다.
 _dobby_v2_begin_u() {
   local key="$1"; shift
-  local line stage slug desc doc d sid rec sub name cwd rd m other round now t0 cc0 ws0 rname why
+  local line stage slug desc doc d sid rec sub name cwd rd m other round now t0 cc0 ws0 rname why ndoc
   case "$*" in 결과\ 문서*|결과문서*) _v2_docs_begin "$key"; return $? ;; esac
   # "테스트 건너뛰기 {이유}" — 단계를 판정하기 전에 테스터를 끝낸다(배포가 확인된 오더는 여기서 완성이 된다)
   case "$*" in
@@ -7809,7 +7882,10 @@ _dobby_v2_begin_u() {
   dobby_v2_reconcile "$key" "$sid"
   cwd="$(_order_worktree "$key")"; [ -d "$cwd" ] || cwd="$PWD"
   now="$(date '+%Y%m%d-%H%M')"; rd="$(_v2_latest_round "$key")"; m="$(_v2_change_count "$key")"
-  case "${doc##*/}" in
+  ndoc="${doc##*/}"
+  # light 세션 안의 구현·수정·통합·배포·검증은 일반 실행과 같은 이름으로 남긴다(첫 시작 /do 키 light 만 "가벼운 변경")
+  [ "$ndoc" = light.md ] && [ "${1:-}" != light ] && case "$stage" in 구현) ndoc=impl.md ;; 수정) ndoc=fix.md ;; 통합) ndoc=integrate.md ;; 배포) ndoc=ship.md ;; 검증) ndoc=verify.md ;; esac
+  case "$ndoc" in
     design.md)   sub=design; name=설계 ;;
     takeover.md) sub=takeover; name="이어받기 설계" ;;
     change.md)   sub="change-$((m + 1))"; name="변경 $((m + 1)) 접수" ;;
