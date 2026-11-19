@@ -167,8 +167,8 @@ mcp=()
 MCP_CFG="${TMPDIR:-/tmp}/dobby-mcp-$KEY.json"
 PROFILE="$HOME/.cache/dobby-chrome/$KEY"
 mcp2=(); MCP_CFG2="${TMPDIR:-/tmp}/dobby-mcp-$KEY-2.json"; PROFILE2="$PROFILE-2"; NOPAR=""
-# 안드로이드 오더는 기기 한 대로 검증하므로 묶음을 함께 돌리지 않는다
-_v2_android "$KEY" && NOPAR=1
+# 앱 오더(안드로이드·리액트 네이티브)는 기기 한 대로 검증하므로 묶음을 함께 돌리지 않는다
+_v2_app "$KEY" && NOPAR=1
 # 사무실에 이 실행을 작업 단위 하나로 알린다. 끝날 때(멈춤·오류·완료 모두) 서류철이 캐비닛으로 간다
 UBY=auto; { [ -n "$AUTO_ENV" ] || dobby_v2_device "$KEY"; } && UBY=full
 dobby_unit_start "$KEY" "$UBY" "$UBY:$$"
@@ -382,11 +382,11 @@ while :; do
     구현|산출|리뷰|수정|통합|배포|실패분석) ;;
     검증)
       # 배포 확인 전(단계 배포)이면 검증은 배포 뒤에야 의미가 있다. 사람이 배포를 마쳐 단계가 검증이면 돈다.
-      # 안드로이드 오더는 배포가 없다. 전체 실행(기기 시험 표시)일 때만 이어서 기기로 시험한다.
+      # 앱 오더(안드로이드·리액트 네이티브)는 배포가 없다. 전체 실행(기기 시험 표시)일 때만 이어서 기기로 시험한다.
       if [ -z "$AUTO_ENV" ] && [ "$WITH_TEST" != 1 ] && [ "$ph" = 배포 ]; then
         finish "통합까지 끝났습니다. 배포한 뒤 run.sh $KEY --with-test 또는 /do $KEY 로 검증하세요."
       fi
-      if _v2_android "$KEY" && [ "$WITH_TEST" != 1 ] && ! dobby_v2_device "$KEY"; then
+      if _v2_app "$KEY" && [ "$WITH_TEST" != 1 ] && ! dobby_v2_device "$KEY"; then
         finish "통합까지 끝났습니다. 기기를 연결하고 /dobby-test $KEY 로 로컬 기기 시험을 해 주세요."
       fi
       docs_wait

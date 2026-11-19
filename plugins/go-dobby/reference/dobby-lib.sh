@@ -1349,9 +1349,11 @@ dobby_ensure_worktree() {
   git -C "$src" rev-parse --git-dir >/dev/null 2>&1 || { _die "소스 repo 없음: $src"; return 1; }
   git -C "$src" worktree prune 2>/dev/null
   [ -f "$sf" ] && rec="$(_wt_row "$sf" "$repo")"
-  # 안드로이드 오더는 배포가 없어 다른 저장소와 한 오더에 섞지 않는다 — 하위 이슈로 나눈다
-  if [ -z "$rec" ] && _v2_worktrees "$key" | cut -f1 | grep -qvx "$repo" \
-     && { [ "$repo" = wadiz-android ] || _v2_android "$key"; }; then
+  # 앱 저장소(안드로이드·리액트 네이티브 모듈)는 배포가 없어 웹 저장소와 한 오더에 섞지 않는다 — 하위 이슈로 나눈다
+  if [ -z "$rec" ] && _v2_app_mixed "$key" "$repo"; then
+    if [ "$repo" = wadiz-multiplatform ] || _v2_rn "$key"; then
+      _die "앱 저장소(wadiz-android·wadiz-multiplatform)는 다른 저장소(웹·서버 등)와 한 오더에 섞지 않는다($(_v2_worktrees "$key" | cut -f1 | tr '\n' ' ')+ $repo) — 앱용 하위 이슈로 나눈다"; return 1
+    fi
     _die "wadiz-android 는 다른 저장소와 한 오더에 섞지 않는다($(_v2_worktrees "$key" | cut -f1 | tr '\n' ' ')+ $repo) — 안드로이드용 하위 이슈로 나눈다"; return 1
   fi
   if [ -n "$rec" ]; then
@@ -1435,8 +1437,18 @@ dobby_commit_push() {
       _die "wadiz-android 커밋 제목은 '{이슈키}-{이슈-제목을-하이픈으로}' 형식입니다(예: FE1-1234-설정화면-다크모드-추가): $(printf '%s' "$msg" | head -1)"
       return 1
     fi
+    # wadiz-multiplatform 은 제목이 '{이슈키} {종류}: 제목' 이다(저장소 CLAUDE.md)
+    if _rn_repo "$wt" && ! printf '%s\n' "$msg" | head -1 | grep -qE '^[A-Z][A-Z0-9]*-[0-9]+ [a-z]+(\([^)]*\))?!?: .+'; then
+      _die "wadiz-multiplatform 커밋 제목은 '{이슈키} {종류}: 제목' 형식입니다(예: FE1-1234 feat: 검색 결과 빈 화면 문구): $(printf '%s' "$msg" | head -1)"
+      return 1
+    fi
   fi
   git -C "$wt" add -A >&2 || return 1
+  # Metro 임시 줄은 안드로이드 앱 파일에만 들어간다 — 커밋에 섞이면 거부한다(우회 없음)
+  if _android_repo "$wt" && git -C "$wt" diff --cached | grep -q '^+.*RN-LOCAL-DO-NOT-COMMIT'; then
+    _die "Metro 임시 줄(RN-LOCAL-DO-NOT-COMMIT)이 커밋에 들어갑니다 — dobby_rn_devserver revert 로 그 줄을 지우고 다시 하세요"
+    return 1
+  fi
   # 저장소 고유 금지 규칙(이번에 **추가된 줄**만) — 위반이 있으면 커밋하지 않는다.
   # 리뷰어 프롬프트에 적어 두는 것으로는 안 지켜져, 나가는 길목에서 막는다.
   if [ "${DOBBY_FORCE:-0}" != "1" ]; then
@@ -3421,8 +3433,8 @@ dobby_v2_env() {
 dobby_v2_set_env() {
   local key="$1" env="$2" f
   case "$key" in TASK-*) _die "TASK- 오더는 자동 배포를 하지 않는다(통합에서 PR 을 만들고 끝난다): $key"; return 1 ;; esac
-  # 안드로이드 오더는 배포가 없다 — 화면의 '배포까지' 버튼도 전체 실행(기기 시험까지)으로 받는다
-  _v2_android "$key" && { dobby_v2_set_device "$key"; return; }
+  # 앱 오더(안드로이드·리액트 네이티브)는 배포가 없다 — 화면의 '배포까지' 버튼도 전체 실행(기기 시험까지)으로 받는다
+  _v2_app "$key" && { dobby_v2_set_device "$key"; return; }
   _ship_has "$env" "$DOBBY_SHIP_MERGE_ENVS" || { _die "자동 배포 환경은 dev·rc1·rc4 중 하나다: '$env'"; return 1; }
   f="$(_order_dir "$key")/status.md"
   [ -f "$f" ] || { _die "$key 의 상태 문서가 없습니다"; return 1; }
@@ -3450,7 +3462,7 @@ dobby_v2_device() { grep -qE '^[ \t]*-[ \t]*\*\*기기 시험\*\*:[ \t]*자동' 
 # dobby_v2_set_device KEY — 그 줄을 '- **단계**:' 바로 아래에 적는다. 안드로이드 오더만 받는다.
 dobby_v2_set_device() {
   local key="$1" f
-  _v2_android "$key" || { _die "기기 시험 표시는 안드로이드 오더만 받는다(웹 오더는 dobby_v2_set_env): $key"; return 1; }
+  _v2_app "$key" || { _die "기기 시험 표시는 앱 오더(안드로이드·리액트 네이티브)만 받는다(웹 오더는 dobby_v2_set_env): $key"; return 1; }
   f="$(_order_dir "$key")/status.md"
   dobby_v2_device "$key" && return 0
   awk '{ print } /^[ \t]*-[ \t]*\*\*단계\*\*/ && !done { print "- **기기 시험**: 자동"; done = 1 }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
@@ -3478,6 +3490,8 @@ _v2_base_of() {
     | tr ',' '\n' | awk -F= -v r="$2" '{gsub(/^[ \t]+|[ \t]+$/,"")} $1==r{print $2; exit}')"
   [ -n "$b" ] || ! git -C "$3" ls-remote --exit-code --heads origin "$ORCHESTRATION_DEFAULT_BASE" >/dev/null 2>&1 \
     || b="$ORCHESTRATION_DEFAULT_BASE"
+  # 리액트 네이티브 모듈은 원격 기본 브랜치가 main(운영)이고 기능 개발은 develop 이다
+  [ -n "$b" ] || [ "$2" != wadiz-multiplatform ] || b=develop
   [ -n "$b" ] || b="$(git -C "$3" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)"
   printf '%s' "${b#origin/}"
 }
@@ -6116,7 +6130,7 @@ dobby_v2_next_all() {
           fi
         elif _v2_test_passed "$k"; then
           _v2_release_notice || continue
-        elif _v2_android "$k" && ! dobby_v2_device "$k" && ! _v2_last_failed "$k"; then
+        elif _v2_app "$k" && ! dobby_v2_device "$k" && ! _v2_last_failed "$k"; then
           kind=verify; text="기기 시험 차례 — 기기를 연결하고 /dobby-test $k"; cmd="/dobby-test $k"
         elif _v2_history_passed "$k"; then
           kind=verify; text="검증 차례 — 마지막 회차는 지금 커밋 전에 시험함"; act=autorun
@@ -6751,6 +6765,33 @@ _v2_android() { _v2_worktrees "$1" | cut -f1 | grep -qx 'wadiz-android'; }
 # _android_repo 작업폴더 — 그 폴더가 wadiz-android 저장소면 참.
 _android_repo() { git -C "$1" remote get-url origin 2>/dev/null | grep -q 'wadiz-android'; }
 
+# _v2_rn KEY — 작업 폴더 표에 wadiz-multiplatform(리액트 네이티브 모듈)이 있으면 참.
+_v2_rn() { _v2_worktrees "${1:-}" | cut -f1 | grep -qx 'wadiz-multiplatform'; }
+
+# _v2_app KEY — 앱 오더(안드로이드나 리액트 네이티브 모듈)면 참. 배포 없이 로컬 기기로 시험한다.
+_v2_app() { _v2_android "${1:-}" || _v2_rn "${1:-}"; }
+
+# _rn_repo 작업폴더 — 그 폴더가 wadiz-multiplatform 저장소면 참.
+_rn_repo() { git -C "${1:-}" remote get-url origin 2>/dev/null | grep -q 'wadiz-multiplatform'; }
+
+# _v2_app_mixed KEY 새저장소 — 새 저장소를 더하면 앱 저장소와 웹 저장소가 한 오더에 섞이는지. 앱 저장소 둘끼리는 섞어도 된다.
+_v2_app_mixed() {
+  local others re='wadiz-android|wadiz-multiplatform'
+  others="$(_v2_worktrees "${1:-}" | cut -f1 | grep -vx "${2:-}")"
+  [ -n "$others" ] || return 1
+  if printf '%s\n' "${2:-}" | grep -qxE "$re"; then printf '%s\n' "$others" | grep -qvxE "$re"
+  else printf '%s\n' "$others" | grep -qxE "$re"
+  fi
+}
+
+# _v2_wt_path KEY 저장소 — 작업 폴더 표에서 그 저장소의 경로(~ 를 펼친다). 없으면 빈 출력과 1.
+_v2_wt_path() {
+  local p
+  p="$(_v2_worktrees "${1:-}" | awk -F'\t' -v r="${2:-}" '$1==r{print $3; exit}')"
+  [ -n "$p" ] || return 1
+  printf '%s' "${p/#\~/$HOME}"
+}
+
 # _android_jver JDK폴더 — 주 버전 숫자.
 _android_jver() { "$1/bin/java" -version 2>&1 | sed -nE '1s/.*version "(1\.)?([0-9]+).*/\2/p'; }
 
@@ -6862,6 +6903,12 @@ dobby_android_check() {
     fi
   done
   [ ${#args[@]} -gt 0 ] || { echo "그래들 검사: 앱 모듈만 바뀌었는데 앱 빌드 권한이 없어 건너뜀 —$skipped"; return 0; }
+  # 리액트 네이티브 모듈도 고친 오더는, 네이티브 층이 고정 버전과 다르면 구운 모듈로 앱을 컴파일한다(발행 전 모듈 API 를 쓸 수 있다)
+  if _v2_rn "$key" && printf '%s\n' "${args[@]}" | grep -q '^:app:' \
+     && [ "$(dobby_rn_mode "$key" "$wt")" = bake ]; then
+    dobby_rn_bake "$key" || return $?
+    args+=("-PrnLocal=$(_v2_wt_path "$key" wadiz-multiplatform)")
+  fi
   start=$(date +%s)
   _android_gradle "$key" "$wt" check "${args[@]}"; rc=$?
   el=$(( $(date +%s) - start ))
@@ -6883,12 +6930,14 @@ dobby_android_device() {
   [ -n "$s" ] && printf '%s' "$s"
 }
 
-# dobby_android_install KEY 작업폴더 — 작업 폴더를 디버그로 빌드해 연결된 기기에 설치하고, 서버가 rc4 인지 맞춘다.
+# dobby_android_install KEY 작업폴더 [그래들 인자…] — 작업 폴더를 디버그로 빌드해 연결된 기기에 설치하고, 서버가 rc4 인지 맞춘다.
+#   그래들 인자는 :app:installDebug 뒤에 붙는다(리액트 네이티브 로컬 굽기의 -PrnLocal=모듈폴더).
 #   디버그 빌드는 처음 설치하면 rc4 를 본다(build-config 의 SERVER_MODE). 기기에 다른 서버가 저장돼 있으면 앱 데이터를 지워 rc4 로 돌린다(로그인도 풀린다).
 #   adb 연결은 끊지 않는다. 반환 0 설치됨 · 1 빌드 실패 · 2 준비 안 됨 · 3 기기 없음 · 4 앱 빌드 권한 없음.
 dobby_android_install() {
   local key="$1" wt="$2" s cur start rc el envf
-  [ -n "$key" ] && [ -d "$wt" ] || { _die "쓰임: dobby_android_install KEY 작업폴더"; return 2; }
+  [ -n "$key" ] && [ -d "$wt" ] || { _die "쓰임: dobby_android_install KEY 작업폴더 [그래들 인자…]"; return 2; }
+  shift 2
   s="$(dobby_android_device)" || s=""
   [ -n "$s" ] || { echo "기기 없음 — USB 디버깅을 켠 기기를 연결해 주세요(adb devices 에 device 로 보여야 합니다)"; return 3; }
   envf="$(_order_dir "$key")/.android-env"
@@ -6901,7 +6950,7 @@ dobby_android_install() {
     echo "서버: 기기에 $cur 가 저장돼 있어 앱 데이터를 지웠습니다(로그인이 풀렸습니다)"
   fi
   start=$(date +%s)
-  ANDROID_SERIAL="$s" _android_gradle "$key" "$wt" install :app:installDebug; rc=$?
+  ANDROID_SERIAL="$s" _android_gradle "$key" "$wt" install :app:installDebug "$@"; rc=$?
   el=$(( $(date +%s) - start ))
   if [ $rc -ne 0 ]; then
     printf '설치: 실패 · %s분 %s초 · 기록 %s\n' $((el / 60)) $((el % 60)) "$DOBBY_ANDROID_LOG"
@@ -6913,7 +6962,9 @@ dobby_android_install() {
     "$(adb -s "$s" shell getprop ro.product.model 2>/dev/null | tr -d '\r')" "$s" \
     "$(adb -s "$s" shell dumpsys package "$DOBBY_ANDROID_PKG" 2>/dev/null | sed -nE 's/.*versionName=([^ ]*).*/\1/p' | head -1 | tr -d '\r')" \
     "$DOBBY_ANDROID_SERVER" "$(git -C "$wt" rev-parse --short HEAD)"
-  [ -n "$(git -C "$wt" status --porcelain)" ] && echo "주의: 커밋하지 않은 변경이 들어간 빌드입니다"
+  _v2_rn "$key" && _rn_source "$key" "$wt" "$@"
+  # Metro 임시 줄 하나만 바뀐 것은 시험용이라 알리지 않는다
+  [ -n "$(git -C "$wt" status --porcelain)" ] && ! _rn_marker_only "$wt" && echo "주의: 커밋하지 않은 변경이 들어간 빌드입니다"
   return 0
 }
 
@@ -6948,7 +6999,8 @@ dobby_android_shot() {
   rm -f "$png"; printf '%s\n' "$dir/$name.webp"
 }
 
-# dobby_android_log [api|crash|정규식] [줄 수] — 기기 로그에서 그 줄만 끝부분을 낸다. api 는 앱의 서버 응답 기록, crash 는 강제 종료·응답 없음.
+# dobby_android_log [api|crash|rn-e2e|정규식] [줄 수] — 기기 로그에서 그 줄만 끝부분을 낸다. api 는 앱의 서버 응답 기록, crash 는 강제 종료·응답 없음.
+#   rn-e2e 는 리액트 네이티브 시험 기록([rn-e2e] JSON, 디버그 모듈만)을 '포트 | 함수 | 인자' 한 줄씩으로 낸다. 조각난 기록은 이어 붙인다.
 #   로그를 비우려면 시나리오 시작 전에 `adb logcat -c` 를 한 번 부른다.
 dobby_android_log() {
   local pat="${1:-crash}" n="${2:-40}" s
@@ -6956,8 +7008,341 @@ dobby_android_log() {
   case "$pat" in
     api)   pat='BaseWadizAPIProvider' ;;
     crash) pat='FATAL EXCEPTION|AndroidRuntime: |ANR in '"$DOBBY_ANDROID_PKG" ;;
+    rn-e2e)
+      adb -s "$s" logcat -d -s ReactNativeJS:V 2>/dev/null | perl -MJSON::PP -ne '
+        BEGIN { binmode STDOUT, ":encoding(UTF-8)" }
+        next unless /\[rn-e2e(?:#(\d+)\/(\d+)\/(\d+))?\] (.*?)\x27?\r?$/;
+        my ($id, $i, $n, $b) = ($1, $2, $3, $4);
+        if (defined $id) {
+          $c{$id} = [] if $i == 1;
+          $c{$id}[$i - 1] = $b; next if grep { !defined } @{$c{$id}}[0 .. $n - 1]; $b = join "", @{$c{$id}}; delete $c{$id}
+        }
+        utf8::decode($b);
+        my $j = eval { JSON::PP->new->decode($b) };
+        if ($j) { print "$j->{port} | $j->{fn} | ", substr(JSON::PP->new->canonical->encode($j->{args} // {}), 0, 300), "\n" }
+        else { print substr($b, 0, 300), "\n" }' | tail -n "$n"
+      return 0 ;;
   esac
   adb -s "$s" logcat -d 2>/dev/null | grep -E "$pat" | tail -n "$n" | cut -c1-400
+}
+
+# ── 리액트 네이티브 모듈(wadiz-multiplatform) 오더 ───────────────────────────────
+# 배포하지 않는다. 검사는 바뀐 파일만 하고, 검증은 앱을 로컬에서 빌드해 연결된 기기에 설치해 한다.
+# 화면 코드(자바스크립트)만 바뀌면 고정 버전 모듈 + Metro 로, 네이티브 층이 바뀌면 모듈을 직접 구워(-PrnLocal) 싣는다.
+DOBBY_RN_HOST_NAME="wadiz-android-rn-host"
+DOBBY_RN_MARK="RN-LOCAL-DO-NOT-COMMIT"
+DOBBY_RN_INIT="app/src/main/java/com/markmount/wadiz/rn/RnInitializer.kt"
+
+# _rn_yarn 작업폴더 인자… — 저장소가 정한 yarn(corepack)으로 돌린다. 전역 shim 을 깔지 않으려고 corepack enable 대신 쓴다.
+_rn_yarn() { local wt="${1:-}"; shift; (cd "$wt" && corepack yarn "$@"); }
+
+# dobby_rn_env KEY 작업폴더 — .nvmrc 의 노드로 맞추고 의존이 없거나 낡았으면 설치한다. 현재 셸에 노드를 바꾸므로 $(...) 로 부르지 않는다.
+#   사내망에서 corepack 이 yarn 을 못 받으면 공개 저장소로 한 번 더 시도한다. 반환 0 준비됨 · 2 준비 안 됨.
+dobby_rn_env() {
+  local key="${1:-}" wt="${2:-}" want nvmsh log
+  [ -n "$key" ] && [ -f "$wt/package.json" ] || { _die "쓰임: dobby_rn_env KEY 작업폴더"; return 2; }
+  want="$(tr -d ' \r\n' < "$wt/.nvmrc" 2>/dev/null)"
+  if [ -n "$want" ] && [ "$(node -v 2>/dev/null)" != "v${want#v}" ]; then
+    nvmsh="${NVM_DIR:-$HOME/.nvm}/nvm.sh"
+    [ -s "$nvmsh" ] || { echo "노드: $want 가 필요한데 nvm 이 없습니다 — 노드 $want 을 설치해 주세요"; return 2; }
+    . "$nvmsh" >/dev/null 2>&1
+    nvm use "$want" >/dev/null 2>&1 || nvm install "$want" >/dev/null 2>&1 \
+      || { echo "노드: $want 로 바꾸지 못했습니다 — nvm install $want 를 실행해 주세요"; return 2; }
+  fi
+  echo "노드: $(node -v)"
+  if [ -f "$wt/node_modules/.yarn-state.yml" ] && [ ! "$wt/yarn.lock" -nt "$wt/node_modules/.yarn-state.yml" ]; then
+    echo "의존: 설치돼 있음"; return 0
+  fi
+  mkdir -p "$(_order_dir "$key")/rn"; log="$(_order_dir "$key")/rn/install-$(_ts).log"
+  if ! _rn_yarn "$wt" install --immutable > "$log" 2>&1; then
+    COREPACK_NPM_REGISTRY=https://registry.npmjs.org _rn_yarn "$wt" install --immutable >> "$log" 2>&1 \
+      || { echo "의존: 설치 실패 · 기록 $log"; tail -5 "$log"; return 2; }
+  fi
+  echo "의존: 설치함 · 기록 $log"
+  return 0
+}
+
+# _rn_env_or_say KEY 작업폴더 — dobby_rn_env 를 한 번만 돌리고, 실패하면 그 출력을 보여 준다(노드 전환이 현재 셸에 남도록 $(...) 를 쓰지 않는다).
+_rn_env_or_say() {
+  local f; f="$(_order_dir "${1:-}")/rn/.env-out"; mkdir -p "${f%/*}"
+  dobby_rn_env "${1:-}" "${2:-}" > "$f" 2>&1 || { cat "$f"; rm -f "$f"; return 2; }
+  rm -f "$f"
+}
+
+# dobby_rn_check KEY 작업폴더 — 기준 브랜치 대비 바뀐 파일만 검사한다: eslint · prettier · 관련 jest, 그리고 타입 검사.
+#   화면 등록표(src/app/screens.ts · views.ts)가 바뀌었으면 생성물이 최신인지도 본다(최신이 아니면 다시 만들어 두고 실패로 낸다).
+#   반환 0 통과(또는 바뀐 코드 없음) · 1 실패 · 2 준비 안 됨.
+dobby_rn_check() {
+  local key="${1:-}" wt="${2:-}" base mb f code=() any=() gen=0 log dir rc=0 start el before after
+  local genp="ios/Sources/Generated android/lib/src/main/java/com/wadiz/multiplatform/RnScreen.kt android/lib/src/main/java/com/wadiz/multiplatform/RnView.kt"
+  [ -n "$key" ] && [ -d "$wt" ] || { _die "쓰임: dobby_rn_check KEY 작업폴더"; return 2; }
+  _rn_repo "$wt" || { _die "wadiz-multiplatform 작업 폴더가 아닙니다: $wt"; return 2; }
+  _rn_env_or_say "$key" "$wt" || return 2
+  base="$(_v2_base_of "$key" wadiz-multiplatform "$wt")"; base="${base:-develop}"
+  git -C "$wt" fetch -q origin "$base" 2>/dev/null
+  mb="$(git -C "$wt" merge-base HEAD "origin/$base" 2>/dev/null)" || mb=HEAD
+  while IFS= read -r f; do
+    [ -f "$wt/$f" ] || continue
+    any+=("$f")
+    case "$f" in *.ts|*.tsx|*.js|*.jsx|*.mjs|*.mts) code+=("$f") ;; esac
+    case "$f" in src/app/screens.ts|src/app/views.ts) gen=1 ;; esac
+  done < <( { git -C "$wt" diff --name-only "$mb"; git -C "$wt" ls-files --others --exclude-standard; } | sort -u)
+  [ ${#any[@]} -gt 0 ] || { echo "모듈 검사: 바뀐 파일이 없어 건너뜀"; return 0; }
+  dir="$(_order_dir "$key")/rn"; mkdir -p "$dir"; log="$dir/check-$(_ts).log"; : > "$log"
+  start=$(date +%s)
+  if [ ${#code[@]} -gt 0 ]; then
+    { echo "### eslint"; _rn_yarn "$wt" eslint "${code[@]}"; } >> "$log" 2>&1 || { rc=1; echo "eslint: 실패"; }
+    { echo "### jest"; _rn_yarn "$wt" jest --findRelatedTests --passWithNoTests "${code[@]}"; } >> "$log" 2>&1 || { rc=1; echo "jest: 실패"; }
+  fi
+  { echo "### prettier"; _rn_yarn "$wt" prettier --check --ignore-unknown "${any[@]}"; } >> "$log" 2>&1 || { rc=1; echo "prettier: 실패"; }
+  { echo "### tsc"; _rn_yarn "$wt" tsc --noEmit; } >> "$log" 2>&1 || { rc=1; echo "타입 검사: 실패"; }
+  if [ $gen = 1 ]; then
+    before="$(_rn_gen_hash "$wt" $genp)"
+    { echo "### codegen:screens"; _rn_yarn "$wt" codegen:screens; } >> "$log" 2>&1 || { rc=1; echo "생성: 실패"; }
+    if [ "$before" != "$(_rn_gen_hash "$wt" $genp)" ]; then
+      rc=1; echo "생성물: 최신이 아니었습니다 — 지금 다시 만들었으니 함께 커밋하세요($genp)"
+    fi
+  fi
+  el=$(( $(date +%s) - start ))
+  if [ $rc -eq 0 ]; then
+    printf '모듈 검사: 통과 · 파일 %s개(코드 %s개) · %s분 %s초 · 기록 %s\n' "${#any[@]}" "${#code[@]}" $((el / 60)) $((el % 60)) "$log"
+    return 0
+  fi
+  printf '모듈 검사: 실패 · %s분 %s초 · 기록 %s\n' $((el / 60)) $((el % 60)) "$log"
+  grep -E 'error|Error|✕|FAIL|warn' "$log" | head -40
+  return 1
+}
+
+# _rn_gen_hash 작업폴더 경로… — 그 경로들 아래 파일 내용 전체의 해시(생성 전후 비교용).
+_rn_gen_hash() { local wt="${1:-}"; shift; (cd "$wt" && git ls-files -co --exclude-standard -- "$@" | sort | xargs cat 2>/dev/null | git hash-object --stdin); }
+
+# _rn_app_line 모듈기준브랜치 — 그 모듈 라인에 맞는 앱 라인(develop → develop, release/26.48 → release/26.48.0). 모르면 빈 출력과 1.
+_rn_app_line() {
+  case "${1:-}" in
+    develop) printf 'develop' ;;
+    release/*.*.*) printf '%s' "${1:-}" ;;
+    release/*.*) printf '%s.0' "${1:-}" ;;
+    *) return 1 ;;
+  esac
+}
+
+# _rn_host_lock 폴더 — 공용 시험 앱 폴더의 사용 표시 파일(그 폴더의 git 내부 폴더 안이라 git status 에 보이지 않는다).
+_rn_host_lock() { (cd "${1:-}" && git rev-parse --path-format=absolute --git-path dobby-rn-host.lock 2>/dev/null); }
+
+# _rn_lock_dir 이름 — 오더끼리 함께 쓰는 잠금 폴더 경로(앱 원본 저장소의 git 내부 폴더 안).
+_rn_lock_dir() { printf '%s/dobby-%s.lock' "$(git -C "$ORCHESTRATION_REPOS_ROOT/wadiz-android" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" "${1:-}"; }
+
+# _rn_lock_run 잠금폴더 명령… — mkdir 잠금을 잡고(최대 2분 기다림) 명령을 돌린 뒤 푼다. 10분 넘은 잠금은 버려진 것으로 본다.
+_rn_lock_run() {
+  local d="${1:-}" i=0 rc; shift
+  while ! mkdir "$d" 2>/dev/null; do
+    if [ -n "$(find "$d" -maxdepth 0 -mmin +10 2>/dev/null)" ]; then rmdir "$d" 2>/dev/null; continue; fi
+    i=$((i + 1)); [ $i -le 120 ] || { _die "잠금을 잡지 못했다: $d"; return 1; }
+    sleep 1
+  done
+  "$@"; rc=$?
+  rmdir "$d" 2>/dev/null
+  return $rc
+}
+
+# dobby_rn_host KEY — 시험할 앱 폴더 경로를 낸다.
+#   앱도 고친 오더는 오더의 wadiz-android 작업 폴더다. 리액트 네이티브만 고친 오더는 공용 폴더(subtree/wadiz-android-rn-host)를 쓰고,
+#   다른 오더가 쓰는 중이거나 임시 줄 말고 다른 변경이 남아 있으면 그 오더 전용 폴더(subtree/wadiz-android-{키}-host)를 만든다.
+#   공용·전용 폴더는 브랜치 없이 앱 라인 커밋에 고정하고 커밋하지 않는다. 반환 0 · 1 실패 · 2 앱 라인을 정하지 못함.
+#   두 오더가 동시에 공용 폴더를 고르지 않도록 고르기부터 사용 표시까지를 잠금으로 묶는다.
+dobby_rn_host() {
+  local key="${1:-}" p
+  [ -n "$key" ] || { _die "쓰임: dobby_rn_host KEY"; return 1; }
+  p="$(_v2_wt_path "$key" wadiz-android)" && { printf '%s\n' "$p"; return 0; }
+  _rn_lock_run "$(_rn_lock_dir rn-host)" _rn_host_pick "$key"
+}
+
+_rn_host_pick() {
+  local key="${1:-}" mod base line src shared own lock holder host
+  mod="$(_v2_wt_path "$key" wadiz-multiplatform)" || { _die "$key 에 wadiz-multiplatform 작업 폴더가 없다"; return 1; }
+  base="$(_v2_base_of "$key" wadiz-multiplatform "$mod")"
+  line="$(_rn_app_line "$base")" || { _die "모듈 기준 브랜치 '$base' 에 맞는 앱 라인을 정하지 못했다 — 사람에게 물어 정한다"; return 2; }
+  src="$ORCHESTRATION_REPOS_ROOT/wadiz-android"
+  shared="$ORCHESTRATION_WORKSPACE/subtree/$DOBBY_RN_HOST_NAME"
+  own="$ORCHESTRATION_WORKSPACE/subtree/wadiz-android-$key-host"
+  git -C "$src" fetch -q origin "$line" || { _die "앱 라인을 받지 못했다: origin/$line"; return 1; }
+  if [ -d "$own" ]; then host="$own"
+  else
+    [ -d "$shared" ] || git -C "$src" worktree add -q --detach "$shared" "origin/$line" >&2 || return 1
+    lock="$(_rn_host_lock "$shared")"; holder="$(cat "$lock" 2>/dev/null)"
+    if [ -n "$holder" ] && [ "$holder" != "$key" ] && [ "$(_order_phase "$holder")" = 검증 ]; then
+      echo "공용 시험 앱 폴더를 $holder 가 쓰는 중이라 이 오더 전용 폴더를 만듭니다" >&2; host="$own"
+    else
+      dobby_rn_devserver revert "$shared" >/dev/null 2>&1
+      if [ -n "$(git -C "$shared" status --porcelain 2>/dev/null)" ]; then
+        echo "공용 시험 앱 폴더에 임시 줄 말고 다른 변경이 있어 지우지 않고, 이 오더 전용 폴더를 만듭니다" >&2; host="$own"
+      else
+        host="$shared"
+      fi
+    fi
+    [ "$host" = "$own" ] && { git -C "$src" worktree add -q --detach "$own" "origin/$line" >&2 || return 1; }
+  fi
+  lock="$(_rn_host_lock "$host")"
+  if [ "$(cat "$lock" 2>/dev/null)" != "$key" ]; then
+    git -C "$host" checkout -q --detach "origin/$line" || { _die "앱 폴더를 origin/$line 로 옮기지 못했다: $host"; return 1; }
+    printf '%s\n' "$key" > "$lock"
+  fi
+  printf '%s\n' "$host"
+}
+
+# dobby_rn_host_release KEY — 그 오더의 공용 폴더 사용 표시를 풀고, 전용 폴더를 만들었으면 지운다(커밋이 없는 폴더다).
+dobby_rn_host_release() {
+  local key="${1:-}" shared own lock
+  [ -n "$key" ] || { _die "쓰임: dobby_rn_host_release KEY"; return 1; }
+  shared="$ORCHESTRATION_WORKSPACE/subtree/$DOBBY_RN_HOST_NAME"
+  own="$ORCHESTRATION_WORKSPACE/subtree/wadiz-android-$key-host"
+  if [ -d "$shared" ]; then
+    lock="$(_rn_host_lock "$shared")"
+    [ "$(cat "$lock" 2>/dev/null)" = "$key" ] && { dobby_rn_devserver revert "$shared" >/dev/null 2>&1; rm -f "$lock"; }
+  fi
+  if [ -d "$own" ]; then
+    dobby_rn_devserver revert "$own" >/dev/null 2>&1
+    git -C "$ORCHESTRATION_REPOS_ROOT/wadiz-android" worktree remove --force "$own" >&2 || return 1
+  fi
+  return 0
+}
+
+# dobby_rn_mode KEY 앱폴더 — metro 또는 bake 를 낸다.
+#   앱이 고정한 모듈 버전(app/build.gradle.kts 의 rnVersion)과 작업 폴더 HEAD 의 네이티브 지문(scripts/native-fingerprint.sh)이 같으면 metro.
+#   지문을 못 구하면(스크립트가 없는 브랜치 등) 안전한 쪽인 bake 로 간다.
+#   고정 버전이 Metro 포트를 기기 설정(debug_http_host)에 쓰지 않는 옛 모듈이어도 bake 다 — 그 모듈은 넘긴 포트를 무시한다.
+dobby_rn_mode() {
+  local key="${1:-}" app="${2:-}" mod pin a="" b=""
+  mod="$(_v2_wt_path "$key" wadiz-multiplatform)" || { _die "$key 에 wadiz-multiplatform 작업 폴더가 없다"; return 1; }
+  pin="$(sed -nE 's/^val rnVersion = "([^"]+)".*/\1/p' "$app/app/build.gradle.kts" 2>/dev/null | head -1)"
+  if [ -n "$pin" ] && [ -x "$mod/scripts/native-fingerprint.sh" ]; then
+    git -C "$mod" rev-parse -q --verify "refs/tags/$pin" >/dev/null || git -C "$mod" fetch -q origin "refs/tags/$pin:refs/tags/$pin" 2>/dev/null
+    a="$(cd "$mod" && ./scripts/native-fingerprint.sh "$pin" 2>/dev/null)" || a=""
+    b="$(cd "$mod" && ./scripts/native-fingerprint.sh HEAD 2>/dev/null)" || b=""
+    git -C "$mod" show "$pin:android/lib/src/main/java/com/wadiz/multiplatform/RnModule.kt" 2>/dev/null \
+      | grep -q 'debug_http_host' || a=""
+  fi
+  if [ -n "$a" ] && [ "$a" = "$b" ]; then echo metro; else echo bake; fi
+}
+
+# dobby_rn_bake KEY — 모듈 작업 폴더에서 yarn bake:android 로 0.0.0-dev 모듈을 m2 에 굽는다(자바스크립트 번들도 들어간다).
+#   출력은 오더 폴더 rn/bake-{시각}.log 에만 둔다. 반환 0 · 1 실패 · 2 준비 안 됨.
+dobby_rn_bake() {
+  local key="${1:-}" mod log start rc el
+  mod="$(_v2_wt_path "$key" wadiz-multiplatform)" || { _die "$key 에 wadiz-multiplatform 작업 폴더가 없다"; return 2; }
+  _rn_env_or_say "$key" "$mod" || return 2
+  dobby_android_env "$mod/android" >/dev/null || { dobby_android_env "$mod/android"; return 2; }
+  mkdir -p "$(_order_dir "$key")/rn"; log="$(_order_dir "$key")/rn/bake-$(_ts).log"
+  start=$(date +%s)
+  _rn_yarn "$mod" bake:android > "$log" 2>&1; rc=$?
+  el=$(( $(date +%s) - start ))
+  if [ $rc -ne 0 ] || [ ! -d "$mod/m2" ]; then
+    printf '굽기: 실패 · %s분 %s초 · 기록 %s\n' $((el / 60)) $((el % 60)) "$log"
+    _android_fail_lines "$log"
+    return 1
+  fi
+  printf '굽기: 완료 · %s분 %s초 · 모듈 커밋 %s · 기록 %s\n' $((el / 60)) $((el % 60)) "$(git -C "$mod" rev-parse --short HEAD)" "$log"
+}
+
+# dobby_rn_metro start|stop KEY — Metro 를 띄우거나 끈다.
+#   start: 8090 부터 빈 포트를 골라 뒤에서 띄우고 adb reverse 를 건다. 오더 폴더 .rn-metro 에 '포트 프로세스번호 모듈커밋' 을 적는다.
+#          이미 띄운 것이 살아 있고 모듈 커밋이 같으면 그대로 쓴다. 출력은 포트 번호 한 줄. 반환 0 · 1 실패 · 2 준비 안 됨 · 3 기기 없음.
+#   stop:  이 오더가 띄운 Metro 만 끈다. adb 연결과 reverse 는 그대로 둔다.
+dobby_rn_metro() {
+  local act="${1:-}" key="${2:-}" mod st port pid head s i
+  [ -n "$key" ] || { _die "쓰임: dobby_rn_metro start|stop KEY"; return 1; }
+  st="$(_order_dir "$key")/.rn-metro"
+  if [ "$act" = stop ]; then
+    [ -f "$st" ] || return 0
+    read -r port pid head < "$st"
+    # 기록한 프로세스가 아직 이 오더의 Metro 일 때만 그 프로세스와 자손을 끈다(포트만 보고 남의 Metro 를 끄지 않는다)
+    if _rn_metro_alive "$pid" "$port"; then kill $(_rn_tree "$pid") 2>/dev/null; fi
+    rm -f "$st"; echo "Metro: 끔(포트 $port)"; return 0
+  fi
+  [ "$act" = start ] || { _die "쓰임: dobby_rn_metro start|stop KEY"; return 1; }
+  mod="$(_v2_wt_path "$key" wadiz-multiplatform)" || { _die "$key 에 wadiz-multiplatform 작업 폴더가 없다"; return 2; }
+  s="$(dobby_android_device)" || { echo "기기 없음"; return 3; }
+  head="$(git -C "$mod" rev-parse --short HEAD)"
+  if [ -f "$st" ]; then
+    read -r port pid i < "$st"
+    if _rn_metro_alive "$pid" "$port" && [ "$i" = "$head" ]; then
+      adb -s "$s" reverse "tcp:$port" "tcp:$port" >/dev/null && { echo "$port"; return 0; }
+    fi
+    dobby_rn_metro stop "$key" >/dev/null
+  fi
+  _rn_env_or_say "$key" "$mod" || return 2
+  port="$(_rn_lock_run "$(_rn_lock_dir rn-metro)" _rn_metro_launch "$key" "$mod" "$head" "$st")" || return 1
+  adb -s "$s" reverse "tcp:$port" "tcp:$port" >/dev/null || { echo "Metro: adb reverse 실패"; return 1; }
+  echo "$port"
+}
+
+# _rn_tree PID — 그 프로세스와 모든 자손의 번호.
+_rn_tree() { local c; printf '%s\n' "${1:-}"; for c in $(pgrep -P "${1:-}" 2>/dev/null); do _rn_tree "$c"; done; }
+
+# _rn_metro_alive PID 포트 — 그 번호의 프로세스가 살아 있고 그 포트로 띄운 Metro 명령이면 참(번호가 다른 프로세스에 다시 쓰인 경우를 거른다).
+_rn_metro_alive() { ps -o command= -p "${1:-}" 2>/dev/null | grep -q -- "host --port ${2:-}"; }
+
+# _rn_metro_launch KEY 모듈폴더 커밋 상태파일 — 빈 포트를 골라 Metro 를 띄우고 그 포트를 낸다. 포트를 잡은 것이 자기 프로세스인지 확인한다.
+_rn_metro_launch() {
+  local key="${1:-}" mod="${2:-}" head="${3:-}" st="${4:-}" port pid log i lp ok=0
+  port=8090; while lsof -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; do port=$((port + 1)); done
+  mkdir -p "$(_order_dir "$key")/rn"; log="$(_order_dir "$key")/rn/metro-$(_ts).log"
+  # & 가 nohup 만 묶어야 $! 가 Metro 자신의 번호다(cd 까지 묶으면 중간 셸 번호가 남는다)
+  (cd "$mod" || exit 1; nohup corepack yarn host --port "$port" < /dev/null > "$log" 2>&1 & echo $! > "$st.pid")
+  pid="$(cat "$st.pid")"; rm -f "$st.pid"
+  printf '%s %s %s\n' "$port" "$pid" "$head" > "$st"
+  for i in $(seq 1 90); do
+    kill -0 "$pid" 2>/dev/null || break
+    lp="$(lsof -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | head -1)"
+    if [ -n "$lp" ] && _rn_tree "$pid" | grep -qx "$lp" \
+       && curl -s "http://localhost:$port/status" 2>/dev/null | grep -q 'packager-status:running'; then ok=1; break; fi
+    sleep 1
+  done
+  if [ $ok != 1 ]; then
+    echo "Metro: 뜨지 않음 · 기록 $log" >&2; tail -5 "$log" >&2
+    dobby_rn_metro stop "$key" >/dev/null; return 1
+  fi
+  printf '%s\n' "$port"
+}
+
+# dobby_rn_devserver apply|revert 앱폴더 [포트] — RnInitializer.kt 의 RnModule.prepare 줄에 Metro 주소와 임시 표시를 넣거나 그것만 뺀다.
+#   apply 는 설치 직전에, revert 는 설치 직후에 부른다. 앱 오더의 다른 변경은 건드리지 않는다. 반환 0 · 1 실패.
+dobby_rn_devserver() {
+  local act="${1:-}" app="${2:-}" port="${3:-}" f
+  f="$app/$DOBBY_RN_INIT"
+  [ -f "$f" ] || { _die "RnInitializer.kt 가 없다: $f"; return 1; }
+  case "$act" in
+    apply)
+      [ -n "$port" ] || { _die "쓰임: dobby_rn_devserver apply 앱폴더 포트"; return 1; }
+      dobby_rn_devserver revert "$app" || return 1
+      grep -q 'RnModule\.prepare(app, ports, RnConfig(' "$f" || { _die "RnModule.prepare(app, ports, RnConfig( 줄을 찾지 못했다: $f"; return 1; }
+      P="$port" M="$DOBBY_RN_MARK" perl -i -pe 's/RnModule\.prepare\(app, ports, RnConfig\(/RnModule.prepare(app, ports, RnConfig(bundleSource = com.wadiz.multiplatform.RnBundleSource.DevServer("localhost:$ENV{P}"), / && s/\s*$/ \/\/ $ENV{M}\n/' "$f"
+      grep -qF "$DOBBY_RN_MARK" "$f" ;;
+    revert)
+      M="$DOBBY_RN_MARK" perl -i -pe 'if (index($_, $ENV{M}) >= 0) { s/bundleSource = com\.wadiz\.multiplatform\.RnBundleSource\.DevServer\("localhost:\d+"\), //; s/ \/\/ \Q$ENV{M}\E$// }' "$f"
+      ! grep -qF "$DOBBY_RN_MARK" "$f" ;;
+    *) _die "쓰임: dobby_rn_devserver apply|revert 앱폴더 [포트]"; return 1 ;;
+  esac
+}
+
+# _rn_marker_only 앱폴더 — 커밋하지 않은 변경이 Metro 임시 줄 하나(한 줄 빼고 표시 달린 한 줄 넣음)뿐이면 참.
+_rn_marker_only() {
+  [ "$(git -C "${1:-}" status --porcelain)" = " M $DOBBY_RN_INIT" ] || return 1
+  [ "$(git -C "${1:-}" diff -U0 -- "$DOBBY_RN_INIT" | grep -cE '^[-+][^-+]')" = 2 ] || return 1
+  git -C "${1:-}" diff -U0 -- "$DOBBY_RN_INIT" | grep -E '^\+[^+]' | grep -qF "$DOBBY_RN_MARK"
+}
+
+# _rn_source KEY 앱폴더 그래들인자… — 설치에 실린 리액트 네이티브 출처 한 줄.
+_rn_source() {
+  local key="${1:-}" app="${2:-}" mod head a port
+  shift 2
+  mod="$(_v2_wt_path "$key" wadiz-multiplatform)" || return 0
+  head="$(git -C "$mod" rev-parse --short HEAD)"
+  for a in "$@"; do case "$a" in -PrnLocal=*) echo "리액트 네이티브 출처: 로컬 굽기(0.0.0-dev, 모듈 커밋 $head)"; return 0 ;; esac; done
+  port="$(sed -nE 's/.*DevServer\("localhost:([0-9]+)"\).*'"$DOBBY_RN_MARK"'.*/\1/p' "$app/$DOBBY_RN_INIT" 2>/dev/null | head -1)"
+  if [ -n "$port" ]; then echo "리액트 네이티브 출처: Metro(포트 $port, 모듈 커밋 $head)"
+  else echo "리액트 네이티브 출처: 고정 버전($(sed -nE 's/^val rnVersion = "([^"]+)".*/\1/p' "$app/app/build.gradle.kts" | head -1))"
+  fi
 }
 
 # _v2_redo KEY — 기획자에게 넘어온 이유('- **다시 설계**:' 줄). 검증 실패로 넘어온 때에는 줄이 없다.
@@ -7767,9 +8152,9 @@ _dobby_v2_end_u() {
               _v2_set "$key" deploy-agent 완료 "" "기준 브랜치보다 앞선 커밋 없음"
             fi ;;
           *)
-            if [ -z "$env" ] && _v2_android "$key"; then
+            if [ -z "$env" ] && _v2_app "$key"; then
               _v2_set "$key" deploy-agent 완료 "" "배포 없음 — 로컬 기기 시험"
-              if ! _v2_on "$key" 테스터; then _v2_complete "$key" "통합 끝 — 배포 없음(안드로이드)"
+              if ! _v2_on "$key" 테스터; then _v2_complete "$key" "통합 끝 — 배포 없음($(_v2_rn "$key" && echo 앱 || echo 안드로이드))"
               elif dobby_v2_device "$key"; then dobby_phase "$key" 검증; _v2_set "$key" test-agent 대기 "" "기기 시험 차례 (자동 실행)"
               else dobby_phase "$key" 검증
                 _v2_set "$key" test-agent "사람 차례" "" "통합 끝 — 기기 시험하기" "/dobby-test $key"
