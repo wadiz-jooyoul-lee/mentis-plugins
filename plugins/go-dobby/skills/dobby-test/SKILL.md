@@ -48,6 +48,7 @@ description: 구현한 내용이 실제 환경에서 정상 동작하는지 chro
 - 입력이 있으면 그 키/브랜치, 없으면 `git rev-parse --abbrev-ref HEAD`. 키로 Jira를 조회해 맥락 파악(작업 키면 대상 문서·analysis.md로 파악).
 - 키가 정해지면 **→ `dobby_unit_start {키} test`** 를 부른다. 에이전트 오피스에 이 검증을 작업 단위 하나로 알린다(오피스가 꺼져 있으면 아무 일도 없다).
 - 상태 문서 작업 폴더 표에 `wadiz-android` 나 `wadiz-multiplatform` 이 있으면 **2절부터는 `android-device.md`(이 폴더)를 따른다.** 브라우저를 쓰지 않고 연결된 기기로 시험한다.
+- 작업 폴더 표의 앱 저장소가 `wadiz-ios` 뿐이면 시험하지 않는다. "iOS 만 고친 오더는 시험 방법이 없어 검증하지 않습니다. 출시 PR 의 빌드 검사로 확인합니다"라고 알리고 끝낸다.
 
 ### 2. 테스트 목록 확보 — 기존 우선, 없으면 생성
 - `$ORCHESTRATION_META/{키}/test-plan.md`가 **있으면**(대개 dobby-start 작성) 기본으로 **재사용**한다. 실제 diff와 대조해 빠진 부분만 보강하고, `미정`으로 남은 환경은 3단계에서 채운다.

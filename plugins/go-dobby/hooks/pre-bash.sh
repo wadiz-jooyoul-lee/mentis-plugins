@@ -6,7 +6,7 @@
 #   G1: 정식 배포 베이스($ORCHESTRATION_DEFAULT_BASE, 기본 master)로의 push·merge·PR 금지
 #       (dobby-order C1 — master 반영은 사용자가 직접)
 #       PR 머지는 베이스가 dev·rc1·rc4·cloud_dev·release/v* 일 때만 통과(dobby-ship·
-#       update-release-note), 그 밖은 차단.
+#       update-release-note), 앱 저장소는 주차 출시 브랜치도 통과(앱 출시 스킬), 그 밖은 차단.
 #       (cloud_dev 는 com.wadiz.web 의 dev 브랜치다 — 저장소마다 이름이 다르다)
 #       argocd app sync 는 라이브 앱(web-live-*·client-live-*)·서버 미지정이면 차단.
 #   G5: dobby 워크스페이스 안에서 subtree/ 밖 폴더 제거 금지 (dobby-end 안전 경계)
@@ -227,14 +227,25 @@ if in_dobby_scope; then
     MREPO="$(printf '%s' "$CMD" | sed -nE 's/.*(--repo|[[:space:]]-R)[[:space:]=]+([^[:space:]]+).*/\2/p')"
     # shellcheck disable=SC2086
     MBASE="$( (cd "${CWD:-.}" 2>/dev/null && gh pr view $PRREF ${MREPO:+--repo "$MREPO"} --json baseRefName -q .baseRefName) 2>/dev/null )"
+    # 앱 저장소(모듈·안드로이드·iOS)는 기능 PR 을 주차 출시 브랜치(release/26.48 · release/26.48.0)로 머지한다
+    MNAME="${MREPO##*/}"
+    [ -n "$MNAME" ] || MNAME="$(git -C "${CWD:-.}" remote get-url origin 2>/dev/null | sed -E 's#\.git$##; s#.*/##')"
+    case "$MBASE" in
+      release/[0-9]*)
+        case "$MNAME" in
+          wadiz-multiplatform) printf '%s' "$MBASE" | grep -qE '^release/2[0-9]\.([1-9]|[1-4][0-9]|5[0-3])$' && MBASE="app-release" ;;
+          wadiz-android|wadiz-ios) printf '%s' "$MBASE" | grep -qE '^release/2[0-9]\.([1-9]|[1-4][0-9]|5[0-3])\.0$' && MBASE="app-release" ;;
+        esac ;;
+    esac
     case "$MBASE" in
       dev|rc1|rc4|cloud_dev) : ;;  # 허용 — dobby-ship 배포 경로
       release/v*) : ;;             # 허용 — update-release-note 릴리스 브랜치 머지
+      app-release) : ;;            # 허용 — 앱 출시 스킬의 출시 브랜치 머지
       "")
         deny G1 "머지 대상 PR 의 베이스를 확인하지 못했다(gh 조회 실패). 베이스를 모르면 머지하지 않는다 — PR 번호를 명시하거나 워크트리 안에서 실행하라."
         ;;
       *)
-        deny G1 "베이스가 '$MBASE' 인 PR 머지는 금지다(dobby-order C1). 허용 베이스는 dev·rc1·rc4·cloud_dev·release/v* 뿐이다. 정식 배포 베이스($BASE)·stage 반영은 사용자가 직접 한다."
+        deny G1 "베이스가 '$MBASE' 인 PR 머지는 금지다(dobby-order C1). 허용 베이스는 dev·rc1·rc4·cloud_dev·release/v*, 앱 저장소의 주차 출시 브랜치(release/YY.W·release/YY.W.0)뿐이다. 정식 배포 베이스($BASE)·stage 반영은 사용자가 직접 한다."
         ;;
     esac
   fi

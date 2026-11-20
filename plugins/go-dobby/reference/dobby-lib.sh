@@ -1314,6 +1314,10 @@ dobby_setup_worktree() {
   git -C "$src" worktree add -b "$branch" "$wt" "$start" >&2 || { _die "worktree add 실패($start)"; return 1; }
   git -C "$wt" push -u origin "$branch" >&2 2>/dev/null || true
   dobby_record_branch "$key" "$repo" "$branch" "$wt"
+  # 앱 저장소는 변경 없이 끝나는 폴더도 있어 푸시 실패가 통합 때에야 드러난다 — 여기서 확인한다
+  if _ship_has "$repo" "$DOBBY_APP_REPOS" && ! git -C "$wt" ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+    _die "$repo 의 $branch 를 원격에 올리지 못했다 — 권한과 네트워크를 확인하고 git -C $wt push -u origin $branch"; return 1
+  fi
   _docs_refs_worktree "$gate_key" "$repo" "$wt"
   printf '%s' "$wt"
 }
@@ -1349,12 +1353,9 @@ dobby_ensure_worktree() {
   git -C "$src" rev-parse --git-dir >/dev/null 2>&1 || { _die "소스 repo 없음: $src"; return 1; }
   git -C "$src" worktree prune 2>/dev/null
   [ -f "$sf" ] && rec="$(_wt_row "$sf" "$repo")"
-  # 앱 저장소(안드로이드·리액트 네이티브 모듈)는 배포가 없어 웹 저장소와 한 오더에 섞지 않는다 — 하위 이슈로 나눈다
+  # 앱 저장소(안드로이드·iOS·리액트 네이티브 모듈)는 배포가 없어 웹 저장소와 한 오더에 섞지 않는다 — 하위 이슈로 나눈다
   if [ -z "$rec" ] && _v2_app_mixed "$key" "$repo"; then
-    if [ "$repo" = wadiz-multiplatform ] || _v2_rn "$key"; then
-      _die "앱 저장소(wadiz-android·wadiz-multiplatform)는 다른 저장소(웹·서버 등)와 한 오더에 섞지 않는다($(_v2_worktrees "$key" | cut -f1 | tr '\n' ' ')+ $repo) — 앱용 하위 이슈로 나눈다"; return 1
-    fi
-    _die "wadiz-android 는 다른 저장소와 한 오더에 섞지 않는다($(_v2_worktrees "$key" | cut -f1 | tr '\n' ' ')+ $repo) — 안드로이드용 하위 이슈로 나눈다"; return 1
+    _die "앱 저장소(wadiz-android·wadiz-ios·wadiz-multiplatform)는 다른 저장소(웹·서버 등)와 한 오더에 섞지 않는다($(_v2_worktrees "$key" | cut -f1 | tr '\n' ' ')+ $repo) — 앱용 하위 이슈로 나눈다"; return 1
   fi
   if [ -n "$rec" ]; then
     branch="${rec%%$'\t'*}"; wt="${rec#*$'\t'}"; wt="${wt/#\~/$HOME}"
@@ -1377,6 +1378,8 @@ dobby_ensure_worktree() {
     dobby_v2_set_base "$key" "$repo" "$base"; return 0
   fi
   [ -n "$rec" ] || dobby_record_branch "$key" "$repo" "$branch" "$wt"
+  # 앱 저장소는 첫 시도가 푸시에서 멈췄으면 기준 브랜치(출시 브랜치)가 빠져 있다 — 기록이 없을 때만 적는다
+  ! _ship_has "$repo" "$DOBBY_APP_REPOS" || dobby_v2_set_base "$key" "$repo" "$base"
   printf '%s' "$wt"
 }
 
@@ -1442,6 +1445,11 @@ dobby_commit_push() {
       _die "wadiz-multiplatform 커밋 제목은 '{이슈키} {종류}: 제목' 형식입니다(예: FE1-1234 feat: 검색 결과 빈 화면 문구): $(printf '%s' "$msg" | head -1)"
       return 1
     fi
+    # wadiz-ios 는 제목이 '{이슈키} {무엇을 했는가}' 다(저장소 release 브랜치 기록)
+    if _ios_repo "$wt" && ! printf '%s\n' "$msg" | head -1 | grep -qE '^[A-Z][A-Z0-9]*-[0-9]+ .+'; then
+      _die "wadiz-ios 커밋 제목은 '{이슈키} {무엇을 했는가}' 형식입니다(예: FE1-1234 모달 시트 키보드 가림 수정): $(printf '%s' "$msg" | head -1)"
+      return 1
+    fi
   fi
   git -C "$wt" add -A >&2 || return 1
   # Metro 임시 줄은 안드로이드 앱 파일에만 들어간다 — 커밋에 섞이면 거부한다(우회 없음)
@@ -1456,6 +1464,13 @@ dobby_commit_push() {
       _die "저장소 규칙 위반이 있어 커밋하지 않는다. 위를 고치고 다시 하라(우회: DOBBY_FORCE=1)."
       return 1
     }
+  fi
+  # 리액트 네이티브 오더는 코드를 안 바꾼 앱 작업 폴더도 있다 — 앱 저장소는 바뀐 것이 없으면 커밋 없이 끝내되 올라가지 않은 커밋은 푸시한다
+  if { _android_repo "$wt" || _ios_repo "$wt" || _rn_repo "$wt"; } && git -C "$wt" diff --cached --quiet; then
+    printf '변경 없음 — %s 는 커밋하지 않습니다\n' "$wt"
+    git -C "$wt" rev-parse -q --verify '@{u}' >/dev/null 2>&1 && [ "$(git -C "$wt" rev-list --count '@{u}..HEAD')" = 0 ] && return 0
+    git -C "$wt" push -u origin "$br" >&2 || { _die "$br 푸시 실패"; return 1; }
+    return 0
   fi
   git -C "$wt" commit --no-verify -m "$msg" >&2 || return 1
   # 도비가 낸 커밋은 단계 안의 일이라, 이 작업 폴더를 쓰는 오더의 기준점을 바로 옮긴다(기준점이 있는 오더만).
@@ -3435,8 +3450,11 @@ dobby_v2_env() {
 dobby_v2_set_env() {
   local key="$1" env="$2" f
   case "$key" in TASK-*) _die "TASK- 오더는 자동 배포를 하지 않는다(통합에서 PR 을 만들고 끝난다): $key"; return 1 ;; esac
-  # 앱 오더(안드로이드·리액트 네이티브)는 배포가 없다 — 화면의 '배포까지' 버튼도 전체 실행(기기 시험까지)으로 받는다
-  _v2_app "$key" && { dobby_v2_set_device "$key"; return; }
+  # 앱 오더는 배포가 없다 — 화면의 '배포까지' 버튼도 전체 실행(기기 시험까지)으로 받는다. iOS 만 고친 오더는 시험이 없어 통합에서 끝난다
+  if _v2_app "$key"; then
+    if _v2_devtest "$key"; then dobby_v2_set_device "$key"; else dobby_event "$key" "iOS 오더 — 기기 시험 없이 통합에서 끝남" 2>/dev/null; fi
+    return 0
+  fi
   _ship_has "$env" "$DOBBY_SHIP_MERGE_ENVS" || { _die "자동 배포 환경은 dev·rc1·rc4 중 하나다: '$env'"; return 1; }
   f="$(_order_dir "$key")/status.md"
   [ -f "$f" ] || { _die "$key 의 상태 문서가 없습니다"; return 1; }
@@ -3464,7 +3482,7 @@ dobby_v2_device() { grep -qE '^[ \t]*-[ \t]*\*\*기기 시험\*\*:[ \t]*자동' 
 # dobby_v2_set_device KEY — 그 줄을 '- **단계**:' 바로 아래에 적는다. 안드로이드 오더만 받는다.
 dobby_v2_set_device() {
   local key="$1" f
-  _v2_app "$key" || { _die "기기 시험 표시는 앱 오더(안드로이드·리액트 네이티브)만 받는다(웹 오더는 dobby_v2_set_env): $key"; return 1; }
+  _v2_devtest "$key" || { _die "기기 시험 표시는 안드로이드나 리액트 네이티브가 있는 앱 오더만 받는다(웹 오더는 dobby_v2_set_env, iOS 만 고친 오더는 시험 없음): $key"; return 1; }
   f="$(_order_dir "$key")/status.md"
   dobby_v2_device "$key" && return 0
   awk '{ print } /^[ \t]*-[ \t]*\*\*단계\*\*/ && !done { print "- **기기 시험**: 자동"; done = 1 }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
@@ -4415,24 +4433,27 @@ dobby_ship_resubmit() {
   printf '%s' "$n"
 }
 
-# dobby_ship_review_wait 워크트리 PR번호 [초] — 리뷰가 하나라도 달릴 때까지 30초 간격으로 기다린다.
+# dobby_ship_review_wait 워크트리 PR번호 [초] [이전 리뷰 수] — 리뷰 수가 이전 리뷰 수(기본 0)보다 늘 때까지 30초 간격으로 기다린다.
+#   이전 리뷰 수를 주면 본문이 있는 리뷰만 센다. 줄 단위 지적에 단 답글이 본문 없는 리뷰로 하나씩 쌓이기 때문이다.
 # 한 줄 stdout: "arrived<TAB>리뷰결정" 또는 "timeout<TAB>리뷰요청수". 기본 540초(도구 호출 상한 10분 안).
 #
 # 조회 결과는 gh 의 --jq 로 숫자만 뽑는다. 본문을 셸 echo 로 넘기면 줄바꿈 표시가 풀려 JSON 이 깨지고,
 # 그 실패가 "리뷰 없음"으로 읽혀 리뷰가 달렸는데도 10분을 기다렸다(실측 FE1-2362 #31065).
 # 그래서 조회에 실패하면 "없음"으로 보지 않고 바로 거부한다.
 dobby_ship_review_wait() {
-  local wt="$1" pr="${2#\#}" max="${3:-540}" rp t0 row n dec req
+  local wt="$1" pr="${2#\#}" max="${3:-540}" after="${4:-0}" rp t0 row n dec req cnt='.reviews|length'
   [ -n "$pr" ] || { _die "PR 번호가 비었다"; return 1; }
+  case "$after" in ''|*[!0-9]*) _die "이전 리뷰 수는 숫자다: '$after'"; return 1 ;; esac
+  [ -z "${4:-}" ] || cnt='[.reviews[]|select((.body // "")|length > 0)]|length'
   rp="$(_ship_repo "$wt")"; [ -n "$rp" ] || { _die "워크트리의 저장소를 모른다: $wt"; return 1; }
   t0=$(date +%s)
   while :; do
     row="$(gh pr view "$pr" --repo "$rp" --json reviews,reviewDecision,reviewRequests \
-           --jq '[(.reviews|length), (if (.reviewDecision // "") == "" then "-" else .reviewDecision end), (.reviewRequests|length)] | map(tostring) | join("|")')" \
+           --jq "[($cnt), "'(if (.reviewDecision // "") == "" then "-" else .reviewDecision end), (.reviewRequests|length)] | map(tostring) | join("|")')" \
       || { _die "PR #$pr 조회 실패 — 리뷰 없음으로 보지 않고 멈춘다"; return 1; }
     IFS='|' read -r n dec req <<<"$row"
     case "$n" in ''|*[!0-9]*) _die "PR #$pr 리뷰 수를 읽지 못했다: '$row'"; return 1 ;; esac
-    [ "$n" -gt 0 ] && { printf 'arrived\t%s\n' "${dec:--}"; return 0; }
+    [ "$n" -gt "$after" ] && { printf 'arrived\t%s\n' "${dec:--}"; return 0; }
     [ $(( $(date +%s) - t0 )) -lt "$max" ] || { printf 'timeout\t%s\n' "$req"; return 0; }
     sleep 30
   done
@@ -6027,7 +6048,7 @@ _v2_md_day() {
 }
 
 dobby_v2_next_all() {
-  local ps today d k f ph phn title upd env kind grp text since cmd link act dr drk drs rd row st ln dt stf tf pst bs bn bd bt
+  local ps today d k f ph phn title upd env kind grp text since cmd link act dr drk drs rd row st ln dt stf tf pst bs bn bd bt why
   ps="$(ps -axo command 2>/dev/null)"; today="$(date '+%Y-%m-%d')"
   dobby_v2_external_check >/dev/null 2>&1
   _v2_emit() {
@@ -6041,6 +6062,20 @@ dobby_v2_next_all() {
   }
   # 완성된 개발 오더의 알림: 완료 조건 기다림 · 릴리즈 노트 등록 · 정기배포 기다림 · 오늘 stage 확인. 알릴 것이 없으면 1.
   _v2_release_notice() {
+    # 앱 오더는 웹 릴리즈 노트가 아니라 주차 출시 브랜치로 나간다. 작업 폴더의 저장소마다 '## 앱 출시' 행이 끝 단계면 해결 차례다
+    if _v2_app "$k"; then
+      if ! _v2_app_release_line "$k"; then
+        grp=notice; kind=done; text="완성 — 출시 흐름 전 오더, PR·QA 배포는 사람이 직접 하고 끝나면 해결 처리"; cmd="/dobby-resolve $k"; act=resolve
+      elif awk -F'|' -v repos="$(_v2_worktrees "$k" | cut -f1 | tr '\n' ' ')" 'function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
+        /^## /{ins=(index($0,"앱 출시")>0); next}
+        ins && /^\|/ && t($4) ~ /^(QA 배포 확인|버전 그대로|발행 확인|이미 반영)$/ {done[t($2)]=1}
+        END{n=split(repos,r," "); for(i=1;i<=n;i++) if(!done[r[i]]) exit 1; exit !n}' "$f"; then
+        grp=notice; kind=done; text="완성 — 앱 출시 끝, 결과를 확인하고 해결 처리"; cmd="/dobby-resolve $k"; act=resolve
+      else
+        grp=notice; kind=release; text="완성 — 앱 출시 차례(출시 브랜치 PR·머지)"; cmd="/dobby-app-release $k"
+      fi
+      return 0
+    fi
     ln="$(sed -nE 's/^- \*\*완료 조건\*\*:[ \t]*(.*)$/\1/p' "$f" | head -1)"
     dt="$(awk -F'|' '
       function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
@@ -6202,7 +6237,11 @@ dobby_v2_next_all() {
           fi
         elif _v2_test_passed "$k"; then
           _v2_release_notice || continue
-        elif _v2_app "$k" && ! dobby_v2_device "$k" && ! _v2_last_failed "$k"; then
+        elif _v2_app "$k" && _v2_test_skip "$k"; then
+          # 테스터가 켜진 채 '검증: 필요 없음' 줄만 남았다 — 건너뛰기 명령이 테스터를 끝내고 완성으로 옮긴다
+          why="$(sed -nE 's/^- \*\*검증\*\*: 필요 없음 — (.*)$/\1/p' "$d/test-plan.md" 2>/dev/null | head -1)"
+          kind=verify-skip; text="검증 필요 없음 — 테스트 건너뛰기로 완성"; cmd="/do $k 테스트 건너뛰기 ${why:-검증 필요 없음}"
+        elif _v2_devtest "$k" && ! dobby_v2_device "$k" && ! _v2_last_failed "$k"; then
           kind=verify; text="기기 시험 차례 — 기기를 연결하고 /dobby-test $k"; cmd="/dobby-test $k"
         elif _v2_history_passed "$k"; then
           kind=verify; text="검증 차례 — 마지막 회차는 지금 커밋 전에 시험함"; act=autorun
@@ -6704,7 +6743,8 @@ _v2_complete_gate() {
       _v2_in_env "$p" "$b" "$r" "$env" || { printf '배포\t%s 의 끝 커밋이 %s 에 없음\n' "$r" "$env"; return 0; }
     done < <(_v2_ship_repos "$key")
   fi
-  if _v2_on "$key" 테스터; then
+  # iOS 만 고친 앱 오더는 시험 방법이 없어 시험 회차를 요구하지 않는다
+  if _v2_on "$key" 테스터 && { ! _v2_app "$key" || _v2_devtest "$key"; }; then
     if _testrun_open "$key" >/dev/null; then printf '검증\t시험 회차가 열려 있음\n'
     elif ! _v2_history_passed "$key"; then printf '검증\t전부 통과한 시험 회차가 없음\n'
     elif ! _v2_tested_tip "$key"; then printf '검증\t마지막 회차(시험 커밋 %s)가 끝 커밋을 시험하지 않음\n' "$(_v2_tested_commit "$key")"
@@ -6837,20 +6877,226 @@ _android_repo() { git -C "$1" remote get-url origin 2>/dev/null | grep -q 'wadiz
 # _v2_rn KEY — 작업 폴더 표에 wadiz-multiplatform(리액트 네이티브 모듈)이 있으면 참.
 _v2_rn() { _v2_worktrees "${1:-}" | cut -f1 | grep -qx 'wadiz-multiplatform'; }
 
-# _v2_app KEY — 앱 오더(안드로이드나 리액트 네이티브 모듈)면 참. 배포 없이 로컬 기기로 시험한다.
-_v2_app() { _v2_android "${1:-}" || _v2_rn "${1:-}"; }
+# _v2_ios KEY — 작업 폴더 표에 wadiz-ios 가 있으면 참.
+_v2_ios() { _v2_worktrees "${1:-}" | cut -f1 | grep -qx 'wadiz-ios'; }
+
+# _v2_app KEY — 앱 오더(안드로이드, iOS, 리액트 네이티브 모듈)면 참. 배포 없이 출시 브랜치로 PR 을 낸다.
+_v2_app() { _v2_android "${1:-}" || _v2_rn "${1:-}" || _v2_ios "${1:-}"; }
+
+# _v2_app_release_line KEY — 안드로이드나 iOS 작업 폴더가 있고, 앱 저장소마다 기록된 기준 브랜치가 출시 브랜치 꼴이면 참(새 출시 흐름 오더). 원격은 보지 않는다.
+_v2_app_release_line() {
+  local f b repo n=0 re
+  f="$(_order_dir "${1:-}")/status.md"
+  b="$(sed -nE 's/^[ \t]*-[ \t]*\*\*기준 브랜치\*\*:[ \t]*//p' "$f" 2>/dev/null | head -1)"
+  _v2_android "${1:-}" || _v2_ios "${1:-}" || return 1
+  for repo in $(_v2_worktrees "${1:-}" | cut -f1); do
+    _ship_has "$repo" "$DOBBY_APP_REPOS" || continue
+    n=$((n + 1))
+    re="^$repo=release/2[0-9]\\.([1-9]|[1-4][0-9]|5[0-3])"
+    if [ "$repo" = wadiz-multiplatform ]; then re="$re\$"; else re="$re\\.0\$"; fi
+    printf '%s' "$b" | tr ',' '\n' | sed -E 's/^[ \t]+|[ \t]+$//g' | grep -qE "$re" || return 1
+  done
+  [ "$n" -gt 0 ]
+}
+
+# _v2_devtest KEY — 로컬 기기 시험을 하는 앱 오더면 참. iOS 만 고친 오더는 시험하지 않는다.
+_v2_devtest() { _v2_android "${1:-}" || _v2_rn "${1:-}"; }
 
 # _rn_repo 작업폴더 — 그 폴더가 wadiz-multiplatform 저장소면 참.
 _rn_repo() { git -C "${1:-}" remote get-url origin 2>/dev/null | grep -q 'wadiz-multiplatform'; }
 
-# _v2_app_mixed KEY 새저장소 — 새 저장소를 더하면 앱 저장소와 웹 저장소가 한 오더에 섞이는지. 앱 저장소 둘끼리는 섞어도 된다.
+# _ios_repo 작업폴더 — 그 폴더가 wadiz-ios 저장소면 참.
+_ios_repo() { git -C "${1:-}" remote get-url origin 2>/dev/null | grep -q 'wadiz-ios'; }
+
+# _v2_app_mixed KEY 새저장소 — 새 저장소를 더하면 앱 저장소와 웹 저장소가 한 오더에 섞이는지. 앱 저장소끼리는 섞어도 된다.
 _v2_app_mixed() {
-  local others re='wadiz-android|wadiz-multiplatform'
+  local others re='wadiz-android|wadiz-multiplatform|wadiz-ios'
   others="$(_v2_worktrees "${1:-}" | cut -f1 | grep -vx "${2:-}")"
   [ -n "$others" ] || return 1
   if printf '%s\n' "${2:-}" | grep -qxE "$re"; then printf '%s\n' "$others" | grep -qvxE "$re"
   else printf '%s\n' "$others" | grep -qxE "$re"
   fi
+}
+
+# ── 앱 출시 라인 ─────────────────────────────────────────────────────────────
+# 앱은 매주 화요일 출시한다. 출시 버전은 YY.W(ISO 주차, 앞 0 없음)이고 브랜치는 모듈 release/YY.W, 앱 release/YY.W.0 이다.
+DOBBY_APP_REPOS="wadiz-multiplatform wadiz-android wadiz-ios"
+
+# _rel_date 일수 형식 — 오늘(DOBBY_TODAY=YYYY-MM-DD 로 바꿀 수 있다)에서 일수만큼 뒤 날짜를 형식대로.
+_rel_date() {
+  local base="${DOBBY_TODAY:-$(date +%Y-%m-%d)}"
+  date -j -v+"$1"d -f %Y-%m-%d "$base" "+$2" 2>/dev/null || date -d "$base + $1 day" "+$2"
+}
+
+# _rel_ver 일수 — 그 날짜가 속한 주의 출시 버전(YY.W).
+_rel_ver() { local w; w="$(_rel_date "$1" %V)"; printf '%s.%s' "$(_rel_date "$1" %g)" "$((10#$w))"; }
+
+# _release_branch_of 저장소 버전 — 그 저장소의 출시 브랜치 이름.
+_release_branch_of() { if [ "$1" = wadiz-multiplatform ]; then printf 'release/%s' "$2"; else printf 'release/%s.0' "$2"; fi; }
+
+# _release_shipped 저장소 버전 — 그 출시 라인이 이미 main 에 합쳐졌으면(출시됨) 참.
+#   main 의 머지 제목으로 본다: 안드로이드 release/26.47.0, iOS live/26.47.0.48, 모듈 merge/release-26.47-main.
+_release_shipped() {
+  local src="$ORCHESTRATION_REPOS_ROOT/$1" v="${2//./\\.}"
+  git -C "$src" fetch -q origin main 2>/dev/null
+  git -C "$src" log origin/main --first-parent --merges --format=%s 2>/dev/null \
+    | grep -qE "from [^ /]+/(release/${v}(\.0)?|live/${v}\.0\.[0-9]+|merge/release-${v}-main)\$"
+}
+
+# dobby_release_line [버전 저장소...] — 출시 라인을 정한다.
+#   인자 없이: 가장 가까운 화요일의 출시 버전을 추천한다. 오늘이 화요일이면 이번 주와 다음 주를 함께 낸다.
+#   버전과 저장소를 주면: 저장소마다 "저장소<TAB>출시 브랜치<TAB>있음|없음|출시됨" 한 줄.
+dobby_release_line() {
+  local ver="${1:-}" repo br src n
+  if [ -z "$ver" ]; then
+    n=$(( (2 - $(_rel_date 0 %u) + 7) % 7 ))
+    if [ "$n" -eq 0 ]; then
+      printf '오늘 화요일: 예 · 이번 주 %s(%s) · 다음 주 %s(%s) — 사람에게 고르게 한다\n' \
+        "$(_rel_ver 0)" "$(_rel_date 0 %Y-%m-%d)" "$(_rel_ver 7)" "$(_rel_date 7 %Y-%m-%d)"
+    else
+      printf '추천 버전: %s (가장 가까운 화요일 %s)\n' "$(_rel_ver "$n")" "$(_rel_date "$n" %Y-%m-%d)"
+    fi
+    return 0
+  fi
+  printf '%s' "$ver" | grep -qE '^2[0-9]\.([1-9]|[1-4][0-9]|5[0-3])$' || { _die "출시 버전은 YY.W 꼴이다(예: 26.48, 26.2 — 주차 1~53, 앞 0 없음): $ver"; return 1; }
+  shift
+  [ $# -gt 0 ] || set -- $DOBBY_APP_REPOS
+  for repo in "$@"; do
+    _ship_has "$repo" "$DOBBY_APP_REPOS" || { _die "앱 저장소가 아니다: $repo"; return 1; }
+    br="$(_release_branch_of "$repo" "$ver")"; src="$ORCHESTRATION_REPOS_ROOT/$repo"
+    if ! git -C "$src" ls-remote --exit-code --heads origin "$br" >/dev/null 2>&1; then printf '%s\t%s\t없음\n' "$repo" "$br"
+    elif _release_shipped "$repo" "$ver"; then printf '%s\t%s\t출시됨\n' "$repo" "$br"
+    else printf '%s\t%s\t있음\n' "$repo" "$br"
+    fi
+  done
+}
+
+# dobby_release_branch_create 저장소 버전 — develop 에서 출시 브랜치를 만들어 푸시한다. ⛔ 사람이 승인한 뒤에만 부른다.
+#   모듈은 푸시하는 순간 버전.0 이 발행된다. iOS 는 「Release 브랜치 초기 설정」이 돌고 분기점 검증이 시작된다.
+dobby_release_branch_create() {
+  local repo="${1:-}" ver="${2:-}" src br
+  _ship_has "$repo" "$DOBBY_APP_REPOS" || { _die "앱 저장소가 아니다: $repo"; return 1; }
+  printf '%s' "$ver" | grep -qE '^2[0-9]\.([1-9]|[1-4][0-9]|5[0-3])$' || { _die "출시 버전은 YY.W 꼴이다(주차 1~53, 앞 0 없음): $ver"; return 1; }
+  src="$ORCHESTRATION_REPOS_ROOT/$repo"; br="$(_release_branch_of "$repo" "$ver")"
+  git -C "$src" ls-remote --exit-code --heads origin "$br" >/dev/null 2>&1 && { echo "$repo $br 이미 있음"; return 0; }
+  git -C "$src" fetch -q origin develop || { _die "$repo origin/develop 을 받지 못했다"; return 1; }
+  git -C "$src" push origin "refs/remotes/origin/develop:refs/heads/$br" >&2 || { _die "$repo $br 푸시 실패"; return 1; }
+  echo "$repo $br 만듦 (develop $(git -C "$src" rev-parse --short origin/develop))"
+}
+
+# dobby_app_merge KEY 저장소 PR번호 — 앱 저장소 PR 을 출시 브랜치로 머지한다(머지 커밋). ⛔ 사람이 승인한 뒤에만 부른다.
+#   막는 것: 앱 저장소가 아님 · 베이스가 출시 브랜치 꼴이 아님 · 이미 출시된 라인 · 충돌 · 남은 변경요청.
+dobby_app_merge() {
+  local key="${1:-}" rp="${2:-}" pr="${3#\#}" name j base mergeable decision ver re head mine
+  [ -n "$key" ] && [ -n "$rp" ] && [ -n "$pr" ] || { _die "쓰임: dobby_app_merge KEY 저장소 PR번호"; return 1; }
+  case "$rp" in */*) ;; *) rp="wadiz-app/$rp" ;; esac
+  name="${rp##*/}"
+  _ship_has "$name" "$DOBBY_APP_REPOS" || { _die "앱 저장소가 아니다: $rp"; return 1; }
+  j="$(gh pr view "$pr" --repo "$rp" --json baseRefName,mergeable,reviewDecision,headRefName \
+       --jq '[.baseRefName, .mergeable, (.reviewDecision // "-"), .headRefName] | join("|")')" \
+    || { _die "$rp 의 PR #$pr 을 조회하지 못했다"; return 1; }
+  IFS='|' read -r base mergeable decision head <<<"$j"
+  mine="$(_wt_row "$(_order_dir "$key")/status.md" "$name" | cut -f1)"
+  [ -n "$mine" ] && [ "$head" = "$mine" ] || { _die "PR #$pr 은 이 오더의 작업 브랜치(${mine:-없음})가 아니라 '$head' 에서 왔다"; return 1; }
+  re='^release/2[0-9]\.([1-9]|[1-4][0-9]|5[0-3])'; if [ "$name" = wadiz-multiplatform ]; then re="$re\$"; else re="$re\.0\$"; fi
+  printf '%s' "$base" | grep -qE "$re" || { _die "베이스 '$base' 는 $name 의 출시 브랜치가 아니다"; return 1; }
+  ver="${base#release/}"; [ "$name" = wadiz-multiplatform ] || ver="${ver%.0}"
+  _release_shipped "$name" "$ver" && { _die "$base 는 이미 출시돼 main 에 합쳐졌다 — 다음 라인으로 옮긴다"; return 1; }
+  [ "$mergeable" != CONFLICTING ] || { _die "PR #$pr 이 충돌 상태다"; return 1; }
+  [ "$decision" != CHANGES_REQUESTED ] || { _die "PR #$pr 에 반영하지 않은 변경요청이 있다"; return 1; }
+  gh pr merge "$pr" --repo "$rp" --merge >&2 || { _die "PR #$pr 머지 실패"; return 1; }
+  dobby_event "$key" "앱 PR 머지 — $name #$pr → $base" 2>/dev/null
+  echo "$name #$pr → $base 머지"
+}
+
+# _pin_undo "작업폴더<TAB>커밋" 줄들 — 버전 올림이 중간에 멈추면 손댄 작업 폴더를 합치기 전 커밋으로 되돌린다.
+_pin_undo() {
+  local w c
+  while IFS=$'\t' read -r w c; do [ -n "$w" ] && git -C "$w" reset -q --hard "$c"; done <<<"${1:-}"
+}
+
+# dobby_app_pin_rn KEY 버전 — 오더의 두 앱 작업 폴더에서 리액트 네이티브 모듈 버전을 올린다(커밋은 하지 않는다).
+#   먼저 앱 출시 브랜치를 작업 브랜치에 합쳐 최신 값과 비교한다. 내 버전이 더 높을 때만 바꾼다.
+#   앱 값이 같거나 높으면 바꾸지 않고, 그 버전 태그에 모듈 작업 브랜치 끝 커밋이 들어 있는지 본다.
+#   바꾸는 곳: 안드로이드 app/build.gradle.kts 의 rnVersion · iOS Tuist/Package.swift 의 exact,
+#   Tuist/Package.resolved 와 Projects/App/Resources/Package.resolved 의 version·revision(태그 커밋).
+#   출력: 저장소마다 "저장소<TAB>바꿈 옛→새" 또는 "저장소<TAB>그대로 …". 반환 1 이면 멈춘다.
+dobby_app_pin_rn() {
+  local key="${1:-}" ver="${2:-}" mod mbr rev repo wt line cur hi f pre n=0 undo=
+  [ -n "$key" ] && [ -n "$ver" ] || { _die "쓰임: dobby_app_pin_rn KEY 버전(예: 26.48.6)"; return 1; }
+  mod="$ORCHESTRATION_REPOS_ROOT/wadiz-multiplatform"
+  git -C "$mod" fetch -q origin --tags 2>/dev/null
+  rev="$(git -C "$mod" rev-parse -q --verify "refs/tags/$ver^{commit}")" || { _die "모듈 태그 $ver 가 없다 — 발행을 먼저 확인한다"; return 1; }
+  mbr="$(_wt_row "$(_order_dir "$key")/status.md" wadiz-multiplatform | cut -f1)"
+  for repo in wadiz-android wadiz-ios; do
+    wt="$(_v2_wt_path "$key" "$repo" 2>/dev/null)" || continue
+    [ -d "$wt" ] || { _pin_undo "$undo"; _die "$repo 작업 폴더가 표에는 있는데 없다($wt) — /do $key 로 되살린다"; return 1; }
+    n=$((n + 1))
+    line="$(_v2_base_of "$key" "$repo" "$wt")"
+    [ -z "$(git -C "$wt" status --porcelain)" ] || { _pin_undo "$undo"; _die "$repo 작업 폴더에 커밋하지 않은 변경이 있다"; return 1; }
+    pre="$(git -C "$wt" rev-parse HEAD)"; undo="$undo$wt"$'\t'"$pre"$'\n'
+    git -C "$wt" fetch -q origin "$line" || { _pin_undo "$undo"; _die "$repo origin/$line 을 받지 못했다"; return 1; }
+    git -C "$wt" merge -q --no-edit "origin/$line" >&2 || { git -C "$wt" merge --abort 2>/dev/null; _pin_undo "$undo"; _die "$repo 에 origin/$line 을 합치다 충돌했다 — 사람에게 묻는다"; return 1; }
+    if [ "$repo" = wadiz-android ]; then
+      f="$wt/app/build.gradle.kts"; cur="$(sed -nE 's/^val rnVersion = "([^"]+)".*/\1/p' "$f")"
+    else
+      f="$wt/Tuist/Package.swift"; cur="$(sed -nE 's#.*wadiz-multiplatform", exact: "([^"]+)".*#\1#p' "$f")"
+    fi
+    [ -n "$cur" ] || { _pin_undo "$undo"; _die "$repo 에서 지금 모듈 버전을 찾지 못했다($f)"; return 1; }
+    hi="$(printf '%s\n%s\n' "$cur" "$ver" | sort -V | tail -1)"
+    if [ "$hi" = "$cur" ]; then
+      if [ -n "$mbr" ] && git -C "$mod" merge-base --is-ancestor "origin/$mbr" "refs/tags/$cur" 2>/dev/null; then
+        printf '%s\t그대로 %s(이번 변경 포함)\n' "$repo" "$cur"
+      else
+        printf '%s\t그대로 %s(이번 변경이 들어 있는지 확인 못 함)\n' "$repo" "$cur"
+      fi
+      # 올릴 것이 없으면 푸시하지 않으므로, 합친 커밋을 남기지 않는다
+      git -C "$wt" reset -q --hard "$pre"
+      continue
+    fi
+    if [ "$repo" = wadiz-android ]; then
+      sed -i '' -E "s/^val rnVersion = \"$cur\"/val rnVersion = \"$ver\"/" "$f" 2>/dev/null \
+        || sed -i -E "s/^val rnVersion = \"$cur\"/val rnVersion = \"$ver\"/" "$f"
+      grep -q "^val rnVersion = \"$ver\"" "$f" || { _pin_undo "$undo"; _die "$repo rnVersion 을 $ver 로 바꾸지 못했다 — 두 앱 모두 되돌렸다"; return 1; }
+    else
+      python3 - "$wt" "$cur" "$ver" "$rev" <<'PY' || { _pin_undo "$undo"; _die "$repo 버전 파일을 고치지 못했다 — 두 앱 모두 되돌렸다"; return 1; }
+import re, sys, pathlib
+wt, cur, ver, rev = sys.argv[1:]
+p = pathlib.Path(wt, "Tuist/Package.swift"); s = p.read_text()
+s2 = s.replace(f'wadiz-multiplatform", exact: "{cur}"', f'wadiz-multiplatform", exact: "{ver}"')
+assert s2 != s, "Package.swift"
+p.write_text(s2)
+pat = re.compile(r'("identity" : "wadiz-multiplatform",.*?"revision" : ")[0-9a-f]+(",\s*"version" : ")[^"]+(")', re.S)
+for rel in ("Tuist/Package.resolved", "Projects/App/Resources/Package.resolved"):
+    q = pathlib.Path(wt, rel); t = q.read_text()
+    t2, n = pat.subn(lambda m: m.group(1) + rev + m.group(2) + ver + m.group(3), t, count=1)
+    assert n == 1, rel
+    q.write_text(t2)
+PY
+    fi
+    printf '%s\t바꿈 %s→%s\n' "$repo" "$cur" "$ver"
+  done
+  [ "$n" -gt 0 ] || { _die "$key 에 앱 작업 폴더(wadiz-android·wadiz-ios)가 없다 — 옛 오더면 설계에서 앱 작업 폴더를 먼저 만든다"; return 1; }
+}
+
+# dobby_app_release_record KEY 저장소 출시브랜치 단계 [PR] [버전] — 상태 문서 '## 앱 출시' 표에 저장소 한 행을 적는다(있으면 바꾼다).
+#   단계: PR 열림 · 리뷰 반영 · 머지 · 발행 확인 · QA 배포 중 · QA 배포 확인 · 버전 그대로 · 이미 반영 · 막힘. 끝 단계는 발행 확인 · QA 배포 확인 · 버전 그대로 · 이미 반영. 버전은 모듈 발행 태그나 앱 빌드 버전.
+dobby_app_release_record() {
+  local key="${1:-}" repo="${2:-}" br="${3:-}" st="${4:-}" pr="${5:--}" ver="${6:--}" f
+  [ -n "$key" ] && [ -n "$repo" ] && [ -n "$br" ] && [ -n "$st" ] || { _die "쓰임: dobby_app_release_record KEY 저장소 출시브랜치 단계 [PR] [버전]"; return 1; }
+  _ship_has "$repo" "$DOBBY_APP_REPOS" || { _die "앱 저장소가 아니다: $repo"; return 1; }
+  f="$(_order_dir "$key")/status.md"; [ -f "$f" ] || { _die "status.md 가 없다: $key"; return 1; }
+  grep -q '^## 앱 출시' "$f" || printf '\n## 앱 출시\n| 저장소 | 출시 브랜치 | 단계 | PR | 버전 | 갱신 |\n|---|---|---|---|---|---|\n' >> "$f"
+  awk -v r="$repo" -v row="| $repo | $br | $st | $pr | $ver | $(_now) |" '
+    function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
+    /^## /{ if (ins && !done) { print row; done=1 } ins=($0 ~ /^## 앱 출시/) }
+    ins && /^\|/ { split($0, c, "|"); if (t(c[2]) == r) { if (!done) print row; done=1; next } }
+    ins && /^[ \t]*$/ && !done && seen { print row; done=1 }
+    ins && /^\|/ { seen=1 }
+    { print }
+    END { if (ins && !done) print row }
+  ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  dobby_event "$key" "앱 출시 — $repo $br · $st${5:+ · PR $5}" 2>/dev/null
 }
 
 # _v2_wt_path KEY 저장소 — 작업 폴더 표에서 그 저장소의 경로(~ 를 펼친다). 없으면 빈 출력과 1.
@@ -7403,12 +7649,20 @@ _rn_host_pick() {
   printf '%s\n' "$host"
 }
 
-# dobby_rn_host_warm KEY — 공용 시험 앱 폴더를 앱 라인으로 맞추고 뒤에서 한 번 빌드해 둔다(검증 차례의 첫 빌드 17분을 미리 치른다).
-#   다른 오더가 쓰는 중이거나 커밋 안 된 변경이 있으면 건드리지 않는다. 사용 표시는 남기지 않는다. 기다리지 않고 바로 돌아온다.
+# dobby_rn_host_warm KEY — 시험할 앱 폴더를 뒤에서 한 번 빌드해 둔다(검증 차례의 첫 빌드 17분을 미리 치른다). 기다리지 않고 바로 돌아온다.
+#   오더에 wadiz-android 작업 폴더가 있으면 그 폴더를 빌드한다. 없는 옛 오더는 공용 시험 앱 폴더를 앱 라인으로 맞춰 빌드한다
+#   (다른 오더가 쓰는 중이거나 커밋 안 된 변경이 있으면 건드리지 않고, 사용 표시는 남기지 않는다).
 dobby_rn_host_warm() {
-  local key="${1:-}" mod base line shared log
+  local key="${1:-}" mod base line shared log own
   [ -n "$key" ] || { _die "쓰임: dobby_rn_host_warm KEY"; return 1; }
-  _v2_wt_path "$key" wadiz-android >/dev/null 2>&1 && { echo "미리 빌드: 앱 작업 폴더가 있는 오더라 건너뜀"; return 0; }
+  if own="$(_v2_wt_path "$key" wadiz-android 2>/dev/null)" && [ -d "$own" ]; then
+    mkdir -p "$(_order_dir "$key")/gradle"; log="$(_order_dir "$key")/gradle/warm-$(_ts).log"
+    ( dobby_android_env "$own" >/dev/null || exit 2; before="$(_gradle_daemons)"
+      cd "$own" && ./gradlew --console=plain :app:assembleDebug > "$log" 2>&1
+      _gradle_daemon_note "$key" "$before" ) </dev/null >/dev/null 2>&1 &
+    echo "미리 빌드: 시작(오더의 앱 폴더 $own) · 기록 $log"
+    return 0
+  fi
   mod="$(_v2_wt_path "$key" wadiz-multiplatform)" || return 1
   base="$(_v2_base_of "$key" wadiz-multiplatform "$mod")"; line="$(_rn_app_line "$base")" || return 0
   shared="$ORCHESTRATION_WORKSPACE/subtree/$DOBBY_RN_HOST_NAME"
@@ -8409,7 +8663,8 @@ _dobby_v2_end_u() {
           *)
             if [ -z "$env" ] && _v2_app "$key"; then
               _v2_set "$key" deploy-agent 완료 "" "배포 없음 — 로컬 기기 시험"
-              if ! _v2_on "$key" 테스터; then _v2_complete "$key" "통합 끝 — 배포 없음($(_v2_rn "$key" && echo 앱 || echo 안드로이드))"
+              if ! _v2_on "$key" 테스터 || ! _v2_devtest "$key"; then
+                _v2_complete "$key" "통합 끝 — 배포 없음($(if _v2_rn "$key"; then echo 앱; elif _v2_android "$key"; then echo 안드로이드; else echo 'iOS, 시험 없음'; fi))"
               elif dobby_v2_device "$key"; then dobby_phase "$key" 검증; _v2_set "$key" test-agent 대기 "" "기기 시험 차례 (자동 실행)"
               else dobby_phase "$key" 검증
                 _v2_set "$key" test-agent "사람 차례" "" "통합 끝 — 기기 시험하기" "/dobby-test $key"
