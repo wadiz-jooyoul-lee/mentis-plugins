@@ -7451,6 +7451,33 @@ dobby_android_ab_pin() {
   echo "실험 지정: $exp → 현재 배정 ${cur:-?} (앱 재시작)"
 }
 
+# dobby_android_qa_check KEY — 기기에 깔린 앱이 '## 앱 출시' 표의 wadiz-android QA 배포본인지 본다. 사람이 App Tester 로 깐다.
+#   반환 0 맞음 · 1 앱 없음·버전 다름·로컬 설치본 · 2 서버가 rc4 아님 · 3 기기 없음 · 4 QA 배포 확인 전.
+dobby_android_qa_check() {
+  local key="${1:-}" f want s dump ver inst org srv
+  [ -n "$key" ] || { _die "쓰임: dobby_android_qa_check KEY"; return 1; }
+  f="$(_order_dir "$key")/status.md"; [ -f "$f" ] || { _die "status.md 가 없다: $key"; return 1; }
+  want="$(awk -F'|' 'function t(x){gsub(/^[ \t]+|[ \t]+$/,"",x);return x}
+    /^## /{ins=(index($0,"앱 출시")>0); next}
+    ins && /^\|/ && t($2)=="wadiz-android" && t($4)=="QA 배포 확인" {print t($6); exit}' "$f")"
+  [ -n "$want" ] && [ "$want" != - ] || { echo "QA 앱: wadiz-android 가 아직 QA 배포 확인 전입니다 — /dobby-app-release $key 를 먼저 해 주세요"; return 4; }
+  s="$(dobby_android_device)" || { _android_device_hint; return 3; }
+  dump="$(adb -s "$s" shell dumpsys package "$DOBBY_ANDROID_PKG" 2>/dev/null)"
+  ver="$(printf '%s\n' "$dump" | sed -nE 's/^ *versionName=([^ ]+).*/\1/p' | head -1)"
+  inst="$(printf '%s\n' "$dump" | sed -nE 's/.*installerPackageName=([^ ,}]+).*/\1/p' | head -1)"
+  org="$(printf '%s\n' "$dump" | sed -nE 's/.*originatingPackageName=([^ ,}]+).*/\1/p' | head -1)"
+  [ -n "$ver" ] || { echo "QA 앱: 기기에 앱이 없습니다 — Firebase App Tester 로 $want 를 깔아 주세요"; return 1; }
+  echo "기기: $(adb -s "$s" shell getprop ro.product.model | tr -d '\r') · 앱 $ver · 설치 경로 ${inst:-null} · 출처 ${org:-없음}"
+  # 로컬 빌드(gradle·adb install)는 설치 경로가 비거나 셸이다. 디버그 빌드와 QA 앱은 서명이 달라 지우고 깔아야 한다
+  case "${inst:-null}" in null|com.android.shell)
+    echo "QA 앱: 로컬 빌드가 깔려 있습니다 — 앱을 지우고 App Tester 로 $want 를 깔아 주세요"; return 1 ;; esac
+  [ "$ver" = "$want" ] || { echo "QA 앱: 깔린 버전 $ver 이 QA 배포본 $want 와 다릅니다 — App Tester 로 $want 를 깔아 주세요"; return 1; }
+  srv="$(adb -s "$s" shell run-as "$DOBBY_ANDROID_PKG" cat shared_prefs/HIDDEN_MENU.xml 2>/dev/null | sed -nE 's/.*name="SERVER_MODE">([^<]*)<.*/\1/p')"
+  echo "서버: ${srv:-기본값(QA 빌드는 rc4)}"
+  [ -z "$srv" ] || [ "$srv" = "$DOBBY_ANDROID_SERVER" ] || { echo "QA 앱: 서버가 $srv 입니다 — 마이와디즈 「앱 정보」 4번 → debug 에서 $DOBBY_ANDROID_SERVER 로 바꿔 주세요"; return 2; }
+  return 0
+}
+
 # dobby_android_log [api|crash|rn-e2e|정규식] [줄 수] — 기기 로그에서 그 줄만 끝부분을 낸다. api 는 앱의 서버 응답 기록, crash 는 강제 종료·응답 없음.
 #   rn-e2e 는 리액트 네이티브 시험 기록([rn-e2e] JSON, 디버그 모듈만)을 '포트 | 함수 | 인자' 한 줄씩으로 낸다. 조각난 기록은 이어 붙인다.
 #   로그를 비우려면 시나리오 시작 전에 `adb logcat -c` 를 한 번 부른다.
@@ -7458,7 +7485,8 @@ dobby_android_log() {
   local pat="${1:-crash}" n="${2:-40}" s
   s="$(dobby_android_device)" || { _android_device_hint; return 3; }
   case "$pat" in
-    api)   pat='BaseWadizAPIProvider' ;;
+    # QA 앱은 코드 이름이 줄여져 클래스 이름 대신 SourceFile 이 찍혀 요청·응답 줄 모양으로도 찾는다
+    api)   pat='BaseWadizAPIProvider|(--> [A-Z]+|<-- [0-9]{3}) https?://' ;;
     crash) # 강제 종료만 모이는 crash 기록을 본다. 'AndroidRuntime:' 은 adb 로 띄운 monkey·am 의 시작 줄까지 잡는다
       { adb -s "$s" logcat -d -b crash 2>/dev/null; adb -s "$s" logcat -d 2>/dev/null | grep -E "ANR in $DOBBY_ANDROID_PKG"; } | tail -n "$n" | cut -c1-400
       return 0 ;;
