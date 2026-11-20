@@ -14,6 +14,7 @@
 2. 반영한 내용을 `implementation.md` 에 덧붙인다.
    - wadiz-android 작업 폴더면 덧붙이기 전에 `dobby_android_check {키} {작업 폴더}` 를 돌려 통과시키고, 통과 줄을 함께 적는다.
    - wadiz-multiplatform 작업 폴더면 덧붙이기 전에 `dobby_rn_check {키} {작업 폴더}` 를 돌려 통과시키고, 통과 줄을 함께 적는다.
+   - wadiz-ios 작업 폴더는 로컬 검사가 없다. `wadiz-ios: 로컬 검사 없음` 줄을 적는다.
 3. **커밋하지 않는다.**
 
 ## 설계 안에서 고칠 수 없을 때
