@@ -5016,7 +5016,7 @@ DOBBY_AD_PATHS='^static/libraries/react-ad-boundary/|^static/packages/banner/|^s
 dobby_track_scan() {
   # ⛔ local 을 반복문 안에서 다시 선언하지 않는다 — zsh 는 이미 있는 이름을 다시 local 하면
   #    `d=''` 처럼 **값을 출력한다**(실측: 그 줄이 보고 출력에 섞여 나왔다).
-  local key="$1" base="${2:-}" f out wt br rp rel cmp d pr prs own owner envbr body n unseen="" imp src spec specs
+  local key="$1" base="${2:-}" f out wt br rp rb rel cmp d pr prs own owner envbr body n unseen="" imp src spec specs
   [ -n "$key" ] || { _die "쓰임: dobby_track_scan KEY [베이스브랜치]"; return 1; }
   f="$(_order_dir "$key")/track-scan.md"
   [ -d "$(_order_dir "$key")" ] || { _die "오더 폴더가 없다: $key"; return 1; }
@@ -5045,8 +5045,9 @@ dobby_track_scan() {
       cmp="origin/$(_ship_branch "$rp" "$base")"
       git -C "$wt" rev-parse --verify -q "$cmp" >/dev/null 2>&1 || cmp=""
     fi
-    [ -n "$cmp" ] || { git -C "$wt" rev-parse --verify -q "origin/$ORCHESTRATION_DEFAULT_BASE" >/dev/null 2>&1 \
-      && cmp="origin/$ORCHESTRATION_DEFAULT_BASE"; }
+    # 저장소마다 기준 브랜치가 다르다(wadiz-multiplatform 은 develop). 상태 문서의 '기준 브랜치' 줄을 먼저 본다
+    rb="$(_v2_base_of "$key" "$rp" "$wt")"; rb="${rb:-$ORCHESTRATION_DEFAULT_BASE}"
+    [ -n "$cmp" ] || { git -C "$wt" rev-parse --verify -q "origin/$rb" >/dev/null 2>&1 && cmp="origin/$rb"; }
 
     # ① 아직 머지 전이면 3점 diff 가 이 브랜치의 변경을 그대로 준다. 미커밋도 함께 본다.
     [ -n "$cmp" ] && d="$( { git -C "$wt" diff -U0 "$cmp"...HEAD; git -C "$wt" diff -U0; git -C "$wt" diff -U0 --cached; } 2>/dev/null )"
@@ -5055,8 +5056,8 @@ dobby_track_scan() {
     #     이 오더가 바꾼 것만 나온다. PR 은 기능 브랜치에 기준 브랜치를 합친 것까지 담아 남의 변경이
     #     섞인다(실측 FE1-2378 rc4: #31398 "Merge origin/cloud_live into feature" 242파일).
     if [ -z "$(printf '%s' "$d" | tr -d '[:space:]')" ] \
-       && git -C "$wt" rev-parse --verify -q "origin/$ORCHESTRATION_DEFAULT_BASE" >/dev/null 2>&1; then
-      d="$(git -C "$wt" diff -U0 "origin/$ORCHESTRATION_DEFAULT_BASE"...HEAD 2>/dev/null)"
+       && git -C "$wt" rev-parse --verify -q "origin/$rb" >/dev/null 2>&1; then
+      d="$(git -C "$wt" diff -U0 "origin/$rb"...HEAD 2>/dev/null)"
     fi
 
     # ② 비었으면 PR 의 diff 를 받는다 — 머지된 뒤에도 남아 있는 유일한 정본이다.
@@ -5216,7 +5217,7 @@ EOF
   {
     printf '# %s — 광고·데이터 수집·CRM 접촉\n\n' "$key"
     printf -- '- **갱신**: %s\n' "$(date '+%Y-%m-%d %H:%M')"
-    printf -- '- **비교 대상**: %s\n' "${base:-기본 베이스}"
+    printf -- '- **비교 대상**: %s\n' "${base:-저장소별 기준 브랜치}"
     [ -n "$unseen" ] && printf -- '- **변경을 보지 못한 저장소**:%s\n' "$unseen"
     printf '\n'
     if [ -n "$unseen" ]; then
@@ -6864,20 +6865,26 @@ _v2_wt_path() {
 _android_jver() { "$1/bin/java" -version 2>&1 | sed -nE '1s/.*version "(1\.)?([0-9]+).*/\2/p'; }
 
 # dobby_android_env 작업폴더 — 그래들을 돌릴 준비를 맞추고 상태를 줄로 낸다. 현재 셸에 export 하므로 $(...) 로 부르지 않는다.
-#   JDK 는 17~21 을 고른다(기본 java 가 11 이거나 25 인 맥이 있다). local.properties 는 Git 이 추적하지 않아 새 작업 폴더에 없으므로 만든다.
+#   JDK 는 17 을 먼저, 없으면 21 을 고른다(기본 java 가 11 이거나 25 인 맥이 있다). local.properties 는 Git 이 추적하지 않아 새 작업 폴더에 없으므로 만든다.
 #   GitHub Packages 토큰은 앱(:app) 빌드에만 필요하다 — 없으면 DOBBY_ANDROID_APP=0 으로 두고 '앱 빌드 불가' 줄을 낸다.
 #   반환 0 준비됨 · 2 JDK 나 SDK 가 없음.
 dobby_android_env() {
   local wt="$1" jh v c sdk
   [ -d "$wt" ] || { _die "쓰임: dobby_android_env 작업폴더"; return 2; }
   jh="${JAVA_HOME:-}"; v=""; [ -n "$jh" ] && v="$(_android_jver "$jh")"
-  if [ -z "$v" ] || [ "$v" -lt 17 ] || [ "$v" -gt 21 ]; then
+  if [ "$v" != 17 ]; then
     jh=""
-    for c in "/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
-             "$(/usr/libexec/java_home -V 2>&1 | awk '/^ +(21|17)[.]/{print $NF; exit}')"; do
-      [ -n "$c" ] && [ -x "$c/bin/java" ] && { jh="$c"; break; }
+    # 리액트 네이티브 그래들 플러그인이 jvmToolchain(17) 이라 17 을 먼저 고른다(21 이면 굽기가 17 을 찾다 실패한다)
+    # java_home -v 17 은 17 이 없으면 기본 JDK(예: 25)를 낸다 — 버전을 직접 확인한다
+    for v in 17 21; do
+      for c in "$(/usr/libexec/java_home -v "$v" 2>/dev/null)" \
+               "/opt/homebrew/opt/openjdk@$v/libexec/openjdk.jdk/Contents/Home" \
+               "/Applications/Android Studio.app/Contents/jbr/Contents/Home"; do
+        [ -x "$c/bin/java" ] && [ "$(_android_jver "$c")" = "$v" ] && { jh="$c"; break 2; }
+      done
     done
-    [ -n "$jh" ] || { echo "JDK: 17~21 이 없습니다 — 안드로이드 스튜디오나 JDK 21 을 설치해 주세요"; return 2; }
+    [ -n "$jh" ] || { echo "JDK: 17 이 없습니다 — brew install openjdk@17 로 설치해 주세요"; return 2; }
+    [ "$(_android_jver "$jh")" = 17 ] || echo "JDK: 17 이 없어 21 로 빌드합니다 — 리액트 네이티브 모듈 굽기는 17 이 있어야 합니다(brew install openjdk@17)"
     export JAVA_HOME="$jh"
   fi
   echo "JDK: $(_android_jver "$JAVA_HOME") ($JAVA_HOME)"
@@ -6915,10 +6922,35 @@ _android_module() {
 
 # _android_gradle KEY 작업폴더 이름 인자… — 그래들을 돌려 출력은 오더 폴더 gradle/{이름}-{시각}.log 에 두고, 경로를 DOBBY_ANDROID_LOG 에 남긴다.
 _android_gradle() {
-  local key="$1" wt="$2" name="$3" dir; shift 3
+  local key="$1" wt="$2" name="$3" dir before rc; shift 3
   dir="$(_order_dir "$key")/gradle"; mkdir -p "$dir"
   DOBBY_ANDROID_LOG="$dir/$name-$(_ts).log"
-  (cd "$wt" && ./gradlew --console=plain "$@") > "$DOBBY_ANDROID_LOG" 2>&1
+  before="$(_gradle_daemons)"
+  (cd "$wt" && ./gradlew --console=plain "$@") > "$DOBBY_ANDROID_LOG" 2>&1; rc=$?
+  _gradle_daemon_note "$key" "$before"
+  return $rc
+}
+
+# _gradle_daemons — 떠 있는 그래들 데몬의 프로세스 번호(한 줄에 하나).
+_gradle_daemons() { ps -eo pid=,command= 2>/dev/null | awk '/[G]radleDaemon/ {print $1}' | sort -n; }
+
+# _gradle_daemon_note KEY 앞목록 — 그래들을 돌리는 사이 새로 뜬 데몬을 오더 폴더 .gradle-daemons 에 적는다(정리 때 그것만 끈다).
+_gradle_daemon_note() {
+  local f; f="$(_order_dir "$1")/.gradle-daemons"
+  comm -13 <(printf '%s\n' "$2") <(_gradle_daemons) | grep . >> "$f"
+  return 0
+}
+
+# dobby_gradle_daemon_cleanup KEY — 이 오더의 빌드가 띄운 그래들 데몬만 끈다. 남의 세션 데몬은 건드리지 않는다.
+#   데몬은 3시간 쉬어야 스스로 꺼지고, 저장소마다 메모리 설정이 달라 서로 재사용되지 않아 4~6GB 씩 남는다.
+dobby_gradle_daemon_cleanup() {
+  local key="${1:-}" f p n=0
+  [ -n "$key" ] || { _die "쓰임: dobby_gradle_daemon_cleanup KEY"; return 1; }
+  f="$(_order_dir "$key")/.gradle-daemons"; [ -f "$f" ] || { echo "그래들 데몬: 끌 것 없음"; return 0; }
+  for p in $(sort -un "$f"); do
+    ps -o command= -p "$p" 2>/dev/null | grep -q GradleDaemon && kill "$p" 2>/dev/null && n=$((n + 1))
+  done
+  rm -f "$f"; echo "그래들 데몬: ${n}개 끔"
 }
 
 # _android_fail_lines 기록파일 — 실패 원인만 추린다(그래들 출력 전체를 세션 문맥에 싣지 않는다).
@@ -6995,7 +7027,15 @@ dobby_android_device() {
   local s
   if [ -n "${ANDROID_SERIAL:-}" ]; then adb -s "$ANDROID_SERIAL" get-state 2>/dev/null | grep -q device && { printf '%s' "$ANDROID_SERIAL"; return 0; }; return 1; fi
   s="$(adb devices 2>/dev/null | awk 'NR>1 && $2=="device" {print $1; exit}')"
-  [ -n "$s" ] && printf '%s' "$s"
+  [ -n "$s" ] && { printf '%s' "$s"; return 0; }
+  return 1
+}
+
+# _android_device_hint — 쓸 수 있는 기기가 없을 때 사람에게 할 말. 연결됐지만 허용 전(unauthorized)이면 그렇게 알린다.
+_android_device_hint() {
+  local u; u="$(adb devices 2>/dev/null | awk 'NR>1 && $2=="unauthorized" {print $1; exit}')"
+  if [ -n "$u" ]; then echo "기기 $u: USB 디버깅 허용 대기 — 휴대폰 잠금을 풀고 「USB 디버깅 허용」 창에서 허용을 눌러 주세요"
+  else echo "기기 없음 — USB 디버깅을 켠 기기를 연결해 주세요(adb devices 에 device 로 보여야 합니다)"; fi
 }
 
 # dobby_android_install KEY 작업폴더 [그래들 인자…] — 작업 폴더를 디버그로 빌드해 연결된 기기에 설치하고, 서버가 rc4 인지 맞춘다.
@@ -7007,7 +7047,7 @@ dobby_android_install() {
   [ -n "$key" ] && [ -d "$wt" ] || { _die "쓰임: dobby_android_install KEY 작업폴더 [그래들 인자…]"; return 2; }
   shift 2
   s="$(dobby_android_device)" || s=""
-  [ -n "$s" ] || { echo "기기 없음 — USB 디버깅을 켠 기기를 연결해 주세요(adb devices 에 device 로 보여야 합니다)"; return 3; }
+  [ -n "$s" ] || { _android_device_hint; return 3; }
   envf="$(_order_dir "$key")/.android-env"
   dobby_android_env "$wt" > "$envf" || { cat "$envf"; rm -f "$envf"; return 2; }
   rm -f "$envf"
@@ -7040,7 +7080,7 @@ dobby_android_install() {
 #   uiautomator 덤프 원문(수백 줄 XML)을 문맥에 싣지 않으려고 쓸모 있는 칸만 추린다. 글자를 주면 그 글자가 든 줄만 낸다.
 dobby_android_ui() {
   local s q="${1:-}"
-  s="$(dobby_android_device)" || { echo "기기 없음"; return 3; }
+  s="$(dobby_android_device)" || { _android_device_hint; return 3; }
   adb -s "$s" exec-out uiautomator dump /dev/tty 2>/dev/null | perl -pe 's/<node /\n<node /g' | awk -v q="$q" '
     function a(n,  r) { r = ""; if (match($0, " " n "=\"[^\"]*\"")) r = substr($0, RSTART + length(n) + 3, RLENGTH - length(n) - 4); return r }
     /^<node / {
@@ -7056,7 +7096,7 @@ dobby_android_ui() {
 dobby_android_shot() {
   local dir="$1" name="${2%.webp}" s id png
   [ -d "$dir" ] && [ -n "$name" ] || { _die "쓰임: dobby_android_shot 결과폴더 이름"; return 1; }
-  s="$(dobby_android_device)" || { echo "기기 없음"; return 3; }
+  s="$(dobby_android_device)" || { _android_device_hint; return 3; }
   id="$(adb -s "$s" shell dumpsys display 2>/dev/null | perl -ne 'if (/isActive=true, displayId=0, uniqueId=.local:(\d+)/) { print "$1"; exit }')"
   png="$dir/$name.png"
   adb -s "$s" exec-out screencap -p ${id:+-d "$id"} > "$png" || { rm -f "$png"; return 1; }
@@ -7067,15 +7107,115 @@ dobby_android_shot() {
   rm -f "$png"; printf '%s\n' "$dir/$name.webp"
 }
 
+# _android_xy 글자 — 지금 화면에서 글자·아이디·설명 중 하나가 정확히 그 값인 첫 요소의 좌표 'x y'.
+_android_xy() { dobby_android_ui "$1" | awk -F' [|] ' -v q="$1" '$1==q || $2==q || $3==q { split($4, p, ","); print p[1], p[2]; exit }'; }
+
+# _android_tap_text 글자 [기다릴초] — 그 요소를 찾아 누른다. 없으면 1.
+_android_tap_text() {
+  local xy; xy="$(_android_xy "$1")"; [ -n "$xy" ] || return 1
+  adb -s "$(dobby_android_device)" shell input tap $xy; sleep "${2:-2}"
+}
+
+# dobby_android_launch — 앱을 첫 화면으로 띄운다. monkey 는 디버그 빌드의 실행 화면 둘(앱, LeakCanary) 중 하나를 무작위로 연다.
+dobby_android_launch() {
+  local s a
+  s="$(dobby_android_device)" || { _android_device_hint; return 3; }
+  a="$(adb -s "$s" shell cmd package query-activities --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER "$DOBBY_ANDROID_PKG" 2>/dev/null \
+    | tr -d '\r' | awk -v p="$DOBBY_ANDROID_PKG/" 'index($1, p) == 1 && $1 !~ /leakcanary/ {print $1; exit}')"
+  [ -n "$a" ] || { _die "앱 실행 화면을 찾지 못했다 — 앱이 설치됐는지 본다"; return 1; }
+  adb -s "$s" shell am start -W -n "$a" >/dev/null 2>&1; sleep 3
+}
+
+# dobby_android_tap_id 아이디 [최대밀기] — 요소가 머리말·하단 탭을 피한 띠(위 15%~87%)에 올 때까지 밀어 맞춘 뒤 누르고 좌표를 낸다.
+#   머리말·하단 탭에 걸친 위치를 누르면 엉뚱한 곳이 눌린다(실측 FE1-2771: 검색창이 눌려 결과를 잃었다). 못 찾으면 1.
+dobby_android_tap_id() {
+  local id="${1:-}" max="${2:-15}" s h top bot i xy y
+  [ -n "$id" ] || { _die "쓰임: dobby_android_tap_id 아이디 [최대밀기]"; return 1; }
+  s="$(dobby_android_device)" || { _android_device_hint; return 3; }
+  h="$(adb -s "$s" shell wm size | tr -d '\r' | sed -nE 's/.*x([0-9]+)$/\1/p' | tail -1)"; h="${h:-2400}"
+  top=$((h * 15 / 100)); bot=$((h * 87 / 100))
+  for i in $(seq 0 "$max"); do
+    xy="$(_android_xy "$id")"
+    if [ -n "$xy" ]; then
+      y="${xy#* }"
+      [ "$y" -ge "$top" ] && [ "$y" -le "$bot" ] && { adb -s "$s" shell input tap $xy; echo "누름: $id ($xy)"; return 0; }
+      if [ "$y" -lt "$top" ]; then adb -s "$s" shell input swipe 540 $((h / 2)) 540 $((h / 2 + h / 5)) 300
+      else adb -s "$s" shell input swipe 540 $((h / 2 + h / 5)) 540 $((h / 2)) 300; fi
+    else
+      adb -s "$s" shell input swipe 540 $((h * 7 / 10)) 540 $((h * 3 / 10)) 300
+    fi
+    sleep 1.5
+  done
+  echo "못 찾음: $id"; return 1
+}
+
+# _android_mywadiz_bottom — 마이와디즈 탭으로 가서 맨 아래까지 민다(로그아웃·앱 정보 줄이 거기 있다).
+_android_mywadiz_bottom() {
+  local s i; s="$(dobby_android_device)" || return 3
+  _android_tap_text bnb_tab_mywadiz 3 || return 1
+  for i in 1 2 3 4 5 6; do adb -s "$s" shell input swipe 540 2000 540 500 200; done; sleep 1.5
+}
+
+# dobby_android_login — 로그아웃한 뒤 시험 계정(TEST_LOGIN_ID)으로 다시 로그인한다. 기기에 남은 계정을 믿지 않는다.
+#   마이와디즈 → 로그인 → 이메일로 시작하기 → 이메일 → 다음 → 비밀번호 → 다음. 끝나면 마이와디즈의 이름을 낸다. 반환 0 · 1 실패.
+dobby_android_login() {
+  local s pw xy name
+  s="$(dobby_android_device)" || { _android_device_hint; return 3; }
+  pw="${TEST_LOGIN_PW:-}"; [ -n "$TEST_LOGIN_ID" ] && [ -n "$pw" ] || { _die "config.env 에 TEST_LOGIN_ID·TEST_LOGIN_PW 가 없다"; return 1; }
+  _android_mywadiz_bottom || { echo "로그인: 마이와디즈 탭을 찾지 못함"; return 1; }
+  _android_tap_text 로그아웃 3
+  _android_tap_text bnb_tab_mywadiz 3; for xy in 1 2 3; do adb -s "$s" shell input swipe 540 600 540 2000 200; done; sleep 1
+  _android_tap_text 로그인 4 || { echo "로그인: 마이와디즈에 로그인 버튼이 없음"; return 1; }
+  _android_tap_text 이메일로\ 시작하기 3 || { echo "로그인: 이메일로 시작하기 없음"; return 1; }
+  xy="$(dobby_android_ui | awk -F' [|] ' '$1=="이메일 입력" {split($4,p,","); print p[1], p[2]; exit}')"
+  [ -n "$xy" ] || { echo "로그인: 이메일 입력칸 없음"; return 1; }
+  adb -s "$s" shell input tap $xy; adb -s "$s" shell input text "$TEST_LOGIN_ID"; _android_tap_text 다음 3
+  xy="$(dobby_android_ui | awk -F' [|] ' '$1=="비밀번호 입력" {split($4,p,","); print p[1], p[2]; exit}')"
+  [ -n "$xy" ] || { echo "로그인: 비밀번호 입력칸 없음"; return 1; }
+  adb -s "$s" shell input tap $xy; adb -s "$s" shell input text "$pw"; _android_tap_text 다음 6
+  _android_tap_text bnb_tab_mywadiz 3
+  name="$(dobby_android_ui | awk -F' [|] ' 'f && $1!="" {print $1; exit} $3=="프로필 이미지" {f=1}')"
+  [ -n "$name" ] && [ "$name" != 로그인 ] || { echo "로그인: 실패(마이와디즈가 로그인 전 화면)"; return 1; }
+  echo "로그인: $TEST_LOGIN_ID (마이와디즈 이름 $name)"
+}
+
+# dobby_android_ab_pin 실험키 A|B|초기화 — 디버그 빌드 실험실의 「A/B 테스트 지정」에서 배정을 바꾸고 앱을 재시작한다.
+#   실험실은 @wadiz.kr 계정에서만 열린다(앱 정보 4번 → debug → 실험실). 시험이 끝나면 원래 군으로 되돌린다. 반환 0 · 1 실패.
+dobby_android_ab_pin() {
+  local exp="${1:-}" grp="${2:-}" s i xy y line cur
+  [ -n "$exp" ] && [ -n "$grp" ] || { _die "쓰임: dobby_android_ab_pin 실험키 A|B|초기화"; return 1; }
+  s="$(dobby_android_device)" || { _android_device_hint; return 3; }
+  _android_mywadiz_bottom || return 1
+  xy="$(dobby_android_ui '앱 정보' | awk -F' [|] ' '{split($4,p,","); print p[1], p[2]; exit}')"
+  [ -n "$xy" ] || { echo "실험 지정: 앱 정보 줄 없음"; return 1; }
+  for i in 1 2 3 4; do adb -s "$s" shell input tap $xy; sleep 0.6; done; sleep 2
+  _android_tap_text debug 3 || { echo "실험 지정: debug 버튼 없음 — @wadiz.kr 계정으로 로그인했는지 본다"; return 1; }
+  dobby_android_tap_id dev_mode_menu_LAB_EXPERIMENT >/dev/null || { echo "실험 지정: 실험실 메뉴 없음"; return 1; }; sleep 3
+  _android_tap_text 'A/B 테스트 지정' 3 || { echo "실험 지정: A/B 테스트 지정 없음"; return 1; }
+  for i in $(seq 1 15); do _android_xy "$exp" | grep -q . && break; adb -s "$s" shell input swipe 540 1900 540 900 300; sleep 1; done
+  y="$(_android_xy "$exp" | cut -d' ' -f2)"; [ -n "$y" ] || { echo "실험 지정: $exp 가 실험 목록에 없음"; return 1; }
+  # 그 실험 아래 첫 번째 'A (' · 'B (' · '저장 초기화' 줄을 누른다
+  case "$grp" in A) line='^A [(]';; B) line='^B [(]';; 초기화) line='^저장 초기화$';; *) _die "군은 A·B·초기화"; return 1;; esac
+  xy="$(dobby_android_ui | awk -F' [|] ' -v y="$y" -v r="$line" '{split($4,p,",")} p[2] > y && $1 ~ r {print p[1], p[2]; exit}')"
+  [ -n "$xy" ] || { echo "실험 지정: $grp 버튼 없음"; return 1; }
+  adb -s "$s" shell input tap $xy; sleep 2
+  cur="$(dobby_android_ui | awk -F' [|] ' -v y="$y" '{split($4,p,",")} p[2] > y && $1 ~ /^현재 배정: / {sub(/^현재 배정: /,"",$1); print $1; exit}')"
+  for i in 1 2 3; do adb -s "$s" shell input swipe 540 600 540 2000 200; done; sleep 1
+  _android_tap_text abtest_restart_button 10 || { echo "실험 지정: 반영 버튼 없음"; return 1; }
+  echo "실험 지정: $exp → 현재 배정 ${cur:-?} (앱 재시작)"
+}
+
 # dobby_android_log [api|crash|rn-e2e|정규식] [줄 수] — 기기 로그에서 그 줄만 끝부분을 낸다. api 는 앱의 서버 응답 기록, crash 는 강제 종료·응답 없음.
 #   rn-e2e 는 리액트 네이티브 시험 기록([rn-e2e] JSON, 디버그 모듈만)을 '포트 | 함수 | 인자' 한 줄씩으로 낸다. 조각난 기록은 이어 붙인다.
 #   로그를 비우려면 시나리오 시작 전에 `adb logcat -c` 를 한 번 부른다.
 dobby_android_log() {
   local pat="${1:-crash}" n="${2:-40}" s
-  s="$(dobby_android_device)" || { echo "기기 없음"; return 3; }
+  s="$(dobby_android_device)" || { _android_device_hint; return 3; }
   case "$pat" in
     api)   pat='BaseWadizAPIProvider' ;;
-    crash) pat='FATAL EXCEPTION|AndroidRuntime: |ANR in '"$DOBBY_ANDROID_PKG" ;;
+    crash) # 강제 종료만 모이는 crash 기록을 본다. 'AndroidRuntime:' 은 adb 로 띄운 monkey·am 의 시작 줄까지 잡는다
+      { adb -s "$s" logcat -d -b crash 2>/dev/null; adb -s "$s" logcat -d 2>/dev/null | grep -E "ANR in $DOBBY_ANDROID_PKG"; } | tail -n "$n" | cut -c1-400
+      return 0 ;;
     rn-e2e)
       adb -s "$s" logcat -d -s ReactNativeJS:V 2>/dev/null | perl -MJSON::PP -ne '
         BEGIN { binmode STDOUT, ":encoding(UTF-8)" }
@@ -7087,7 +7227,12 @@ dobby_android_log() {
         }
         utf8::decode($b);
         my $j = eval { JSON::PP->new->decode($b) };
-        if ($j) { print "$j->{port} | $j->{fn} | ", substr(JSON::PP->new->canonical->encode($j->{args} // {}), 0, 300), "\n" }
+        # 상품 카드 수집은 판정에 쓰는 목록 이름/종류 상품번호를 앞에 둔다(정렬하면 kind 가 300자 뒤로 밀려 잘린다)
+        if ($j) {
+          my $g = $j->{args} // {}; my $h = "";
+          $h = "$g->{item}{itemListId}/$g->{kind} $g->{item}{itemId} | " if ($j->{fn} // "") eq "ecommerce" && ref $g->{item} eq "HASH";
+          print "$j->{port} | $j->{fn} | $h", substr(JSON::PP->new->canonical->encode($g), 0, 300), "\n"
+        }
         else { print substr($b, 0, 300), "\n" }' | tail -n "$n"
       return 0 ;;
   esac
@@ -7258,6 +7403,39 @@ _rn_host_pick() {
   printf '%s\n' "$host"
 }
 
+# dobby_rn_host_warm KEY — 공용 시험 앱 폴더를 앱 라인으로 맞추고 뒤에서 한 번 빌드해 둔다(검증 차례의 첫 빌드 17분을 미리 치른다).
+#   다른 오더가 쓰는 중이거나 커밋 안 된 변경이 있으면 건드리지 않는다. 사용 표시는 남기지 않는다. 기다리지 않고 바로 돌아온다.
+dobby_rn_host_warm() {
+  local key="${1:-}" mod base line shared log
+  [ -n "$key" ] || { _die "쓰임: dobby_rn_host_warm KEY"; return 1; }
+  _v2_wt_path "$key" wadiz-android >/dev/null 2>&1 && { echo "미리 빌드: 앱 작업 폴더가 있는 오더라 건너뜀"; return 0; }
+  mod="$(_v2_wt_path "$key" wadiz-multiplatform)" || return 1
+  base="$(_v2_base_of "$key" wadiz-multiplatform "$mod")"; line="$(_rn_app_line "$base")" || return 0
+  shared="$ORCHESTRATION_WORKSPACE/subtree/$DOBBY_RN_HOST_NAME"
+  [ -d "$shared" ] || git -C "$ORCHESTRATION_REPOS_ROOT/wadiz-android" worktree add -q --detach "$shared" "origin/$line" >&2 || return 1
+  [ -s "$(_rn_host_lock "$shared")" ] && { echo "미리 빌드: 공용 폴더를 다른 오더가 쓰는 중이라 건너뜀"; return 0; }
+  [ -z "$(git -C "$shared" status --porcelain)" ] || { echo "미리 빌드: 공용 폴더에 변경이 있어 건너뜀"; return 0; }
+  git -C "$shared" fetch -q origin "$line" && git -C "$shared" checkout -q --detach "origin/$line" || return 1
+  mkdir -p "$(_order_dir "$key")/gradle"; log="$(_order_dir "$key")/gradle/warm-$(_ts).log"
+  ( dobby_android_env "$shared" >/dev/null || exit 2; before="$(_gradle_daemons)"
+    cd "$shared" && ./gradlew --console=plain :app:assembleDebug > "$log" 2>&1
+    _gradle_daemon_note "$key" "$before" ) </dev/null >/dev/null 2>&1 &
+  echo "미리 빌드: 시작(origin/$line) · 기록 $log"
+}
+
+# dobby_android_progress KEY — 지금 도는(또는 마지막) 그래들 빌드가 어디까지 왔는지 한 줄로 낸다. 오래 걸리는 빌드 중에 부른다.
+dobby_android_progress() {
+  local key="${1:-}" log t k age
+  [ -n "$key" ] || { _die "쓰임: dobby_android_progress KEY"; return 1; }
+  log="$(ls -t "$(_order_dir "$key")"/gradle/*.log "$(_order_dir "$key")"/rn/bake-*.log 2>/dev/null | head -1)"
+  [ -n "$log" ] || { echo "진행: 빌드 기록 없음"; return 0; }
+  t="$(grep -c '^> Task ' "$log")"; k="$(grep -cE '^> Task .*:compile[A-Za-z]*Kotlin( |$)' "$log")"
+  age=$(( ( $(date +%s) - $(stat -f %m "$log" 2>/dev/null || stat -c %Y "$log") ) ))
+  printf '진행: %s · 작업 %s개 · 코틀린 컴파일 %s개 모듈 · 마지막 작업 %s · %s초 전 기록 · %s\n' \
+    "$(grep -qE '^BUILD (SUCCESSFUL|FAILED)' "$log" && grep -oE '^BUILD (SUCCESSFUL|FAILED)' "$log" | tail -1 || echo 진행 중)" \
+    "$t" "$k" "$(grep '^> Task ' "$log" | tail -1 | sed -E 's/^> Task //; s/ .*//')" "$age" "$log"
+}
+
 # dobby_rn_host_release KEY — 그 오더의 공용 폴더 사용 표시를 풀고, 전용 폴더를 만들었으면 지운다(커밋이 없는 폴더다).
 dobby_rn_host_release() {
   local key="${1:-}" shared own lock
@@ -7296,13 +7474,14 @@ dobby_rn_mode() {
 # dobby_rn_bake KEY — 모듈 작업 폴더에서 yarn bake:android 로 0.0.0-dev 모듈을 m2 에 굽는다(자바스크립트 번들도 들어간다).
 #   출력은 오더 폴더 rn/bake-{시각}.log 에만 둔다. 반환 0 · 1 실패 · 2 준비 안 됨.
 dobby_rn_bake() {
-  local key="${1:-}" mod log start rc el
+  local key="${1:-}" mod log start rc el before
   mod="$(_v2_wt_path "$key" wadiz-multiplatform)" || { _die "$key 에 wadiz-multiplatform 작업 폴더가 없다"; return 2; }
   _rn_env_or_say "$key" "$mod" || return 2
   dobby_android_env "$mod/android" >/dev/null || { dobby_android_env "$mod/android"; return 2; }
   mkdir -p "$(_order_dir "$key")/rn"; log="$(_order_dir "$key")/rn/bake-$(_ts).log"
-  start=$(date +%s)
+  start=$(date +%s); before="$(_gradle_daemons)"
   _rn_yarn "$mod" bake:android > "$log" 2>&1; rc=$?
+  _gradle_daemon_note "$key" "$before"
   el=$(( $(date +%s) - start ))
   if [ $rc -ne 0 ] || [ ! -d "$mod/m2" ]; then
     printf '굽기: 실패 · %s분 %s초 · 기록 %s\n' $((el / 60)) $((el % 60)) "$log"
@@ -7329,7 +7508,7 @@ dobby_rn_metro() {
   fi
   [ "$act" = start ] || { _die "쓰임: dobby_rn_metro start|stop KEY"; return 1; }
   mod="$(_v2_wt_path "$key" wadiz-multiplatform)" || { _die "$key 에 wadiz-multiplatform 작업 폴더가 없다"; return 2; }
-  s="$(dobby_android_device)" || { echo "기기 없음"; return 3; }
+  s="$(dobby_android_device)" || { _android_device_hint; return 3; }
   head="$(git -C "$mod" rev-parse --short HEAD)"
   if [ -f "$st" ]; then
     read -r port pid i < "$st"
