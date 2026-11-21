@@ -1,6 +1,6 @@
 # go-dobby 공통 설정
 
-go-dobby의 모든 스킬(`dobby-order`·`dobby-start`·`dobby-impl`·`dobby-produce`·`dobby-test`·`dobby-resolve`·`dobby-end`)이 공유하는 **설정 절차와 환경 변수 규격**이다. 각 스킬은 본문에서 이 문서를 참조하고, 아래 절차를 그대로 따른다.
+go-dobby의 모든 스킬(`do`·`dobby-test`·`dobby-resolve`·`dobby-end`)이 공유하는 **설정 절차와 환경 변수 규격**이다. 각 스킬은 본문에서 이 문서를 참조하고, 아래 절차를 그대로 따른다.
 
 > 이 문서는 스킬 본문에 중복 복사돼 있던 설정 블록을 한곳으로 모은 단일 출처다. 변수·기본값을 바꿀 때는 **여기만** 고치면 된다.
 
@@ -16,7 +16,7 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 
 > **의존성(jq)**: dobby-lib.sh는 대부분 기본 내장된 `bash`·`awk`·`git`만 쓰지만, `agent-logs.json` 병합(`dobby_log`)만 **`jq`**(JSON 파서)를 쓴다 — JSON은 파서로 안전하게 다뤄야 하기 때문(awk 손파싱은 인라인 `{}`·compact·따옴표에서 항목이 사라진다). `dobby_load_config`가 **최초 실행 시 jq 설치 여부를 확인**하고, 없으면 설치 가이드(`brew install jq` / `apt-get install jq`)를 안내한다(하드 실패 아님 — 나머지 함수는 jq 없이도 동작, `dobby_log`만 건너뜀). 안내가 뜨면 설치 후 다시 실행한다.
 
-⛔ **비파괴 원칙 (강제 — 가장 중요):** `dobby-order`·`dobby-start`·`dobby-impl`·`dobby-produce`·`dobby-test`·`dobby-resolve`·`dobby-end`·`dobby-explain`·`dobby-qa`·`dobby-jira-tab` 등 **모든 작업 스킬은 `config.env`를 절대 생성·수정·삭제하지 않는다.** 값 채우기·저장·`export` 후 기록은 **오직 `dobby-init` 스킬**만 한다. **헤드리스(무인) 실행에서도 예외 없다.** 작업 스킬이 config.env를 다시 쓰면, 사용자가 지정한 선택 값(예: `ORCHESTRATION_META_PATH`)이 조용히 사라져 대시보드가 엉뚱한 폴더를 읽는 사고가 난다(실제 발생 이력).
+⛔ **비파괴 원칙 (강제 — 가장 중요):** `do`·`dobby-test`·`dobby-resolve`·`dobby-end`·`dobby-explain`·`dobby-qa`·`dobby-jira-tab` 등 **모든 작업 스킬은 `config.env`를 절대 생성·수정·삭제하지 않는다.** 값 채우기·저장·`export` 후 기록은 **오직 `dobby-init` 스킬**만 한다. **헤드리스(무인) 실행에서도 예외 없다.** 작업 스킬이 config.env를 다시 쓰면, 사용자가 지정한 선택 값(예: `ORCHESTRATION_META_PATH`)이 조용히 사라져 대시보드가 엉뚱한 폴더를 읽는 사고가 난다(실제 발생 이력).
 
 값을 읽은 뒤 처리:
 
@@ -45,7 +45,7 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 | `dobby_agent_add KEY 슬러그 이름 설명 상태 [라운드]` | 스폰 전(선갱신) | 상태표 행 추가(중복 무시, 활성이면 착수=now) |
 | `dobby_agent_state KEY 슬러그 상태 [라운드] [설명] [사람 할 일]` | 전이마다 | 그 행 상태/갱신을 수정. 라운드·설명을 주면 그 칸도 바꾼다. 상태가 바뀌면 착수를 지금으로 바꾼다. `사람 할 일` 칸은 `사람 차례`·`막힘` 일 때만 남기고 그 밖의 상태에서는 비운다. `/do` 세션은 직접 부르지 않는다(시작·끝 헬퍼가 부른다) |
 | `dobby_add_condition KEY "조건 한 줄"` | **P1 닫히는 조건 선언 직후(필수)·P8 범위 확장** | status.md `## 닫히는 조건 항목` 표에 `C{n}` 행 추가(번호 자동, stdout). 테스트 시나리오가 이 번호를 달고 대시보드가 "조건 N개 중 M개 확인"을 센다 |
-| `dobby_set_title KEY "제목"` | **이슈 조회 직후(필수)** | status.md 제목을 실제 요약으로 갱신(골격 임시 제목 덮어씀). dobby-start 경유 여부와 무관 |
+| `dobby_set_title KEY "제목"` | **이슈 조회 직후(필수)** | status.md 제목을 실제 요약으로 갱신(골격 임시 제목 덮어씀) |
 | `dobby_append KEY 파일 "블록"` | append 문서마다 | decisions.md 등 append-only 문서에 읽기 없이 블록 추가(토큰 0) |
 | `dobby_event KEY "사건 — 설명"` | 타임라인 사건마다 | 이벤트 로그 1줄 append |
 | `dobby_log KEY 슬러그 로그경로 [라운드]` | 스폰 직후 | agent-logs.json 기록(라운드는 하위키 병합) |
@@ -84,9 +84,9 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 | `dobby_rn_host KEY` · `dobby_rn_host_release KEY` | 검증 스킬 기기 시험(wadiz-multiplatform) | 시험할 앱 폴더 경로. wadiz-android 작업 폴더가 있는 오더는 그 폴더, 없는 옛 오더는 공용 `subtree/wadiz-android-rn-host`(다른 오더가 검증 중이거나 다른 변경이 남았으면 `subtree/wadiz-android-{키}-host`). 브랜치 없이 앱 라인(develop, release/YY.WW.0)에 고정한다. release 는 사용 표시를 풀고 전용 폴더를 지운다 |
 | `dobby_rn_mode KEY 앱폴더` · `dobby_rn_bake KEY` | 검증 스킬 기기 시험, `dobby_android_check` 안 | 앱의 `rnVersion` 과 모듈 HEAD 의 네이티브 지문이 같으면 `metro`, 다르거나 못 구하면 `bake`. bake 는 `yarn bake:android` 로 모듈을 `m2` 에 굽는다 |
 | `dobby_rn_metro start\|stop KEY` · `dobby_rn_devserver apply\|revert 앱폴더 [포트]` | 검증 스킬 기기 시험 | 8090 부터 빈 포트에 Metro 를 띄우고 `adb reverse` 를 건다(`$META/{키}/.rn-metro`, 살아 있고 커밋이 같으면 이어 씀). stop 은 이 오더의 Metro 만 끈다. devserver 는 앱 `RnInitializer.kt` 에 `RN-LOCAL-DO-NOT-COMMIT` 표시 달린 Metro 주소를 넣거나 그것만 뺀다. 안드로이드 저장소 커밋에 이 표시가 있으면 `dobby_commit_push` 가 거부한다 |
-| `dobby_perf_measure KEY` | dobby-perf | 오더의 세션 기록으로 자동 실행 시간·토큰·개선 항목별 적용 여부와 줄어든 시간을 재서 `perf.json` 을 새로 쓴다(`summary` 만 빈칸). 사람과 대화한 세션(사람이 친 줄 2개 이상)과 컴퓨터가 잠든 구간은 합계에서 빼고 따로 둔다. 기준값은 `skills/do/speedup.md` 1절 |
+| `dobby_perf_measure KEY` | dobby-perf | 오더의 세션 기록으로 자동 실행 시간·토큰·개선 항목별 적용 여부와 줄어든 시간을 재서 `perf.json` 을 새로 쓴다(`summary` 만 빈칸). 사람과 대화한 세션(사람이 친 줄 2개 이상)과 컴퓨터가 잠든 구간은 합계에서 빼고 따로 둔다. 세션별 컨텍스트 크기(`ctx`: 고정 바닥·이월된 대화·쌓인 대화, 호출별 값)와 오더 합계(`tokenFlow`: 비용, 뺀 호출, 서브 에이전트 몫)도 쓴다. 사람이 터미널에서 연 세션은 구간을 좁혀 다른 오더·진행 확인 호출을 뺀다. 기준값은 `skills/do/speedup.md` 1절 |
 | `dobby_perf_put KEY 파일` | dobby-perf | 모델이 쓴 해석(`summary`)만 `perf.json` 에 합친다. 다른 칸이 들어 있으면 거부한다 |
-| `dobby_perf_lint KEY` | dobby-perf 마감 | 필수 칸, 숫자 형식, `null` 값의 이유(`note`), `summary` 3~5문장·한 문장 100자 이하·내부 용어를 검사한다. 어기면 이유를 내고 1 |
+| `dobby_perf_lint KEY` | dobby-perf 마감 | 필수 칸, 숫자 형식, `null` 값의 이유(`note`), `summary` 3~5문장·한 문장 100자 이하·내부 용어를 검사한다. 토큰 흐름 칸(`tokenFlow`, `ctx`)은 없어도 통과하고 있으면 숫자인지만 본다. 어기면 이유를 내고 1 |
 | `_testplan_scope KEY [환경] [뺄회차폴더]` | 묶음·회차 헬퍼 안 | 계획의 시나리오마다 `S1<TAB>in` 또는 `S1<TAB>out<TAB>이유`. `## 검증 범위` 표의 `검증함` 행만 대상이고, 표가 없거나 `전체` 면 모두 대상. 환경을 주면 그 환경의 마지막 판정이 PASS 가 아닌 것(보류·실패·기록 없음)도 대상 |
 | `_testrun_last KEY 환경 [뺄회차폴더]` | 범위 헬퍼 안 | 같은 환경 회차를 최신순으로 훑어 시나리오마다 마지막 판정(SKIP 포함, 범위 밖으로 깔린 `SKIP(범위)` 는 건너뜀)을 `S1<TAB>판정` 으로 낸다 |
 | `dobby_testplan_scope_all KEY "사람 지시"` | `/do {키} 전체 테스트`, 변경 접수에서 전체 테스트 지시 | `## 검증 범위` 절을 `전체` 로 덮어쓰고, 열린 회차의 `SKIP(범위)` 행 판정·근거를 비운다 |

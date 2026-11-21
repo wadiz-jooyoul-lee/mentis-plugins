@@ -247,7 +247,7 @@ _dobby_agent_state_u() {
 
   # ── G13: 설계 게이트 — 개발자가 '구현'으로 전이할 때 design.md가 없으면 거부 ──
   # 스폰 훅(G11)은 Agent 도구 호출만 잡는다. 그런데 go-dobby의 기본 경로는 **분석 에이전트가
-  # 그대로 구현으로 이어가는 것**(dobby-order C9, SendMessage)이라 새 스폰이 없고, 훅이 발화할
+  # 그대로 구현으로 이어가는 것**(order-rules.md C9, SendMessage)이라 새 스폰이 없고, 훅이 발화할
   # 기회 자체가 없다(사례 FE1-1732: 설계 없이 구현·리뷰·통합까지 완주). 상태를 '구현'으로 바꾸는
   # 이 함수는 어느 경로든 반드시 지나므로 여기서 막는다.
   # 제외: 비개발 오더(산출물·작업정리), 리뷰어·산출자 역할. 우회는 DOBBY_FORCE=1.
@@ -1234,7 +1234,7 @@ dobby_set_title() {
 
 # dobby_set_scope KEY "한 줄" — status.md '## 이슈/작업'에 '- **닫히는 조건**: …'를 upsert(범위 경계).
 # "이 오더가 어디까지 하면 끝인가"를 착수 때 한 줄로 못박는 값. 있으면 갱신, 없으면 '- **제목**:' 바로 뒤에 삽입.
-# dobby-order P8이 후속 요청을 이 값과 대조해 "같은 오더 편입 vs 새 오더 분리"를 판단한다.
+# order-rules.md P8이 후속 요청을 이 값과 대조해 "같은 오더 편입 vs 새 오더 분리"를 판단한다.
 dobby_set_scope() {
   local key="$1" scope="$2" f
   f="$(_order_dir "$key")/status.md"
@@ -1339,7 +1339,7 @@ _wt_row() {
 }
 
 # dobby_ensure_worktree REPO KEY PREFIX BASE — 워크트리가 있으면 그대로 쓰고, 없으면 만든다. 경로를 stdout 으로 준다.
-# /do 용이다. dobby_setup_worktree 는 dobby-order·dobby-qa 가 쓰므로 고치지 않고, 그 앞에서 막힐 곳만 먼저 처리한다.
+# /do 용이다. dobby_setup_worktree 는 dobby-qa 가 쓰므로 고치지 않고, 그 앞에서 막힐 곳만 먼저 처리한다.
 #   ① 상태 문서에 이 저장소의 행이 이미 있으면 그 브랜치·경로를 쓴다(새 이름을 조립하지 않는다).
 #   ② 폴더가 지워졌고 브랜치가 남아 있으면 -b 없이 그 브랜치로 되살린다(로컬에 없으면 origin 에서 받아 온다).
 #      dobby_setup_worktree 는 이때 "a branch named … already exists" 로 실패한다.
@@ -1531,7 +1531,7 @@ dobby_resolve() {
 ## 해결
 - **처리 일시**: $now
 - **근거**: 리뷰 round-{n}(blocking 0) · 테스트 {YYYY-MM-DD HH:MM} {env} 회차 {i}(성공 {x}/실패 0/skip {z}) · 통합 커밋 {해시7}  ← ⛔ {} 를 실제 값으로 채울 것(못 채우면 해결 금지). 마지막 검증 이후 변경이 있으면 뒤에 " · ⚠️ 미검증 변경: {건수}건({날짜} 이후)" 추가
-- **비고**: 워크트리·메타 유지. 추가 수정 시 dobby-order P8 재개.
+- **비고**: 워크트리·메타 유지. 추가 수정 시 order-rules.md P8 재개.
 EOF
   dobby_event "$key" "해결 표시 — status 해결"
   _dobby_meta_backup "$key"
@@ -2248,7 +2248,7 @@ EOF
   fi
 
   # 19) 라운드 상한 초과인데 에스컬레이션 기록 없음 — 경고
-  # dobby-order P6이 "최대 라운드 기본 3, 초과 시 사용자 에스컬레이션"을 규정하는데 강제 수단이
+  # order-rules.md P6이 "최대 라운드 기본 3, 초과 시 사용자 에스컬레이션"을 규정하는데 강제 수단이
   # 없어 지켜지지 않는다(실측: 라운드 4~10까지 간 오더 10건 전부 에스컬레이션 기록 0건.
   # 사례 FE1-1803 라운드 6·3일 — 사용자는 끝난 뒤 회고로 알았다).
   # 라운드가 길어지는 것 자체가 문제가 아니라 **사용자가 모르는 채 길어지는 것**이 문제다.
@@ -2273,7 +2273,7 @@ EOF
       _w "design.md 내부 용어·줄임말 $(printf '%s' "$terms20" | grep -c .)곳 — 사용자가 읽고 승인하는 문서입니다. FE/BE→프론트엔드/백엔드, round-N→N차 검토, P숫자→단계 이름, 슬러그→담당 이름으로 풀어 쓰세요(코드 안 식별자 인용이면 그대로 두어도 됩니다): $(printf '%s' "$terms20" | head -3 | tr '\n' ' ')"
   fi
 
-  # 21) 산출물 문서에 메타 보정 흔적 — 경고 (dobby-order C10)
+  # 21) 산출물 문서에 메타 보정 흔적 — 경고 (order-rules.md C10)
   # 규칙을 못 지켜 틀어진 기록을 바로잡은 일(빠진 문서 뒤늦게 작성·형식 복원·재서명·검사 통과)은
   # 개발 내용이 아니다. 이슈가 요구한 것을 만든 게 아니라 이 도구를 쓰다 생긴 뒤처리이며,
   # 문서를 읽는 사람에게는 소음이다. 기록은 orchestration.md 이벤트 로그 한 줄이면 된다.
@@ -2288,7 +2288,7 @@ EOF
   done
   [ -n "$meta21" ] && _w "산출물 문서에 메타 보정 흔적:${meta21} — 메타를 바로잡은 일은 개발 내용이 아닙니다(C10). 해당 줄을 지우고 orchestration.md 이벤트 로그에만 남기세요"
 
-  # 22) 닫히는 조건을 쪼개지 않음 — 치명 (dobby-order P1)
+  # 22) 닫히는 조건을 쪼개지 않음 — 치명 (order-rules.md P1)
   # 한 줄짜리 닫히는 조건은 사람만 읽는다. 쪼개 두어야 dobby-test 가 result.md 조건 칸에
   # 번호를 적고 대시보드가 "조건 3가지 중 3가지 확인"을 스스로 센다.
   # 실측: 오더 125개 중 조건을 쪼갠 것이 12개(10%)뿐이라 나머지 113개는 검증 탭이
@@ -2560,7 +2560,7 @@ dobby_migrate_v2_check() {
     *) printf '불가\t%s 단계는 옮기지 않는다(끝났거나 보류 중이거나 모르는 값)\n' "${ph:-빈 값}"; return 1 ;;
   esac
   if [ ! -f "$d/design.md" ] && ! _ph_design "$ph"; then
-    printf '불가\t설계 문서 없이 %s 단계까지 왔다 — v2 의 뒷세션은 설계 문서를 기준으로 일하므로 dobby-order 로 마무리한다\n' "$ph"; return 1
+    printf '불가\t설계 문서 없이 %s 단계까지 왔다 — v2 의 뒷세션은 설계 문서를 기준으로 일하므로, 지금 상태를 design.md 로 먼저 적은 뒤(order-rules.md P4-C 의 현 상태 캡처) 다시 옮긴다\n' "$ph"; return 1
   fi
   dev="$(_board_dev_slug "$o")"
   printf '개발담당\t%s\n' "${dev:-없음(전환 때 v2-dev 행을 만든다)}"
@@ -2971,11 +2971,11 @@ dobby_discard_purge() {
 
 # 배포을 시작할 수 있는 현재 단계(status.md `- **단계**:`).
 #
-# 정본은 착수·분석·구현·리뷰·통합·검증·해결·종료 여덟이다(dobby-start status.md 스키마).
+# 정본은 착수·분석·구현·리뷰·통합·검증·해결·종료 여덟이다(start-rules.md 의 status.md 스키마).
 # ⛔ `완료` 는 **에이전트 상태표**의 값이지 단계가 아니다 — P7 설명의 "구현 에이전트 상태를
 #    `완료`로 갱신한다"를 단계로 잘못 읽기 쉽다. 실제 메타에 `완료` 로 적힌 오더가 4개 있어
 #    받아는 주되, 정본으로 쓰지 않는다.
-# dobby-order 가 끝나는 지점이 `통합` 이므로 그것이 기본 진입 조건이다.
+# 구현·리뷰가 끝나는 지점이 `통합` 이므로 그것이 기본 진입 조건이다.
 DOBBY_SHIP_PHASES="통합 배포 검증 완성 실패분석 해결 종료 완료"
 
 # 배포을 맡는 저장소. **여기 없는 저장소는 이 스킬이 다루지 않는다.**
@@ -2985,7 +2985,7 @@ DOBBY_SHIP_PHASES="통합 배포 검증 완성 실패분석 해결 종료 완료
 # _ship_argo_server·_ship_argo_app)로 갈라 둔다.
 DOBBY_SHIP_REPOS="wadiz-frontend com.wadiz.web"
 
-# 배포이 갈 수 있는 **논리 환경**. clive(=cloud_live)는 없다 — dobby-order C1.
+# 배포이 갈 수 있는 **논리 환경**. clive(=cloud_live)는 없다 — order-rules.md C1.
 #
 # ⛔ 논리 환경과 **브랜치 이름은 다르다.** 표·헬퍼 인자는 언제나 논리 환경(dev·rc1·rc4·stage)을
 #    쓰고, 실제 브랜치는 _ship_branch 가 저장소마다 옮긴다. 이렇게 해야 저장소가 둘인 오더에서
@@ -4277,7 +4277,7 @@ dobby_ship_pr() {
   local ph; ph="$(_order_phase "$key")"
   if [ -n "$ph" ]; then
     _ship_has "$ph" "$DOBBY_SHIP_PHASES" || {
-      _die "현재 단계가 '$ph' 다 — 배포은 통합이 끝난 뒤에 한다(허용: $DOBBY_SHIP_PHASES). dobby-order 를 먼저 P7 통합까지 진행하라."
+      _die "현재 단계가 '$ph' 다 — 배포은 통합이 끝난 뒤에 한다(허용: $DOBBY_SHIP_PHASES). /do 로 먼저 통합까지 진행하라."
       return 1
     }
   fi
@@ -8082,7 +8082,7 @@ dobby_v2_step() {
   _v2_phase_migrate "$key" >/dev/null 2>&1
   ph="$(_order_phase "$key")"
   if ! grep -q '^## 지난 세션' "$f" && [ "$ph" != 착수 ]; then
-    printf '멈춤\t이 오더는 dobby-order 로 진행한 오더입니다. dobby-order 로 이어 가거나 /dobby-migrate-v2 %s 로 옮긴 뒤 이어 가세요\n' "$key"
+    printf '멈춤\t이 오더는 옛 dobby-order 로 진행한 오더입니다. /dobby-migrate-v2 %s 로 옮긴 뒤 이어 가세요\n' "$key"
     return 0
   fi
   dev="$(_v2_dev_slug "$key")"
@@ -9141,24 +9141,31 @@ DOBBY_PERF_V_DEPS=0.2.151   # 의존성 설치 줄이기·검증 화면 확인 �
 
 # _perf_session SID 파일 — 세션 기록 하나에서 측정에 쓸 사실만 뽑는다(사건 시각·종류, 응답별 토큰, 타입 검사·설치 명령과 걸린 시간).
 #   사건 종류: a 모델 응답, r 도구 결과, h 사람이 친 줄, m 그 밖.
+#   calls 는 응답별 cr(캐시 읽기)·cw(캐시 쓰기)·inp(캐시를 거치지 않은 입력)·out(출력)이다. hl 은 사람이 친 줄의 시각과 글 앞부분,
+#   cost 는 마지막 cost-state 줄의 totalCostUSD(없으면 null), cli 는 사람이 터미널에서 연 세션인지(entrypoint 가 cli)다.
 _perf_session() {
   jq -sc --arg s "$1" '
     def ts: sub("\\.[0-9]+Z$";"Z") | fromdateiso8601;
     def body: if type == "string" then . elif type == "array" then map(.text? // "") | join("\n") else "" end;
-    [.[] | select((.type == "user" or .type == "assistant") and (.isSidechain | not) and .timestamp != null)
+    def txt: .message.content | if type == "string" then . elif type == "array" then (map(.text? // "") | join("")) else "" end;
+    def kind: if .type == "assistant" then "a"
+      elif (.message.content | type) == "array" and any(.message.content[]; .type? == "tool_result") then "r"
+      elif .isMeta then "m"
+      elif (txt | test("^\\s*(<local-command|<task-notification|<system-reminder|<command-name>/clear|Caveat:|\\[Request interrupted|This session is being continued)") or . == "") then "m"
+      else "h" end;
+    ([.[] | select(.type == "cost-state") | .totalCostUSD | numbers] | last) as $cost
+    | any(.[]; .entrypoint? == "cli") as $cli
+    | [.[] | select((.type == "user" or .type == "assistant") and (.isSidechain | not) and .timestamp != null)
       | . + {t:(.timestamp | ts)}] | sort_by(.t) as $E
     | ([$E[] | select(.type == "user") | .t as $t | (.message.content | if type == "array" then .[] else empty end)
         | select(.type? == "tool_result") | {key:.tool_use_id, value:{t:$t, out:(.content | body | .[0:400])}}] | from_entries) as $R
     | {sid:$s, start:([$E[] | select(.type == "user")][0].t),
-       ev:[$E[] | {t, k:(if .type == "assistant" then "a"
-           elif (.message.content | type) == "array" and any(.message.content[]; .type? == "tool_result") then "r"
-           elif .isMeta then "m"
-           elif ((.message.content | if type == "string" then . else (map(.text? // "") | join("")) end)
-                 | test("^\\s*(<local-command|<task-notification|<system-reminder|<command-name>/clear|Caveat:|\\[Request interrupted|This session is being continued)") or . == "") then "m"
-           else "h" end)}],
+       cost:$cost, cli:$cli,
+       ev:[$E[] | {t, k:kind}],
+       hl:[$E[] | select(.type == "user") | select(kind == "h") | {t, x:(txt | .[0:400])}],
        calls:[$E[] | select(.type == "assistant" and .message.usage != null) | .message.usage as $x
-           | {id:.message.id, t, cr:($x.cache_read_input_tokens // 0),
-              inp:(($x.input_tokens // 0) + ($x.cache_creation_input_tokens // 0)), out:($x.output_tokens // 0)}]
+           | {id:.message.id, t, cr:($x.cache_read_input_tokens // 0), cw:($x.cache_creation_input_tokens // 0),
+              inp:($x.input_tokens // 0), out:($x.output_tokens // 0)}]
          | group_by(.id) | map(.[0] + {out:(map(.out) | max)}) | sort_by(.t),
        tools:[$E[] | select(.type == "assistant") | .t as $t | .message.content[]?
            | select(.type? == "tool_use" and .name == "Bash") | {id, t:$t, cmd:(.input.command // "")}
@@ -9169,10 +9176,23 @@ _perf_session() {
            | (.input.command // "") | scan("go-dobby/(0\\.[0-9]+\\.[0-9]+)/") | .[0] | split(".") | map(tonumber)] | max)}' "$2"
 }
 
+# _perf_subagents — 표준 입력으로 받은 서브 에이전트 기록({세션 폴더}/subagents/agent-*.jsonl)에서 응답별 토큰만 뽑는다.
+_perf_subagents() {
+  jq -sc 'def ts: sub("\\.[0-9]+Z$";"Z") | fromdateiso8601;
+    [.[] | select(.type == "assistant" and .message.usage != null and .timestamp != null) | .message.usage as $x
+      | {id:.message.id, t:(.timestamp | ts), cr:($x.cache_read_input_tokens // 0), cw:($x.cache_creation_input_tokens // 0),
+         inp:($x.input_tokens // 0), out:($x.output_tokens // 0)}]
+    | group_by(.id) | map(.[0] + {out:(map(.out) | max)}) | sort_by(.t)'
+}
+
 # dobby_perf_measure KEY — 오더 하나의 시간·토큰을 세션 기록으로 재서 perf.json 을 새로 쓴다(summary 만 빈칸). 요약을 출력한다.
-#   세션 구간은 지난 세션 표의 행에서 같은 세션의 다음 행까지다. 사람이 친 줄이 2개 이상인 구간은 사람과 대화한 세션으로 따로 둔다.
+#   자동 세션의 구간은 지난 세션 표의 행에서 같은 세션의 다음 행까지다. 사람이 친 줄이 2개 이상인 구간은 사람과 대화한 세션으로 따로 둔다.
+#   사람이 터미널에서 열어 여러 번 말한 세션(cli, 사람이 친 줄 2개 이상)은 다른 일과 섞이므로 구간을 좁힌다:
+#     시작 — 오래 열려 있던 세션이면, 행 시각 앞 60분 안에 사람이 친 줄 가운데 오더 키가 든 마지막 줄, 없으면 마지막 줄(그 행을 적은 차례의 시작).
+#     끝 — 같은 세션의 다음 행 시작, 표의 바로 다음 행(다른 세션)이 실제로 시작한 때, 같은 세션을 쓴 다른 오더의 시작 가운데 가장 이른 것.
+#   어느 구간에도 들지 않은 호출은 tokenFlow.excluded 에 호출 수와 입력 합계만 남긴다.
 dobby_perf_measure() {
-  local key="$1" d rows off sess sid f out runlog waits ver scen ev pm
+  local key="$1" d rows off sess sid f out runlog waits ver scen ev pm orows o ok sub
   d="$(_order_dir "$key")"
   rows="$(awk -F'|' 'function t(x){gsub(/^[ \t`]+|[ \t`]+$/,"",x);return x}
     /^## /{ins=($0 ~ /^## 지난 세션/); next}
@@ -9182,8 +9202,24 @@ dobby_perf_measure() {
   sess="$(mktemp)"
   printf '%s\n' "$rows" | cut -f3 | awk 'NF && !s[$0]++' | while read -r sid; do
     f="$(ls ~/.claude/projects/*/"$sid".jsonl 2>/dev/null | head -1)"
-    if [ -z "$f" ]; then jq -nc --arg s "$sid" '{sid:$s, missing:true}'; else _perf_session "$sid" "$f"; fi
+    if [ -z "$f" ]; then jq -nc --arg s "$sid" '{sid:$s, missing:true}'
+    else
+      sub="${f%.jsonl}/subagents"
+      if [ -d "$sub" ] && [ -n "$(find "$sub" -name 'agent-*.jsonl' -print -quit)" ]; then
+        find "$sub" -name 'agent-*.jsonl' -exec cat {} + | _perf_subagents > "$sess.sub"
+        _perf_session "$sid" "$f" | jq -c --slurpfile sub "$sess.sub" '. + {sub:$sub[0]}'
+      else _perf_session "$sid" "$f"; fi
+    fi
   done > "$sess"
+  rm -f "$sess.sub"
+  # 같은 세션을 쓴 다른 오더를 찾으려고 다른 오더의 지난 세션 표를 훑는다(시각·세션·키)
+  orows="$(for o in "$(dirname "$d")"/*/status.md; do
+      [ -f "$o" ] || continue
+      ok="$(basename "$(dirname "$o")")"; [ "$ok" = "$key" ] && continue
+      awk -F'|' -v k="$ok" 'function t(x){gsub(/^[ \t`]+|[ \t`]+$/,"",x);return x}
+        /^## /{ins=($0 ~ /^## 지난 세션/); next}
+        ins && /^\| *[0-9][0-9][0-9][0-9]-/{print t($2) "\t" t($4) "\t" k}' "$o"
+    done)"
   ev="$(awk '/^## /{i=($0 ~ /이벤트 로그/); next} i && /^- [0-9][0-9][0-9][0-9]-/{print substr($0, 3)}' "$d/orchestration.md" 2>/dev/null)"
   # 배포 대기 확인 간격은 대시보드 자동 실행 기록에만 남는다(마지막 실행분). 줄: "…를 기다립니다(저장소 PR #N, M분째) · HH:MM"
   runlog="$(_meta)/.mentis-jobs/$key/run.log"
@@ -9202,7 +9238,7 @@ dobby_perf_measure() {
   out="$d/perf.json"
   jq -n --slurpfile S "$sess" --arg rows "$rows" --arg ev "$ev" --arg waits "$waits" --argjson off "${off:-0}" \
     --arg key "$key" --arg ver "${ver:-알 수 없음}" --arg phase "$(_order_phase "$key")" --argjson base "$DOBBY_PERF_BASE" \
-    --argjson scen "${scen:-0}" --arg pm "$pm" \
+    --argjson scen "${scen:-0}" --arg pm "$pm" --arg orows "$orows" \
     --arg tcOn "$(grep -m1 '^- \*\*타입 검사\*\*:' "$d/status.md" 2>/dev/null)" \
     --arg docLine "$(grep -m1 '^- \*\*결과 문서\*\*:' "$d/status.md" 2>/dev/null)" \
     --argjson vnew "[${DOBBY_PERF_V_DEPS//./,}]" '
@@ -9225,27 +9261,70 @@ dobby_perf_measure() {
     | def slept($a; $b): [$SL[] | ([.[1], $b] | min) - ([.[0], $a] | max) | select(. > 0)] | add // 0;
     ($S | map({key:.sid, value:.}) | from_entries) as $SS
     | [$rows | split("\n")[] | select(length > 0) | split("\t") | {at:(.[0] | at), stage:.[1], sid:.[2]}] as $R
-    | [range(0; $R | length) as $i | $R[$i] as $r
-        | ([range($i + 1; $R | length) | select($R[.].sid == $r.sid) | $R[.].at] | first // 1e12) as $until
+    | [$orows | split("\n")[] | select(length > 0) | split("\t") | select(.[1] as $x | any($R[]; .sid == $x))
+        | {at:(.[0] | at), sid:.[1], key:.[2]}] as $OR
+    | def cx: .cr + .cw + .inp;
+    def mid: sort | if length == 0 then null else .[length / 2 | floor] end;
+    # 사람이 터미널에서 열어 여러 번 말한 세션. 다른 일과 섞일 수 있어 구간을 좁힌다
+    def inter($s): ($s.cli // false) and (($s.hl // []) | length) >= 2;
+    def startOf($s; $at; $k): [($s.hl // [])[] | select(.t >= $at - 3600 and .t <= $at + 59)] as $h
+      | ([$h[] | select(.x | contains($k))] | last | .t) // ($h | last | .t) // $at;
+    [range(0; $R | length) as $i | $R[$i] as $r | ($SS[$r.sid] // {missing:true}) as $s
         | ([range(0; $i) | select($R[.].sid == $r.sid)] | length > 0) as $resumed
+        | if $s.start == null then $r.at
+          elif inter($s) and ($resumed or $s.start < $r.at - 3600) then startOf($s; $r.at; $key)
+          elif $resumed then $r.at else ([$s.start, $r.at] | min) end] as $F
+    | [range(0; $R | length) as $i | $R[$i] as $r | ($SS[$r.sid] // {missing:true}) as $s
+        | ([range($i + 1; $R | length) | select($R[.].sid == $r.sid)] | first) as $j
+        | if inter($s) | not then (if $j == null then 1e12 else $R[$j].at end)
+          else [(if $j != null then $F[$j] else empty end),
+                ($R[$i + 1] // empty | select(.sid != $r.sid) | . as $n | ($SS[$n.sid].start // null) as $ns
+                  | if $ns != null and (($ns - $n.at) | fabs) <= 3600 and ([range(0; $i + 1) | select($R[.].sid == $n.sid)] | length) == 0
+                    then $ns else $n.at end),
+                ($OR[] | select(.sid == $r.sid) | startOf($s; .at; .key)),
+                1e12] | map(select(. > $F[$i])) | min end] as $U
+    | [range(0; $R | length) as $i | $R[$i] as $r
+        | $U[$i] as $until | $F[$i] as $from
         | ($SS[$r.sid] // {missing:true}) as $s
-        | (if $resumed or $s.start == null then $r.at else ([$s.start, $r.at] | min) end) as $from
         | (if $s.missing then [] else [$s.ev[] | select(.t >= $from and .t < $until)] end) as $e
-        | (if $s.missing then [] else [$s.calls[] | select(.t >= $from and .t < $until)] end) as $c
+        | (if $s.missing then [] else [$s.calls | to_entries[] | select(.value.t >= $from and .value.t < $until) | .value + {g:.key}] end) as $c
+        | [$c | to_entries[] | select(.value.g > 0) | ($s.calls[.value.g - 1] | cx) as $p
+            | {n:(.key + 1), rw:(.value.cr < 0.5 * $p), cp:((.value | cx) < 0.7 * $p)}] as $marks
+        | [($s.sub // [])[] | select(.t >= $from and .t < $until)] as $sb
         | (if $s.missing then [] else [$s.tools[] | select(.t >= $from and .t < $until)] end) as $tl
         | ([range(1; $e | length) | {k:$e[.].k, g:(($e[.].t - $e[. - 1].t) - slept($e[. - 1].t; $e[.].t))} | select(.g <= 1800)]) as $gaps
         | {sid:$r.sid, stage:$r.stage, group:($r.stage | grp), missing:($s.missing // false),
            start:($e[0].t // null), end:($e[-1].t // null), calls:($c | length),
            human:([$e[] | select(.k == "h")] | length),
            modelSec:([$gaps[] | select(.k == "a") | .g] | add // 0), toolSec:([$gaps[] | select(.k == "r") | .g] | add // 0),
-           tok:{cacheRead:($c | map(.cr) | add // 0), input:($c | map(.inp) | add // 0), output:($c | map(.out) | add // 0)},
-           tools:$tl, ver:($s.ver // null)}
-        | . + {interactive:(.human >= 2)}
+           tok:{cacheRead:($c | map(.cr) | add // 0), input:($c | map(.inp + .cw) | add // 0), output:($c | map(.out) | add // 0)},
+           tools:$tl, ver:($s.ver // null),
+           from:$from, until:$until, inter:inter($s), fresh:(($c | length) > 0 and $c[0].g == 0),
+           ser:($c | map(cx)), cw:($c | map(.cw) | add // 0), rawIn:($c | map(.inp) | add // 0),
+           rewrites:[$marks[] | select(.rw) | .n], compactions:[$marks[] | select(.cp) | .n],
+           sub:(if ($sb | length) == 0 then null else {calls:($sb | length),
+             tokens:{cacheRead:($sb | map(.cr) | add), cacheWrite:($sb | map(.cw) | add), input:($sb | map(.inp) | add), output:($sb | map(.out) | add)}} end),
+           cost:(if ([$R[] | select(.sid == $r.sid)] | length) == 1 and ([$OR[] | select(.sid == $r.sid)] | length) == 0 then ($s.cost // null) else null end)}
+        | . + {interactive:(.human >= 2 or .inter)}
         | . + {sleepSec:(if .start == null then 0 else slept(.start; .end) end)}
         | . + {sec:(if .start == null then null elif .interactive then .modelSec + .toolSec else .end - .start - .sleepSec end)}] as $G
     | [$G[] | select(.interactive | not) | select(.sec != null)] as $A
     | [$G[] | select(.interactive)] as $H
-    | [range(0; $G | length) as $i | $G[$i] | . + {i:$i}] as $GI
+    # 고정 바닥·이월된 대화·쌓인 대화. 이어 쓴 구간의 바닥은 이 오더의 새 세션 첫 호출 크기의 가운데 값이다
+    | ([$G[] | select(.fresh) | .ser[0]] | mid) as $FR
+    | def ctxOf: .ser as $x | ($x | length) as $n | ($x | add // 0) as $sum
+        | (if $n == 0 then null elif .fresh then $x[0] else $FR end) as $fl
+        | (if $fl == null then null elif .fresh then 0 else ([$x[0] - $fl, 0] | max) end) as $ca
+        | {floor:$fl, carry:$ca, first:($x[0] // null), last:($x[-1] // null), peak:($x | max), sum:$sum,
+           floorSum:(if $fl == null then null else ([$fl * $n, $sum] | min) end),
+           carrySum:(if $ca == null then null else $ca * $n end)}
+        | . + {growthSum:(if .floorSum == null then null else ([$sum - .floorSum - .carrySum, 0] | max) end), series:$x};
+    [range(0; $G | length) as $i | $G[$i] | . + {i:$i, cx:ctxOf}] as $GI
+    # 사람과 대화한 세션에서 이 오더의 어느 구간에도 들지 않은 호출(첫 구간 시작부터 다른 오더 시작 또는 세션 끝까지)
+    | [$G | map(select(.inter and (.missing | not))) | group_by(.sid)[] | . as $iv | $SS[$iv[0].sid] as $s
+        | ($iv | map(.from) | min) as $a | ($iv | map(.from) | max) as $z
+        | ([$OR[] | select(.sid == $s.sid) | startOf($s; .at; .key) | select(. > $z)] | min // 1e12) as $lim
+        | $s.calls[] | select(.t >= $a and .t < $lim) | select(.t as $t | all($iv[]; $t < .from or $t >= .until)) | cx] as $EX
     | [$GI[] | select((.interactive | not) and .sec != null) | . as $x
         | {i:$x.i, with:[$GI[] | select(.i != $x.i and (.interactive | not) and .sec != null
             and .start < $x.end and $x.start < .end) | .sid]}] as $PAR
@@ -9305,6 +9384,18 @@ dobby_perf_measure() {
        interactive:{sessions:($H | length), min:($H | map(.sec // 0) | add // 0 | mins),
                     tokens:{cacheRead:($H | map(.tok.cacheRead) | add // 0), input:($H | map(.tok.input) | add // 0), output:($H | map(.tok.output) | add // 0)}},
        byStage:$BS,
+       tokenFlow:({floorRef:$FR, sum:($GI | map(.cx.sum) | add // 0),
+           floorSum:($GI | map(.cx.floorSum // 0) | add // 0), carrySum:($GI | map(.cx.carrySum // 0) | add // 0)}
+         | . + {growthSum:(.sum - .floorSum - .carrySum),
+           cacheRead:($GI | map(.tok.cacheRead) | add // 0), cacheWrite:($GI | map(.cw) | add // 0),
+           input:($GI | map(.rawIn) | add // 0), output:($GI | map(.tok.output) | add // 0),
+           costUsd:([$GI[] | .cost | numbers] | if length == 0 then null else (add * 100 | round / 100) end),
+           costSessions:([$GI[] | .cost | numbers] | length),
+           interactiveSum:([$GI[] | select(.interactive) | .cx.sum] | add // 0),
+           excluded:{calls:($EX | length), sum:($EX | add // 0), note:"사람과 대화한 세션에서 다음 세션에 일을 넘긴 뒤의 호출(진행 확인 등)"},
+           subagents:([$GI[] | .sub | objects] | if length == 0 then null else {calls:(map(.calls) | add),
+             tokens:{cacheRead:(map(.tokens.cacheRead) | add), cacheWrite:(map(.tokens.cacheWrite) | add),
+                     input:(map(.tokens.input) | add), output:(map(.tokens.output) | add)}} end)}),
        items:[
          (if $tcon then {id:"typecheck-off", name:"타입 검사 기본 끔", applied:false,
              evidence:"상태 문서에 타입 검사 켬 줄이 있음", savedMin:0, tokenDelta:null, note:"이 오더는 타입 검사를 켰습니다. 토큰 변화는 따로 잴 수 없습니다"}
@@ -9364,7 +9455,12 @@ dobby_perf_measure() {
        sessions:[$GI[] | . as $g | {id:.sid, stage, group, interactive, missing,
            start:(if .start then (.start | loc) else null end), end:(if .end then (.end | loc) else null end),
            min:(.sec | mins), sleepMin:(.sleepSec | mins), calls, modelMin:(.modelSec | mins), toolMin:(.toolSec | mins), tokens:.tok,
-           parallelWith:(([$PAR[] | select(.i == $g.i) | .with[]] | first) // null)}],
+           parallelWith:(([$PAR[] | select(.i == $g.i) | .with[]] | first) // null),
+           resumed:((.fresh | not) and (.ser | length) > 0), ctx:.cx, cacheWrite:.cw,
+           cacheHitRate:(if .cx.sum > 0 then (.tok.cacheRead / .cx.sum * 1000 | round / 1000) else null end),
+           cacheRewrites:.rewrites, compactions:.compactions,
+           costUsd:(if .cost == null then null else (.cost * 100 | round / 100) end)}
+         + (if .sub == null then {} else {subagents:.sub} end)],
        humanWaits:[$HW | merged | .[] | {start:(.[0] | loc), end:(.[1] | loc), min:(.[1] - .[0] | mins)}],
        method:("자동 실행 시간은 사람과 대화하지 않은 세션(사람이 친 줄 1개 이하)의 첫 사건부터 끝 사건까지를 더하되, 겹친 시간은 한 번만 셌다. "
          + "기준 시간은 2026-11-17 실측(/do 오더 63개)의 단계별 세션 하나 평균에 이번 오더의 단계별 세션 수를 곱했다. "
@@ -9372,7 +9468,12 @@ dobby_perf_measure() {
          + "다섯 단계 밖의 자동 세션은 실제 시간을 기준에도 그대로 넣었다. 토큰 기준도 같은 방식이고, 새 입력은 캐시 안 쓴 입력과 캐시 쓰기를 더한 값이다. "
          + "사람을 기다린 시간은 이벤트 로그의 사람 차례·막힘 줄부터 같은 담당자의 다음 줄 또는 다음 세션 시작까지이며 합계에 넣지 않았다. "
          + "컴퓨터가 잠든 구간(잠자기 기록)은 세션 시간과 합계에서 빼고 sleepMin 에 따로 두었다. "
-         + "사람과 대화한 세션은 사람이 생각한 시간을 빼려고 모델 시간과 도구 시간의 합만 interactive 칸에 따로 두었다."),
+         + "사람과 대화한 세션은 사람이 생각한 시간을 빼려고 모델 시간과 도구 시간의 합만 interactive 칸에 따로 두었다. "
+         + "토큰 흐름의 컨텍스트 크기는 호출 하나의 입력·캐시 쓰기·캐시 읽기를 더한 값이고, 입력 합계는 그것을 호출마다 더한 값이며 사람과 대화한 세션도 넣었다. "
+         + "고정 바닥은 새로 시작한 세션의 첫 호출 크기이고, 이어 쓴 구간에는 이 오더의 새 세션 첫 호출 크기의 가운데 값을 썼다. "
+         + "사람이 터미널에서 연 세션의 구간은 그 행을 적은 차례의 사람이 친 줄부터 다음 세션에 일을 넘긴 때 또는 같은 세션을 쓴 다른 오더의 시작까지이고, 그 밖의 호출은 뺀 몫에 따로 두었다. "
+         + "비용은 세션 기록의 마지막 비용 줄이며, 그 줄이 없거나 한 세션이 여러 구간으로 나뉘면 비워 두었다. "
+         + "서브 에이전트 몫은 세션 폴더의 서브 에이전트 기록에서 따로 셌고 위 합계에는 넣지 않았다."),
        summary:""}' > "$out.tmp" && mv "$out.tmp" "$out"
   rm -f "$sess"
   [ -s "$out" ] || { echo "측정 실패: perf.json 을 쓰지 못했습니다"; return 1; }
@@ -9380,6 +9481,7 @@ dobby_perf_measure() {
     "자동 실행 \(.totals.wallMin)분 · 기준 \(.totals.baselineMin)분 · 차이 \(.totals.savedMin)분 · 사람 기다림 \(.totals.humanWaitMin)분 · 잠든 시간 \(.totals.sleepMin)분 \(.sleepLog)",
     "사람과 대화한 세션 \(.interactive.sessions)개 \(.interactive.min)분",
     "단계별: " + ([.byStage[] | "\(.stage) \(.sessions)세션 \(.min)분(기준 \(.baselineMin))"] | join(" · ")),
+    "토큰: 입력 합계 \(.tokenFlow.sum) = 고정 바닥 \(.tokenFlow.floorSum) + 이월 \(.tokenFlow.carrySum) + 쌓인 대화 \(.tokenFlow.growthSum) · 사람과 대화 \(.tokenFlow.interactiveSum) · 비용 \(.tokenFlow.costUsd // "기록 없음")(\(.tokenFlow.costSessions)세션) · 뺀 호출 \(.tokenFlow.excluded.calls)번 \(.tokenFlow.excluded.sum)\(if .tokenFlow.subagents then " · 서브 에이전트 \(.tokenFlow.subagents.calls)번" else "" end)",
     "개선 항목:", (.items[] | "  \(.name): \(if .applied == true then "적용됨" elif .applied == false then "해당 없음" else "측정 못 함" end) · 줄어든 \(.savedMin)분 · \(.evidence)")' "$out"
 }
 
@@ -9416,6 +9518,10 @@ dobby_perf_lint() {
     (.items[]? | select((.savedMin | numnull | not) or (.tokenDelta | numnull | not)) | "savedMin·tokenDelta 는 숫자나 null: \(.name)"),
     (.items[]? | select((.savedMin == null or .applied == null) and (.note // "") == "") | "null 값의 이유(note)가 빠짐: \(.name)"),
     (.sessions[]? | select((.id // "") == "" or (.stage // "") == "" or (.calls | num | not)) | "세션 행이 잘못됨: \(.stage // "?")"),
+    # 토큰 흐름 칸은 없어도 된다(옛 perf.json). 있으면 숫자인지만 본다
+    (if has("tokenFlow") then (.tokenFlow | ["sum","floorSum","carrySum","growthSum","cacheRead","cacheWrite","input","output"][] as $k
+        | if (.[$k] | num) then empty else "tokenFlow.\($k) 가 숫자가 아님" end) else empty end),
+    (.sessions[]? | select(has("ctx")) | select((.ctx.sum | num | not) or (.ctx.series | type) != "array") | "세션의 ctx 가 잘못됨: \(.stage // "?")"),
     (if (.method // "") == "" then "method 비어 있음" else empty end),
     ((.summary // "") as $s | [$s | splits("(?<=[.!?])\\s+") | select(length > 0)] as $x
       | if $s == "" then "summary 비어 있음 — 해석 문장을 dobby_perf_put 으로 넣으세요"

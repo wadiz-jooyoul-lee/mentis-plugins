@@ -2,19 +2,16 @@
 
 Jira 이슈 생명주기와 멀티 에이전트 오케스트레이션, 문서 동기화를 담은 Claude Code 플러그인 마켓플레이스입니다. 두 플러그인을 제공합니다:
 
-- **`go-dobby`** — 이전 플러그인 work-dobby(삭제됨)를 재설계한 **단일 진입점 오케스트레이션**. 모든 이슈/작업을 `dobby-order` 하나로 시작해 필요한 에이전트 수(팬아웃 K)를 스스로 판단해 진행합니다. 설계 상세는 `plugins/go-dobby/reference/redesign-spec.md` 참고.
+- **`go-dobby`** — 이전 플러그인 work-dobby(삭제됨)를 재설계한 **오케스트레이션**. 모든 이슈/작업을 `/do` 로 시작해 설계·구현·리뷰·통합을 단계마다 새 세션으로 진행합니다. 처음 설계 기록은 `plugins/go-dobby/reference/redesign-spec.md` 참고(옛 `dobby-order` 방식 기준).
 - **`mentis-docs`** — 레포 **git pull 후 diff를 근거로 대응 문서를 자동 갱신**하는 `docs-sync` 스킬.
 
 ## go-dobby 스킬 (재설계)
 
-모든 작업을 **`dobby-order` 하나로 시작**합니다. 진입 후 코드 범위(파일 오너십)로 에이전트 수(K)를 판단해 — 단일 버그면 K=1, 에픽/여러 영역이면 K≥2 — 착수·구현·리뷰·통합을 오케스트레이션합니다. 이슈 없이 **문서만 주는 진입**(`TASK-{slug}`)도 지원합니다.
+모든 작업을 **`/do` 로 시작**합니다. 한 번 실행에 한 단계만 하고, 설계 세션에서만 사람과 대화한 뒤 구현·리뷰·통합은 자동 실행이 이어 갑니다. 옛 진입점 `dobby-order` 와 그 부품(`dobby-start`·`dobby-impl`·`dobby-produce`)은 삭제했고, 규칙 본문은 `plugins/go-dobby/reference/` 의 `order-rules.md`·`start-rules.md`·`impl-rules.md`·`produce-rules.md` 에 남겼습니다.
 
 | 스킬 | 역할 | 호출 |
 |------|------|------|
-| `dobby-order` | 유일 진입점 — 팬아웃 K 판단·착수·구현·리뷰·통합 오케스트레이션 | 사용자 |
-| `dobby-start` | 에이전트별 착수·분석 (베이스 로컬/원격 모두 처리, docs 2단계 참조) | 내부 |
-| `dobby-impl` | 에이전트별 구현·자기 브랜치 푸시·리뷰 피드백 반영 (code) | 내부 |
-| `dobby-produce` | 에이전트별 비소스 산출 (문서·리서치·분석 등, code 대신) | 내부 |
+| `do` | 진입점 — 단계마다 새 세션으로 설계·구현·리뷰·통합(자동 실행이면 배포·검증까지) | 사용자 |
 | `dobby-test` | 실브라우저 검증 (code만, 자동 해결 승격 없음) | 사용자 |
 | `dobby-resolve` | 해결 표시 — 상태만 `해결`, 폴더 유지(비파괴) | 사용자 |
 | `dobby-end` | 워크트리 정리 — 스냅샷 후 제거(브랜치 보존) | 사용자 |
@@ -63,10 +60,10 @@ mentis-plugins/
         ├── config.env.example
         ├── reference/
         │   ├── config.md                # 공통 설정
-        │   └── redesign-spec.md         # 재설계 SSOT
+        │   ├── order-rules.md 등        # 옛 dobby-order 계열 규칙 본문(참조용)
+        │   └── redesign-spec.md         # 처음 재설계 기록
         └── skills/
-            ├── dobby-order/             # 유일 진입점
-            ├── dobby-start/  dobby-impl/  dobby-produce/
+            ├── do/                      # 진입점
             └── dobby-test/  dobby-resolve/  dobby-end/
 ```
 

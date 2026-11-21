@@ -18,7 +18,7 @@ description: 오더의 설계 문서(design.md)와 구현 결과 문서(outcome.
 - `outcome`: `outcome.md` 생성(통합 후). 이미 있으면 그대로 둠(regen으로 재생성).
 - `regen`: 대상 문서를 다시 생성. **⛔ design.md는 반드시 `dobby_design_backup {키}` 로 백업한 뒤** 전체 산출물을 다시 읽어 **Write 도구로** 덮어쓴다(셸 `cat >`·`sed -i`는 훅 G12가 차단 — 우회하지 말 것).
 
-## design.md 생성 (구현 전 — dobby-order P3.5가 호출)
+## design.md 생성 (구현 전 — `/do` 설계 세션이 이 규칙을 따른다. 옛 근거는 order-rules.md P3.5)
 
 **근거(있는 것만 읽는다)**: `analysis*.md`(분석) · `status.md`(닫히는 조건·종류) · `side-effects.md` · `orchestration.md`(범위 배분·계약) · Jira 이슈(있으면).
 
@@ -79,7 +79,7 @@ description: 오더의 설계 문서(design.md)와 구현 결과 문서(outcome.
 - **가리키는 말 금지**: `이것`·`위의`·`해당`·`앞서 말한` 대신 **매번 이름을 그대로 다시 쓴다**. 문서를 위에서부터 읽지 않아도 뜻이 통해야 한다.
 - **전문용어는 처음 쓸 때 괄호로 풀이**하고, 문서 끝 `## 용어`에 모은다.
 
-## outcome.md 생성 (통합 후 — dobby-order P7이 인라인으로 작성, 이 스킬은 regen용)
+## outcome.md 생성 (통합 후 — `/do` 통합 단계가 인라인으로 작성, 이 스킬은 regen용. 옛 근거는 order-rules.md P7)
 
 **근거**: `design.md`(설계 대비 비교 축) · `implementation*.md` · 실제 diff · `test-runs/`(있으면).
 
@@ -91,7 +91,7 @@ description: 오더의 설계 문서(design.md)와 구현 결과 문서(outcome.
    - 전문용어는 처음 쓸 때 괄호로 풀이. 과도한 단축어·별명 금지.
    - 작성 후 `dobby_terms_lint $ORCHESTRATION_META/{키}/outcome.md`로 자가 검사한다(검출되면 고친다 — dobby_lint #13 치명).
 5. **⛔ 실수·재작업 경위는 쓰지 않는다**(결과만 — dobby_lint #15 경고). 과정은 retro.md 몫.
-5-1. **⛔ 메타 보정은 한 줄도 쓰지 않는다**(dobby-order **C10**): 빠진 산출물을 뒤늦게 만든 일·`artifact-share.md` 형식 복원·`design-ack` 재서명·`dobby_lint` 통과시키기는 **개발 내용이 아니다.** 이슈가 요구한 것을 만든 게 아니라 도구를 쓰다 생긴 뒤처리다. 기록은 `orchestration.md` 이벤트 로그에만 남긴다.
+5-1. **⛔ 메타 보정은 한 줄도 쓰지 않는다**(order-rules.md **C10**): 빠진 산출물을 뒤늦게 만든 일·`artifact-share.md` 형식 복원·`design-ack` 재서명·`dobby_lint` 통과시키기는 **개발 내용이 아니다.** 이슈가 요구한 것을 만든 게 아니라 도구를 쓰다 생긴 뒤처리다. 기록은 `orchestration.md` 이벤트 로그에만 남긴다.
 6. **P8 후속 후에는** 전체 재생성 대신 **`## 후속 {YYYY-MM-DD} — {요약}` 섹션을 append**한다(설계 대비 표의 해당 행만 갱신 가능).
 
 ## 비파괴
@@ -103,5 +103,5 @@ description: 오더의 설계 문서(design.md)와 구현 결과 문서(outcome.
 > 진행 중인 작업에 뒤늦게 만들 때는 재분석이 아니라 **현 상태 캡처**로 채우면 된다.
 
 ## 자동 실행
-- `dobby-order` P3.5가 design.md를 만들고, P7이 outcome.md를 인라인으로 작성한다.
+- `/do` 설계 세션이 design.md를 만들고, 통합 단계가 outcome.md를 인라인으로 작성한다.
 - 대시보드 "설계/결과" 탭의 생성·재생성 버튼이 이 스킬을 백그라운드로 실행한다.

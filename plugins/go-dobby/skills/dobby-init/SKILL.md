@@ -7,7 +7,7 @@ description: go-dobby 환경 설정만 담당하는 스킬. `~/.config/go-dobby/
 
 go-dobby의 **환경 설정 전용** 스킬. `~/.config/go-dobby/config.env`를 **만들거나 고치는 유일한 주체**다.
 
-> **왜 이 스킬만 config.env를 쓰나:** 예전엔 모든 작업 스킬이 "빠진 값을 채워 저장"했는데, 헤드리스(무인) 실행 중 config.env가 재작성되며 사용자가 지정한 선택 값(예: `ORCHESTRATION_META_PATH`)이 조용히 사라지는 사고가 있었다. 그래서 **작업 스킬(dobby-order·impl·resolve 등)은 config.env를 읽기만** 하고, **설정 변경은 오직 이 스킬에서만** 한다. 변수 규격·기본값의 단일 출처는 `${CLAUDE_PLUGIN_ROOT}/reference/config.md`다.
+> **왜 이 스킬만 config.env를 쓰나:** 예전엔 모든 작업 스킬이 "빠진 값을 채워 저장"했는데, 헤드리스(무인) 실행 중 config.env가 재작성되며 사용자가 지정한 선택 값(예: `ORCHESTRATION_META_PATH`)이 조용히 사라지는 사고가 있었다. 그래서 **작업 스킬(do·dobby-test·dobby-resolve 등)은 config.env를 읽기만** 하고, **설정 변경은 오직 이 스킬에서만** 한다. 변수 규격·기본값의 단일 출처는 `${CLAUDE_PLUGIN_ROOT}/reference/config.md`다.
 
 ## 입력
 
@@ -125,7 +125,7 @@ mkdir -p ~/.config/go-dobby
    제거한다(중복 발화 방지). 그 전에는 임의로 지우지 않는다.
 
 ### 5. 안내
-- 저장된 최종 설정을 요약해 보여주고(메타 경로가 어디로 정해졌는지 명확히, 안전 훅 등록 여부 포함), 이제 `/dobby-order {키}` 등 작업 스킬을 실행하면 된다고 안내한다.
+- 저장된 최종 설정을 요약해 보여주고(메타 경로가 어디로 정해졌는지 명확히, 안전 훅 등록 여부 포함), 이제 `/do {키}` 등 작업 스킬을 실행하면 된다고 안내한다.
 
 ## 주의
 

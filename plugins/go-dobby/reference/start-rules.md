@@ -1,9 +1,8 @@
----
-name: dobby-start
-description: dobby-order가 각 에이전트(단일 이슈든 하위이슈든)의 착수·분석을 위해 호출하는 building block 스킬. Jira 이슈(또는 문서 전용 작업 키)를 받아 조회·진행중 전환 후, 지정된 베이스 브랜치(로컬 에픽 브랜치 또는 원격 base 모두 처리) 위에 전용 워크트리·이슈 브랜치를 만들고 코드 위치까지 분석해 analysis.md와 test-plan.md 초안을 남기고 status.md를 갱신한다. 분석 중 현재 repo에서 알 수 없는 외부 repo 참조가 나오면 무조건 docs를 참조해 분석하고, 애매한 부분은 docs로 추가 확인해 반드시 사실 기반으로 수정 설계를 제시한다. 코드 수정·커밋·푸시는 하지 않는다. 사용법 /dobby-start {키} base={브랜치}.
----
+# 옛 오케스트레이션 규칙 — 착수·분석
 
-# dobby-start
+> **이 문서는 스킬이 아니다.** 삭제한 `dobby-start` 스킬의 본문을 규칙 참조용으로 옮긴 것이다. 새 오더는 `/do` 로 진행하고, 이 문서는 다른 스킬이 규칙을 가리킬 때와 옛 오더의 메타를 읽을 때만 본다.
+> `status.md` 스키마의 정본이 이 문서의 "status.md 스키마" 절이다. 대시보드와 헬퍼가 이 형식을 읽는다.
+> 본문의 `dobby-order`·`dobby-start`·`dobby-impl`·`dobby-produce` 는 스킬 이름이 아니라 이 폴더의 `order-rules.md`·`start-rules.md`·`impl-rules.md`·`produce-rules.md` 를 뜻한다. "실행한다·기동한다"는 "그 문서의 절차를 따른다"로 읽는다.
 
 `dobby-order`(오케스트레이터)가 P1에서 각 에이전트별 **착수+분석**을 위해 호출하는 building block. 이슈 조회 → 베이스 위에 워크트리·브랜치 생성 → 코드 위치까지 분석 → 수정 설계 제시까지 한다. **실제 코드 수정·커밋·푸시는 하지 않는다**(구현은 `dobby-impl`).
 
