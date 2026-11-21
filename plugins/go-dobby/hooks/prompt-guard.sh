@@ -5,6 +5,9 @@
 #        /dobby-qa 는 뺀다. 예약으로 같은 세션에서 계속 도는 폴링 루프라 막으면 감시가 끊긴다.
 #        세션이 길수록 호출 한 번이 그때까지 쌓인 문맥을 통째로 다시 읽는다.
 #        (실측 2026-10-19: 문맥 52만 세션에서 이어 한 릴리즈 1회가 1,801만 토큰. 다른 세션의 같은 일은 약 450만)
+#        예외: /do {키} 가 설계 작성·변경 접수 차례면 막지 않고 시작 헬퍼로 보낸다. 쌓인 문맥(조사·사람이 한 말)은
+#        이 세션의 캐시에 살아 있어 넘김 문서를 가장 싸게 쓸 수 있다 — 막아 버리면 /clear 로 그냥 사라진다.
+#        시작 헬퍼가 "넘김 권장" 판정을 내고, 세션은 steps/handoff.md 대로 넘김 문서만 쓰고 끝낸다.
 #   G20: /do 가 "이 세션을 닫아 주세요"로 끝난 뒤 들어온 일반 요청에 경고만 붙인다(막지 않음).
 #   시작: /do {키} 가 G19 에 막히지 않으면 dobby_v2_begin 을 불러 단계를 정하고 담당자 행을 작업중으로 적는다.
 #         결과(단계·담당자·지시 문서)를 세션 문맥에 붙인다. 실패해도 막지 않는다(세션이 SKILL.md 대로 다시 부른다).
@@ -26,22 +29,51 @@ PROMPT="$(printf '%s' "$INPUT" | jq -r '.prompt // empty')"
 TR="$(printf '%s' "$INPUT" | jq -r '.transcript_path // empty')"
 SID="$(printf '%s' "$INPUT" | jq -r '.session_id // empty')"
 
-# 시작 헬퍼 — /do {키} [인자…]. 첫 낱말에서 키(이슈 키·TASK- 키, 주소 안의 키도)를 뽑는다.
-begin() {
-  local args tok key out rc rest=()
+# /do {키} [인자…] 분해 — 첫 낱말에서 키(이슈 키·TASK- 키, 주소 안의 키도)를 뽑는다. DO_KEY·DO_REST 에 담는다.
+DO_KEY=""; DO_REST=()
+parse_do() {
+  local args tok
   args="${PROMPT#/go-dobby:do}"; args="${args#/do}"
-  read -r tok args <<<"$args"; read -r -a rest <<<"$args"
-  key="$(printf '%s' "$tok" | grep -oE 'TASK-[A-Za-z0-9_.-]+|[A-Z][A-Z0-9]+-[0-9]+' | head -1)"
-  [ -n "$key" ] && [ -n "$SID" ] || return 0
+  read -r tok args <<<"$args"; read -r -a DO_REST <<<"$args"
+  DO_KEY="$(printf '%s' "$tok" | grep -oE 'TASK-[A-Za-z0-9_.-]+|[A-Z][A-Z0-9]+-[0-9]+' | head -1)"
+  [ -n "$DO_KEY" ] && [ -n "$SID" ]
+}
+
+# dobby-lib 를 한 번만 읽는다(begin 과 설계 넘김 판정이 함께 쓴다)
+lib() {
+  command -v dobby_v2_begin >/dev/null 2>&1 && return 0
   export CLAUDE_CODE_SESSION_ID="$SID"
   # shellcheck disable=SC1091
-  . "$(dirname "$0")/../reference/dobby-lib.sh" >/dev/null 2>&1 || return 0
-  dobby_load_config >/dev/null 2>&1 || return 0
-  dobby_v2_drift_apply "$key" >/dev/null 2>&1
-  out="$(dobby_v2_begin "$key" ${rest[@]+"${rest[@]}"} 2>&1)"; rc=$?
-  case "$rc" in 0|2|3) ;; *) dobby_event "$key" "시작 헬퍼 실패(종료 코드 $rc) — 세션이 직접 다시 부름" 2>/dev/null ;; esac
-  jq -n --arg c "[go-dobby 시작 헬퍼] dobby_v2_begin $key 를 이미 불렀다(종료 코드 $rc). 다시 부르지 말고 이 결과대로 진행한다.
+  . "$(dirname "$0")/../reference/dobby-lib.sh" >/dev/null 2>&1 || return 1
+  dobby_load_config >/dev/null 2>&1 || return 1
+}
+
+# 시작 헬퍼
+begin() {
+  local out rc
+  parse_do || return 0
+  lib || return 0
+  dobby_v2_drift_apply "$DO_KEY" >/dev/null 2>&1
+  out="$(dobby_v2_begin "$DO_KEY" ${DO_REST[@]+"${DO_REST[@]}"} 2>&1)"; rc=$?
+  case "$rc" in 0|2|3) ;; *) dobby_event "$DO_KEY" "시작 헬퍼 실패(종료 코드 $rc) — 세션이 직접 다시 부름" 2>/dev/null ;; esac
+  jq -n --arg c "[go-dobby 시작 헬퍼] dobby_v2_begin $DO_KEY 를 이미 불렀다(종료 코드 $rc). 다시 부르지 말고 이 결과대로 진행한다.
 $out" '{hookSpecificOutput:{hookEventName:"UserPromptSubmit", additionalContext:$c}}'
+}
+
+# 설계 넘김 차례인가 — G19 예외 판정. 설계 작성·변경 접수 차례이고 늘어난 문맥이 기준을 넘는 대화형 세션만 참.
+# 참이면 막는 대신 begin 을 부르고, begin 이 "넘김 권장" 판정을 낸다(reference/dobby-lib.sh).
+design_handoff_turn() {
+  local line doc g
+  parse_do || return 1
+  [ -z "${DOBBY_V2_CHAINED:-}" ] || return 1                      # run.sh·대시보드 잡이 띄운 세션은 그대로 막는다
+  [ "${CLAUDE_CODE_ENTRYPOINT:-cli}" = cli ] || return 1          # 헤드리스(claude -p)도 그대로
+  lib || return 1
+  line="$(dobby_v2_step "$DO_KEY" ${DO_REST[@]+"${DO_REST[@]}"} 2>/dev/null)"
+  [ "$(printf '%s' "$line" | cut -f1)" = 설계 ] || return 1
+  doc="$(printf '%s' "$line" | cut -f4)"
+  case "${doc##*/}" in design.md|change.md) ;; *) return 1 ;; esac
+  g="$(dobby_v2_ctx_growth 2>/dev/null)"
+  [ "${g:-0}" -gt "${DOBBY_HANDOFF_MAX_GROWTH:-60000}" ]
 }
 
 CTX=0; TAIL=""
@@ -57,6 +89,7 @@ case "$PROMPT" in
   /dobby-qa|/dobby-qa\ *|/go-dobby:dobby-qa|/go-dobby:dobby-qa\ *) exit 0 ;;
   /do\ *|/do|/go-dobby:*|/dobby-*)
     if [ "$GUARD" != off ] && [ "$CTX" -ge "$MAX" ]; then
+      if design_handoff_turn; then begin; exit 0; fi
       jq -n --arg r "go-dobby 훅 [G19] 이 세션의 문맥이 약 $((CTX / 1000))천 토큰입니다(기준 $((MAX / 1000))천). 여기서 새 단계를 시작하면 호출마다 이 문맥을 다시 읽어 비용이 몇 배로 늘어납니다. /clear 로 세션을 비우거나 새 터미널에서 같은 명령을 다시 입력해 주세요." \
         '{decision:"block", reason:$r}'
       exit 0

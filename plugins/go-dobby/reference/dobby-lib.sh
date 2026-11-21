@@ -1809,6 +1809,7 @@ dobby_design_ack() {
   [ -f "$f" ] || printf '{}' > "$f"
   jq --arg s "$slug" --arg r "$rev" '.[$s] = $r' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
   case "$slug" in 사용자|auto) _v2_takeover_clear "$key" ;; esac   # /do 이어받기 설계 확정
+  rm -f "$(_order_dir "$key")/handoff.md"   # 넘김 문서는 설계 확정으로 소비된다(steps/handoff.md) — 남기면 다음 설계·변경 세션이 옛 문서를 다시 읽는다
   printf '%s' "$rev"
 }
 
@@ -3293,6 +3294,9 @@ DOBBY_REUSE_MAX_CTX=120000
 DOBBY_REUSE_MAX_GAP=300
 # light 세션이 새 세션으로 넘어가는 선 — 그 세션 첫 호출 뒤로 늘어난 문맥(토큰). light 는 속도가 먼저라 넉넉히 둔다.
 DOBBY_LIGHT_MAX_GROWTH=300000
+# 설계 작성·변경 접수를 대화형 세션에서 새 세션으로 넘기는 선 — 그 세션 첫 호출 뒤로 늘어난 문맥(토큰).
+# config.env 로 바꿀 수 있다. 근거 수치와 계산은 skills/do/session-reuse.md 의 "설계 넘기기" 절.
+: "${DOBBY_HANDOFF_MAX_GROWTH:=60000}"
 
 # _v2_history_passed KEY — 검증 이력 표의 마지막 행이 '완료'이고 실패가 0이면 0. 어느 커밋을 시험했는지는 보지 않는다.
 _v2_history_passed() {
@@ -3905,6 +3909,20 @@ dobby_v2_ctx_growth() {
       | .message.usage | (.input_tokens // 0) + (.cache_creation_input_tokens // 0) + (.cache_read_input_tokens // 0)]
       | if length == 0 then 0 else last - first end' "$f" 2>/dev/null)"
   case "$r" in ''|*[!0-9]*) echo 0 ;; *) echo "$r" ;; esac
+}
+
+# dobby_v2_handoff KEY [변경] — 설계·변경 접수를 새 세션으로 넘길 때(steps/handoff.md) 부른다.
+#   메타 폴더만 만들고(status.md·design.md 는 만들지 않는다 — 단계 판정이 그 파일들로 설계 차례를 가린다)
+#   넘김 문서 경로, 이 세션의 아이디·기록 파일 경로, 새 세션 명령을 낸다. 넘김 문서 본문은 세션이 쓴다.
+dobby_v2_handoff() {
+  local key="$1" kind="${2:-설계}" d sid tr
+  [ -n "$key" ] || { _die "쓰임: dobby_v2_handoff KEY [변경]"; return 1; }
+  d="$(_order_dir "$key")"; mkdir -p "$d"
+  sid="$(_session_id)"; tr="$(_session_transcript "$sid")"
+  printf '넘김 문서: %s/handoff.md\n옛 세션: %s\n기록 파일: %s\n' "$d" "${sid:-알 수 없음}" "${tr:-찾지 못함}"
+  case "$kind" in 변경*) printf '새 세션 명령: /do %s 변경\n' "$key" ;; *) printf '새 세션 명령: /do %s\n' "$key" ;; esac
+  [ -f "$d/status.md" ] && dobby_event "$key" "문맥이 커서 ${kind} 를 새 세션으로 넘김 — 넘김 문서 작성(세션 ${sid:-?})" 2>/dev/null
+  return 0
 }
 
 # _v2_role_model SLUG — 담당자별 모델(~/.config/go-dobby/role-models.json). run.sh 의 role_model 과 같은 규칙. 없으면 빈 출력.
@@ -8288,7 +8306,7 @@ _dobby_v2_docs_end_u() {
 #   답이 달린 질문(ask.json)이 있으면 `질문과 답:` 으로 붙이고 그 질문을 닫는다. 세션은 그 답을 받아 이어 간다.
 _dobby_v2_begin_u() {
   local key="$1"; shift
-  local line stage slug desc doc d sid rec sub name cwd rd m other round now t0 cc0 ws0 rname why ndoc
+  local line stage slug desc doc d sid rec sub name cwd rd m other round now t0 cc0 ws0 rname why ndoc g
   case "$*" in 결과\ 문서*|결과문서*) _v2_docs_begin "$key"; return $? ;; esac
   # "테스트 건너뛰기 {이유}" — 단계를 판정하기 전에 테스터를 끝낸다(배포가 확인된 오더는 여기서 완성이 된다)
   case "$*" in
@@ -8300,6 +8318,22 @@ _dobby_v2_begin_u() {
   line="$(dobby_v2_step "$key" "$@")"
   IFS=$'\t' read -r stage slug desc doc <<<"$line"
   if [ "$stage" = 멈춤 ]; then printf '멈춤\n이유: %s\n' "$slug"; return 2; fi
+  # 설계 넘김 — 문맥이 큰 대화형 세션에서 설계 작성·변경 접수를 시작하지 않고 새 세션으로 넘긴다(steps/handoff.md).
+  # 판정은 셸이 한다(늘어난 문맥 = 이 세션 첫 호출 뒤로, dobby_v2_ctx_growth). 근거는 skills/do/session-reuse.md "설계 넘기기".
+  # "그대로" 인자는 사람이 "그대로 진행"을 고른 경우. 사람 없는 실행(run.sh·대시보드 잡·light 의 자식 세션)은 DOBBY_V2_CHAINED 로,
+  # 헤드리스(claude -p, CLAUDE_CODE_ENTRYPOINT=sdk-cli)는 엔트리포인트로 거른다 — 그 세션들은 늘 새 세션이라 넘길 것이 없다.
+  case " $* " in *" 그대로 "*) ;; *)
+    if [ "$stage" = 설계 ] && [ -z "${DOBBY_V2_CHAINED:-}" ] && [ "${CLAUDE_CODE_ENTRYPOINT:-cli}" = cli ]; then
+      case "${doc##*/}" in design.md|change.md)
+        g="$(dobby_v2_ctx_growth)"
+        if [ "${g:-0}" -gt "$DOBBY_HANDOFF_MAX_GROWTH" ]; then
+          printf '넘김 권장\n단계: %s\n설명: %s\n늘어난 문맥: %s 토큰 (기준 %s)\n지시 문서: %s\n' \
+            "$stage" "$desc" "$g" "$DOBBY_HANDOFF_MAX_GROWTH" "$(_v2_step_doc handoff.md)"
+          return 2
+        fi ;;
+      esac
+    fi ;;
+  esac
   d="$(_order_dir "$key")"; sid="$(_session_id)"; rec="$d/.v2-begin"
   _show() {
     rname="$(_board_role "$d/orchestration.md" "$slug" 2>/dev/null || true)"
