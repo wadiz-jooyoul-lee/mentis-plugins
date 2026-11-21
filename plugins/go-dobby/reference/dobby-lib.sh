@@ -247,7 +247,7 @@ _dobby_agent_state_u() {
 
   # ── G13: 설계 게이트 — 개발자가 '구현'으로 전이할 때 design.md가 없으면 거부 ──
   # 스폰 훅(G11)은 Agent 도구 호출만 잡는다. 그런데 go-dobby의 기본 경로는 **분석 에이전트가
-  # 그대로 구현으로 이어가는 것**(dobby-order C9, SendMessage)이라 새 스폰이 없고, 훅이 발화할
+  # 그대로 구현으로 이어가는 것**(order-rules.md C9, SendMessage)이라 새 스폰이 없고, 훅이 발화할
   # 기회 자체가 없다(사례 FE1-1732: 설계 없이 구현·리뷰·통합까지 완주). 상태를 '구현'으로 바꾸는
   # 이 함수는 어느 경로든 반드시 지나므로 여기서 막는다.
   # 제외: 비개발 오더(산출물·작업정리), 리뷰어·산출자 역할. 우회는 DOBBY_FORCE=1.
@@ -1234,7 +1234,7 @@ dobby_set_title() {
 
 # dobby_set_scope KEY "한 줄" — status.md '## 이슈/작업'에 '- **닫히는 조건**: …'를 upsert(범위 경계).
 # "이 오더가 어디까지 하면 끝인가"를 착수 때 한 줄로 못박는 값. 있으면 갱신, 없으면 '- **제목**:' 바로 뒤에 삽입.
-# dobby-order P8이 후속 요청을 이 값과 대조해 "같은 오더 편입 vs 새 오더 분리"를 판단한다.
+# order-rules.md P8이 후속 요청을 이 값과 대조해 "같은 오더 편입 vs 새 오더 분리"를 판단한다.
 dobby_set_scope() {
   local key="$1" scope="$2" f
   f="$(_order_dir "$key")/status.md"
@@ -1339,7 +1339,7 @@ _wt_row() {
 }
 
 # dobby_ensure_worktree REPO KEY PREFIX BASE — 워크트리가 있으면 그대로 쓰고, 없으면 만든다. 경로를 stdout 으로 준다.
-# /do 용이다. dobby_setup_worktree 는 dobby-order·dobby-qa 가 쓰므로 고치지 않고, 그 앞에서 막힐 곳만 먼저 처리한다.
+# /do 용이다. dobby_setup_worktree 는 dobby-qa 가 쓰므로 고치지 않고, 그 앞에서 막힐 곳만 먼저 처리한다.
 #   ① 상태 문서에 이 저장소의 행이 이미 있으면 그 브랜치·경로를 쓴다(새 이름을 조립하지 않는다).
 #   ② 폴더가 지워졌고 브랜치가 남아 있으면 -b 없이 그 브랜치로 되살린다(로컬에 없으면 origin 에서 받아 온다).
 #      dobby_setup_worktree 는 이때 "a branch named … already exists" 로 실패한다.
@@ -1531,7 +1531,7 @@ dobby_resolve() {
 ## 해결
 - **처리 일시**: $now
 - **근거**: 리뷰 round-{n}(blocking 0) · 테스트 {YYYY-MM-DD HH:MM} {env} 회차 {i}(성공 {x}/실패 0/skip {z}) · 통합 커밋 {해시7}  ← ⛔ {} 를 실제 값으로 채울 것(못 채우면 해결 금지). 마지막 검증 이후 변경이 있으면 뒤에 " · ⚠️ 미검증 변경: {건수}건({날짜} 이후)" 추가
-- **비고**: 워크트리·메타 유지. 추가 수정 시 dobby-order P8 재개.
+- **비고**: 워크트리·메타 유지. 추가 수정 시 order-rules.md P8 재개.
 EOF
   dobby_event "$key" "해결 표시 — status 해결"
   _dobby_meta_backup "$key"
@@ -2248,7 +2248,7 @@ EOF
   fi
 
   # 19) 라운드 상한 초과인데 에스컬레이션 기록 없음 — 경고
-  # dobby-order P6이 "최대 라운드 기본 3, 초과 시 사용자 에스컬레이션"을 규정하는데 강제 수단이
+  # order-rules.md P6이 "최대 라운드 기본 3, 초과 시 사용자 에스컬레이션"을 규정하는데 강제 수단이
   # 없어 지켜지지 않는다(실측: 라운드 4~10까지 간 오더 10건 전부 에스컬레이션 기록 0건.
   # 사례 FE1-1803 라운드 6·3일 — 사용자는 끝난 뒤 회고로 알았다).
   # 라운드가 길어지는 것 자체가 문제가 아니라 **사용자가 모르는 채 길어지는 것**이 문제다.
@@ -2273,7 +2273,7 @@ EOF
       _w "design.md 내부 용어·줄임말 $(printf '%s' "$terms20" | grep -c .)곳 — 사용자가 읽고 승인하는 문서입니다. FE/BE→프론트엔드/백엔드, round-N→N차 검토, P숫자→단계 이름, 슬러그→담당 이름으로 풀어 쓰세요(코드 안 식별자 인용이면 그대로 두어도 됩니다): $(printf '%s' "$terms20" | head -3 | tr '\n' ' ')"
   fi
 
-  # 21) 산출물 문서에 메타 보정 흔적 — 경고 (dobby-order C10)
+  # 21) 산출물 문서에 메타 보정 흔적 — 경고 (order-rules.md C10)
   # 규칙을 못 지켜 틀어진 기록을 바로잡은 일(빠진 문서 뒤늦게 작성·형식 복원·재서명·검사 통과)은
   # 개발 내용이 아니다. 이슈가 요구한 것을 만든 게 아니라 이 도구를 쓰다 생긴 뒤처리이며,
   # 문서를 읽는 사람에게는 소음이다. 기록은 orchestration.md 이벤트 로그 한 줄이면 된다.
@@ -2288,7 +2288,7 @@ EOF
   done
   [ -n "$meta21" ] && _w "산출물 문서에 메타 보정 흔적:${meta21} — 메타를 바로잡은 일은 개발 내용이 아닙니다(C10). 해당 줄을 지우고 orchestration.md 이벤트 로그에만 남기세요"
 
-  # 22) 닫히는 조건을 쪼개지 않음 — 치명 (dobby-order P1)
+  # 22) 닫히는 조건을 쪼개지 않음 — 치명 (order-rules.md P1)
   # 한 줄짜리 닫히는 조건은 사람만 읽는다. 쪼개 두어야 dobby-test 가 result.md 조건 칸에
   # 번호를 적고 대시보드가 "조건 3가지 중 3가지 확인"을 스스로 센다.
   # 실측: 오더 125개 중 조건을 쪼갠 것이 12개(10%)뿐이라 나머지 113개는 검증 탭이
@@ -2560,7 +2560,7 @@ dobby_migrate_v2_check() {
     *) printf '불가\t%s 단계는 옮기지 않는다(끝났거나 보류 중이거나 모르는 값)\n' "${ph:-빈 값}"; return 1 ;;
   esac
   if [ ! -f "$d/design.md" ] && ! _ph_design "$ph"; then
-    printf '불가\t설계 문서 없이 %s 단계까지 왔다 — v2 의 뒷세션은 설계 문서를 기준으로 일하므로 dobby-order 로 마무리한다\n' "$ph"; return 1
+    printf '불가\t설계 문서 없이 %s 단계까지 왔다 — v2 의 뒷세션은 설계 문서를 기준으로 일하므로, 지금 상태를 design.md 로 먼저 적은 뒤(order-rules.md P4-C 의 현 상태 캡처) 다시 옮긴다\n' "$ph"; return 1
   fi
   dev="$(_board_dev_slug "$o")"
   printf '개발담당\t%s\n' "${dev:-없음(전환 때 v2-dev 행을 만든다)}"
@@ -2971,11 +2971,11 @@ dobby_discard_purge() {
 
 # 배포을 시작할 수 있는 현재 단계(status.md `- **단계**:`).
 #
-# 정본은 착수·분석·구현·리뷰·통합·검증·해결·종료 여덟이다(dobby-start status.md 스키마).
+# 정본은 착수·분석·구현·리뷰·통합·검증·해결·종료 여덟이다(start-rules.md 의 status.md 스키마).
 # ⛔ `완료` 는 **에이전트 상태표**의 값이지 단계가 아니다 — P7 설명의 "구현 에이전트 상태를
 #    `완료`로 갱신한다"를 단계로 잘못 읽기 쉽다. 실제 메타에 `완료` 로 적힌 오더가 4개 있어
 #    받아는 주되, 정본으로 쓰지 않는다.
-# dobby-order 가 끝나는 지점이 `통합` 이므로 그것이 기본 진입 조건이다.
+# 구현·리뷰가 끝나는 지점이 `통합` 이므로 그것이 기본 진입 조건이다.
 DOBBY_SHIP_PHASES="통합 배포 검증 완성 실패분석 해결 종료 완료"
 
 # 배포을 맡는 저장소. **여기 없는 저장소는 이 스킬이 다루지 않는다.**
@@ -2985,7 +2985,7 @@ DOBBY_SHIP_PHASES="통합 배포 검증 완성 실패분석 해결 종료 완료
 # _ship_argo_server·_ship_argo_app)로 갈라 둔다.
 DOBBY_SHIP_REPOS="wadiz-frontend com.wadiz.web"
 
-# 배포이 갈 수 있는 **논리 환경**. clive(=cloud_live)는 없다 — dobby-order C1.
+# 배포이 갈 수 있는 **논리 환경**. clive(=cloud_live)는 없다 — order-rules.md C1.
 #
 # ⛔ 논리 환경과 **브랜치 이름은 다르다.** 표·헬퍼 인자는 언제나 논리 환경(dev·rc1·rc4·stage)을
 #    쓰고, 실제 브랜치는 _ship_branch 가 저장소마다 옮긴다. 이렇게 해야 저장소가 둘인 오더에서
@@ -4277,7 +4277,7 @@ dobby_ship_pr() {
   local ph; ph="$(_order_phase "$key")"
   if [ -n "$ph" ]; then
     _ship_has "$ph" "$DOBBY_SHIP_PHASES" || {
-      _die "현재 단계가 '$ph' 다 — 배포은 통합이 끝난 뒤에 한다(허용: $DOBBY_SHIP_PHASES). dobby-order 를 먼저 P7 통합까지 진행하라."
+      _die "현재 단계가 '$ph' 다 — 배포은 통합이 끝난 뒤에 한다(허용: $DOBBY_SHIP_PHASES). /do 로 먼저 통합까지 진행하라."
       return 1
     }
   fi
@@ -8082,7 +8082,7 @@ dobby_v2_step() {
   _v2_phase_migrate "$key" >/dev/null 2>&1
   ph="$(_order_phase "$key")"
   if ! grep -q '^## 지난 세션' "$f" && [ "$ph" != 착수 ]; then
-    printf '멈춤\t이 오더는 dobby-order 로 진행한 오더입니다. dobby-order 로 이어 가거나 /dobby-migrate-v2 %s 로 옮긴 뒤 이어 가세요\n' "$key"
+    printf '멈춤\t이 오더는 옛 dobby-order 로 진행한 오더입니다. /dobby-migrate-v2 %s 로 옮긴 뒤 이어 가세요\n' "$key"
     return 0
   fi
   dev="$(_v2_dev_slug "$key")"

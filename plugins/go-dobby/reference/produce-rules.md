@@ -1,9 +1,7 @@
----
-name: dobby-produce
-description: 서브 에이전트가 코드 구현이 아닌 산출물(문서·리서치·분석·설정 등 비소스 작업)을 만드는 building block 스킬. dobby-order가 work-type을 "비소스"로 분류한 작업에서 dobby-impl 대신 호출된다. dobby-start가 남긴 analysis.md(작업 이해·계획)와 status.md, 계약 파일(agents/{슬러그}.md)을 숙지한 뒤, 계약의 허용 범위 안에서(에이전트가 하나뿐이면 전체 범위) 산출물을 만든다. 산출물이 repo에 들어가는 문서면 워크트리에서 작업하고 리뷰 통과 후 commit --no-verify로 자기 브랜치에 푸시하며, repo 밖 리포트/분석이면 $ORCHESTRATION_META/{키}/deliverables/ 에 저장한다(브랜치·커밋 없음). 코드가 아니므로 lint/build/브라우저 테스트는 하지 않고, 검증은 오케스트레이터(dobby-order P5)의 내용 리뷰로 이뤄진다. 확인이 필요하면 docs를 참조해 사실 기반으로만 산출한다. 사용법 /dobby-produce {키} (계약 파일 경로를 함께 전달받아 실행).
----
+# 옛 오케스트레이션 규칙 — 비소스 산출
 
-# dobby-produce
+> **이 문서는 스킬이 아니다.** 삭제한 `dobby-produce` 스킬의 본문을 규칙 참조용으로 옮긴 것이다. 새 오더는 `/do` 로 진행하고, 이 문서는 다른 스킬이 규칙을 가리킬 때와 옛 오더의 메타를 읽을 때만 본다.
+> 본문의 `dobby-order`·`dobby-start`·`dobby-impl`·`dobby-produce` 는 스킬 이름이 아니라 이 폴더의 `order-rules.md`·`start-rules.md`·`impl-rules.md`·`produce-rules.md` 를 뜻한다. "실행한다·기동한다"는 "그 문서의 절차를 따른다"로 읽는다.
 
 `dobby-order`(오케스트레이터)가 P4에서 기동한 **서브 에이전트의 산출 단계**를 담당하는 building block. `dobby-impl`의 비소스(non-code) 대응물이다. 코드 구현이 아니라 **문서·리서치·분석·설정 산출물** 등을 만든다.
 

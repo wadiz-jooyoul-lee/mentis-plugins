@@ -3,6 +3,8 @@
 이 문서는 work-dobby 스킬 세트의 재설계 **단일 출처(SSOT)**다. 이후 각 스킬(SKILL.md)은 이 스펙을 기준으로 수정한다. 확정된 설계 결정과 규격을 담는다.
 
 > 상태: **설계 확정 / 구현 전.** 스킬 실제 수정은 이 스펙 승인 후 진행한다.
+>
+> **기록용 문서다(0.2.169).** 이 스펙이 말하는 `dobby-order`·`dobby-start`·`dobby-impl`·`dobby-produce` 스킬은 삭제됐고, 지금 진입점은 `/do` 다. 네 스킬의 본문은 같은 폴더의 `order-rules.md`·`start-rules.md`·`impl-rules.md`·`produce-rules.md` 에 규칙 참조용으로 남아 있다. 아래 내용은 당시 설계 그대로 두었다.
 
 ---
 

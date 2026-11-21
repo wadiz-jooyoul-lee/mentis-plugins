@@ -1,6 +1,6 @@
 # go-dobby 공통 설정
 
-go-dobby의 모든 스킬(`dobby-order`·`dobby-start`·`dobby-impl`·`dobby-produce`·`dobby-test`·`dobby-resolve`·`dobby-end`)이 공유하는 **설정 절차와 환경 변수 규격**이다. 각 스킬은 본문에서 이 문서를 참조하고, 아래 절차를 그대로 따른다.
+go-dobby의 모든 스킬(`do`·`dobby-test`·`dobby-resolve`·`dobby-end`)이 공유하는 **설정 절차와 환경 변수 규격**이다. 각 스킬은 본문에서 이 문서를 참조하고, 아래 절차를 그대로 따른다.
 
 > 이 문서는 스킬 본문에 중복 복사돼 있던 설정 블록을 한곳으로 모은 단일 출처다. 변수·기본값을 바꿀 때는 **여기만** 고치면 된다.
 
@@ -16,7 +16,7 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 
 > **의존성(jq)**: dobby-lib.sh는 대부분 기본 내장된 `bash`·`awk`·`git`만 쓰지만, `agent-logs.json` 병합(`dobby_log`)만 **`jq`**(JSON 파서)를 쓴다 — JSON은 파서로 안전하게 다뤄야 하기 때문(awk 손파싱은 인라인 `{}`·compact·따옴표에서 항목이 사라진다). `dobby_load_config`가 **최초 실행 시 jq 설치 여부를 확인**하고, 없으면 설치 가이드(`brew install jq` / `apt-get install jq`)를 안내한다(하드 실패 아님 — 나머지 함수는 jq 없이도 동작, `dobby_log`만 건너뜀). 안내가 뜨면 설치 후 다시 실행한다.
 
-⛔ **비파괴 원칙 (강제 — 가장 중요):** `dobby-order`·`dobby-start`·`dobby-impl`·`dobby-produce`·`dobby-test`·`dobby-resolve`·`dobby-end`·`dobby-explain`·`dobby-qa`·`dobby-jira-tab` 등 **모든 작업 스킬은 `config.env`를 절대 생성·수정·삭제하지 않는다.** 값 채우기·저장·`export` 후 기록은 **오직 `dobby-init` 스킬**만 한다. **헤드리스(무인) 실행에서도 예외 없다.** 작업 스킬이 config.env를 다시 쓰면, 사용자가 지정한 선택 값(예: `ORCHESTRATION_META_PATH`)이 조용히 사라져 대시보드가 엉뚱한 폴더를 읽는 사고가 난다(실제 발생 이력).
+⛔ **비파괴 원칙 (강제 — 가장 중요):** `do`·`dobby-test`·`dobby-resolve`·`dobby-end`·`dobby-explain`·`dobby-qa`·`dobby-jira-tab` 등 **모든 작업 스킬은 `config.env`를 절대 생성·수정·삭제하지 않는다.** 값 채우기·저장·`export` 후 기록은 **오직 `dobby-init` 스킬**만 한다. **헤드리스(무인) 실행에서도 예외 없다.** 작업 스킬이 config.env를 다시 쓰면, 사용자가 지정한 선택 값(예: `ORCHESTRATION_META_PATH`)이 조용히 사라져 대시보드가 엉뚱한 폴더를 읽는 사고가 난다(실제 발생 이력).
 
 값을 읽은 뒤 처리:
 
@@ -45,7 +45,7 @@ dobby_load_config   # config.env 재로드 + $ORCHESTRATION_META 계산(없으�
 | `dobby_agent_add KEY 슬러그 이름 설명 상태 [라운드]` | 스폰 전(선갱신) | 상태표 행 추가(중복 무시, 활성이면 착수=now) |
 | `dobby_agent_state KEY 슬러그 상태 [라운드] [설명] [사람 할 일]` | 전이마다 | 그 행 상태/갱신을 수정. 라운드·설명을 주면 그 칸도 바꾼다. 상태가 바뀌면 착수를 지금으로 바꾼다. `사람 할 일` 칸은 `사람 차례`·`막힘` 일 때만 남기고 그 밖의 상태에서는 비운다. `/do` 세션은 직접 부르지 않는다(시작·끝 헬퍼가 부른다) |
 | `dobby_add_condition KEY "조건 한 줄"` | **P1 닫히는 조건 선언 직후(필수)·P8 범위 확장** | status.md `## 닫히는 조건 항목` 표에 `C{n}` 행 추가(번호 자동, stdout). 테스트 시나리오가 이 번호를 달고 대시보드가 "조건 N개 중 M개 확인"을 센다 |
-| `dobby_set_title KEY "제목"` | **이슈 조회 직후(필수)** | status.md 제목을 실제 요약으로 갱신(골격 임시 제목 덮어씀). dobby-start 경유 여부와 무관 |
+| `dobby_set_title KEY "제목"` | **이슈 조회 직후(필수)** | status.md 제목을 실제 요약으로 갱신(골격 임시 제목 덮어씀) |
 | `dobby_append KEY 파일 "블록"` | append 문서마다 | decisions.md 등 append-only 문서에 읽기 없이 블록 추가(토큰 0) |
 | `dobby_event KEY "사건 — 설명"` | 타임라인 사건마다 | 이벤트 로그 1줄 append |
 | `dobby_log KEY 슬러그 로그경로 [라운드]` | 스폰 직후 | agent-logs.json 기록(라운드는 하위키 병합) |

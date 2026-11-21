@@ -4,7 +4,7 @@
 # 스킬 문서의 ⛔ 규칙 중 "파괴·금지" 3종을 코드로 강제한다. 스킬 프롬프트가 어겨져도
 # 여기서 마지막으로 막는 방어선이다(dobby-lib.sh 헬퍼를 안 거치고 생 명령을 칠 때 대비).
 #   G1: 정식 배포 베이스($ORCHESTRATION_DEFAULT_BASE, 기본 master)로의 push·merge·PR 금지
-#       (dobby-order C1 — master 반영은 사용자가 직접)
+#       (order-rules.md C1 — master 반영은 사용자가 직접)
 #       PR 머지는 베이스가 dev·rc1·rc4·cloud_dev·release/v* 일 때만 통과(dobby-ship·
 #       update-release-note), 앱 저장소는 주차 출시 브랜치도 통과(앱 출시 스킬), 그 밖은 차단.
 #       (cloud_dev 는 com.wadiz.web 의 dev 브랜치다 — 저장소마다 이름이 다르다)
@@ -198,13 +198,13 @@ if in_dobby_scope; then
 
   # (1) git push ... <base> / HEAD:<base> — 베이스 브랜치로의 직접 push
   if printf '%s' "$CMD" | grep -qE "git[^|;&]*[[:space:]]push[^|;&]*[[:space:]:]${BASE}([[:space:]]|$)"; then
-    deny G1 "정식 배포 베이스($BASE)로의 push는 금지다(dobby-order C1). 자기 브랜치(bugfix/·feature/)에만 푸시하고, $BASE 반영은 사용자가 직접 PR로 한다."
+    deny G1 "정식 배포 베이스($BASE)로의 push는 금지다(order-rules.md C1). 자기 브랜치(bugfix/·feature/)에만 푸시하고, $BASE 반영은 사용자가 직접 PR로 한다."
   fi
 
   # (2) gh pr create --base <base> / -B <base> — 베이스 대상 PR 생성
   if printf '%s' "$CMD" | grep -qE "gh[[:space:]]+pr[[:space:]]+create" \
      && printf '%s' "$CMD" | grep -qE "(--base|-B)[[:space:]=]+${BASE}([[:space:]]|$)"; then
-    deny G1 "정식 배포 베이스($BASE)로의 PR 생성은 금지다(dobby-order C1). $BASE 반영은 사용자가 직접 한다."
+    deny G1 "정식 배포 베이스($BASE)로의 PR 생성은 금지다(order-rules.md C1). $BASE 반영은 사용자가 직접 한다."
   fi
 
   # (3) gh pr merge — 허용 베이스(dev·rc1·rc4·cloud_dev·release/v*)로만 연다.
@@ -245,7 +245,7 @@ if in_dobby_scope; then
         deny G1 "머지 대상 PR 의 베이스를 확인하지 못했다(gh 조회 실패). 베이스를 모르면 머지하지 않는다 — PR 번호를 명시하거나 워크트리 안에서 실행하라."
         ;;
       *)
-        deny G1 "베이스가 '$MBASE' 인 PR 머지는 금지다(dobby-order C1). 허용 베이스는 dev·rc1·rc4·cloud_dev·release/v*, 앱 저장소의 주차 출시 브랜치(release/YY.W·release/YY.W.0)뿐이다. 정식 배포 베이스($BASE)·stage 반영은 사용자가 직접 한다."
+        deny G1 "베이스가 '$MBASE' 인 PR 머지는 금지다(order-rules.md C1). 허용 베이스는 dev·rc1·rc4·cloud_dev·release/v*, 앱 저장소의 주차 출시 브랜치(release/YY.W·release/YY.W.0)뿐이다. 정식 배포 베이스($BASE)·stage 반영은 사용자가 직접 한다."
         ;;
     esac
   fi
@@ -258,7 +258,7 @@ if in_dobby_scope; then
   #     실측: 컨텍스트는 마지막 로그인한 서버로 바뀐다. 어디로 가는지 모르면 통과가 아니라 차단이다.
   if printf '%s' "$CMD" | grep -qE "argocd[[:space:]]+app[[:space:]]+sync"; then
     if printf '%s' "$CMD" | grep -qE -- "-live-"; then
-      deny G1 "라이브 argocd 앱 sync 는 금지다(dobby-order C1). 라이브 반영은 사용자가 별도 릴리스 절차로 한다."
+      deny G1 "라이브 argocd 앱 sync 는 금지다(order-rules.md C1). 라이브 반영은 사용자가 별도 릴리스 절차로 한다."
     fi
     if ! printf '%s' "$CMD" | grep -qE -- "--server[[:space:]=]+[^[:space:]]+"; then
       deny G1 "argocd app sync 에 --server 가 없다. 현재 컨텍스트가 라이브 서버(argocd.wadiz.io)일 수 있어 어디로 배포되는지 알 수 없다 — --server 를 명시하라(dobby_ship_argo 를 쓰면 자동으로 붙는다)."
@@ -269,7 +269,7 @@ if in_dobby_scope; then
   if printf '%s' "$CMD" | grep -qE "git[^|;&]*[[:space:]]merge([[:space:]]|$)" && [ -n "$CWD" ]; then
     CUR="$(git -C "$CWD" branch --show-current 2>/dev/null || true)"
     if [ "$CUR" = "$BASE" ]; then
-      deny G1 "현재 브랜치가 정식 배포 베이스($BASE)다. 베이스로의 머지는 금지(dobby-order C1) — 루트/에이전트 브랜치에서 작업하라."
+      deny G1 "현재 브랜치가 정식 배포 베이스($BASE)다. 베이스로의 머지는 금지(order-rules.md C1) — 루트/에이전트 브랜치에서 작업하라."
     fi
   fi
 fi

@@ -170,17 +170,17 @@ v2.1.246에서 실측 확인: 설치본 스크립트를 수동 실행하면 deny
 
 | ID | 규칙 | 이벤트 | 처리 | 전달 경로 | 근거 스킬 |
 |----|------|--------|------|-----------|-----------|
-| G1 | 정식 배포 베이스(master)로 push·merge·PR 금지 | PreToolUse·Bash | deny | settings.json(dobby-init 등록 — #34573 우회) | dobby-order C1 |
+| G1 | 정식 배포 베이스(master)로 push·merge·PR 금지 | PreToolUse·Bash | deny | settings.json(dobby-init 등록 — #34573 우회) | order-rules.md C1 |
 | G5 | subtree 밖 워크트리 제거·rm 금지 (예외: `$ORCHESTRATION_WORKSPACE/dashboard-subtree/` — 도구 저장소 작업 폴더 자리, `$ORCHESTRATION_META/.discarded/` — 메타가 워크스페이스 안에 있는 설정이면 폐기 휴지통이 이 규칙 관할에도 들어오기 때문). rm 판정은 `$RM_TARGETS`(삭제 대상 구간)로 — 공통 규율 8 | PreToolUse·Bash | deny | settings.json(상동) | dobby-end 안전 경계 |
 | G6 | 메타 폴더($ORCHESTRATION_META) 삭제 금지. cwd가 메타 안일 때의 상대경로 rm도 차단. 예외 하나: 폐기 휴지통(`.discarded/`) 아래만 허용하며, 메타 경로가 여럿이면 **전부** 휴지통 아래일 때만 통과. 판정은 `$RM_TARGETS`로 — 공통 규율 8 | PreToolUse·Bash | deny | settings.json(상동) | 비파괴 원칙 · dobby-discard |
-| G10 | 스폰 시 상태표 자동 등록 + 로그 자동 기록 (유령 에이전트 차단) | PreToolUse·PostToolUse·Agent\|Task | 자동등록/자동기록(형식 없으면 deny) | settings.json(dobby-init 등록) | dobby-order C4 |
-| G11 | 설계 문서(design.md) 없이 구현 스폰 금지 — 단계가 구현 이후 + 종류 개발 + 역할 개발자일 때만 | PreToolUse·Agent\|Task | deny | settings.json(상동 — pre-agent.sh에 포함) | dobby-order P3.5 |
-| G13 | 설계 문서 없이 에이전트 '구현' 전이 금지(개발 오더·개발자 역할) | dobby_agent_state 헬퍼 | 거부(비0 반환) | 코드 강제(훅 아님) | dobby-order P3.5 |
+| G10 | 스폰 시 상태표 자동 등록 + 로그 자동 기록 (유령 에이전트 차단) | PreToolUse·PostToolUse·Agent\|Task | 자동등록/자동기록(형식 없으면 deny) | settings.json(dobby-init 등록) | order-rules.md C4 |
+| G11 | 설계 문서(design.md) 없이 구현 스폰 금지 — 단계가 구현 이후 + 종류 개발 + 역할 개발자일 때만 | PreToolUse·Agent\|Task | deny | settings.json(상동 — pre-agent.sh에 포함) | order-rules.md P3.5 |
+| G13 | 설계 문서 없이 에이전트 '구현' 전이 금지(개발 오더·개발자 역할) | dobby_agent_state 헬퍼 | 거부(비0 반환) | 코드 강제(훅 아님) | order-rules.md P3.5 |
 | G12 | design.md 셸 덮어쓰기 금지(파일이 이미 있을 때 cat>·tee·sed -i·perl -i — 사용자 수정본 보호. append(>>)·최초 생성은 통과, DOBBY_FORCE=1 우회) | PreToolUse·Bash | deny | settings.json(if: cat/tee/sed/perl/python3 — dobby-init 등록) | dobby-design 비파괴 |
-| G14 | 계약 없는 구현 롤 행 감지(상태표에 있는데 `agents/{슬러그}.md` 없음). **계약제를 채택한 오더**(agents/에 계약 1개 이상)에서만 발화 — P4-L·P4-C·P4-W 인라인은 스펙상 계약이 없어 해소 불가 경고가 되기 때문 | `dobby_lint` 18 | 경고 | 코드 강제(훅 아님) | dobby-order C4 |
-| G15 | 구현 라운드 4회 이상인데 에스컬레이션 기록 없음 | `dobby_lint` 19 | 경고 | 코드 강제(훅 아님) | dobby-order P6 |
-| G16 | 워크트리 생성 시 그 저장소의 코딩 규약 문서 목록(`CLAUDE.md` 전체 + 상위 2단계 `README.md`)을 `docs-refs.md`에 자동 기록 | `dobby_setup_worktree` | 자동 기록 | 코드 강제(훅 아님) | dobby-impl 규약 확인 |
-| G17 | 산출물 문서(`outcome`·`explainer`·`produce`·`implementation*`)에 메타 보정 흔적(`dobby_*`·`artifact-share`·`design-ack`·"메타 보정"·"산출물 보강") | `dobby_lint` 21 | 경고 | 코드 강제(훅 아님) | dobby-order C10 |
+| G14 | 계약 없는 구현 롤 행 감지(상태표에 있는데 `agents/{슬러그}.md` 없음). **계약제를 채택한 오더**(agents/에 계약 1개 이상)에서만 발화 — P4-L·P4-C·P4-W 인라인은 스펙상 계약이 없어 해소 불가 경고가 되기 때문 | `dobby_lint` 18 | 경고 | 코드 강제(훅 아님) | order-rules.md C4 |
+| G15 | 구현 라운드 4회 이상인데 에스컬레이션 기록 없음 | `dobby_lint` 19 | 경고 | 코드 강제(훅 아님) | order-rules.md P6 |
+| G16 | 워크트리 생성 시 그 저장소의 코딩 규약 문서 목록(`CLAUDE.md` 전체 + 상위 2단계 `README.md`)을 `docs-refs.md`에 자동 기록 | `dobby_setup_worktree` | 자동 기록 | 코드 강제(훅 아님) | impl-rules.md 규약 확인 |
+| G17 | 산출물 문서(`outcome`·`explainer`·`produce`·`implementation*`)에 메타 보정 흔적(`dobby_*`·`artifact-share`·`design-ack`·"메타 보정"·"산출물 보강") | `dobby_lint` 21 | 경고 | 코드 강제(훅 아님) | order-rules.md C10 |
 | G18 | twg Jira 조회(`get`·`bulk-get`·`query`)에 결과를 줄이는 옵션(`--fields`·`--field`·`--select`·`--output-file`·`--output-summary`(none 제외)·파이프·파일 저장·query `--limit`/`--first` 20 이하)이 없으면 차단. 옵션 없는 get 2만 6천 자, bulk-get 2건 17만 자(2026-10-19 실측). `TWG_RAW=1` 우회. dobby 스코프와 무관한 전역 규칙 | PreToolUse·Bash | deny | settings.json(if: twg — dobby-init 등록) | 토큰 절감(`skills/do/token-diet.md`) |
 | G19 | 문맥 25만 토큰 이상 세션에서 `/do`·`/go-dobby:*`·`/dobby-*` 시작 금지(`/dobby-qa` 는 제외 — 예약으로 같은 세션에서 도는 폴링 루프). 기준 `DOBBY_PROMPT_GUARD_CTX`, 끄기 `DOBBY_PROMPT_GUARD=off`(config.env) | UserPromptSubmit | block | 플러그인 hooks.json(prompt-guard.sh) | 상동 |
 | G20 | `/do` 세션 닫기 안내("이 세션을 닫아 주세요") 뒤 일반 요청에 경고(막지 않음) | UserPromptSubmit | systemMessage + additionalContext | 플러그인 hooks.json(prompt-guard.sh) | 상동 |
@@ -236,7 +236,7 @@ description = "{슬러그}: {한 줄 설명}"        예) impl-fe: 관심사 태
 ## G13 — 스폰 훅(G11)의 사각지대를 메운 헬퍼 게이트 (2026-09-01)
 
 G11은 `PreToolUse`·`Agent|Task`, 즉 **새 스폰**만 잡는다. 그런데 go-dobby의 **기본 경로**는
-분석 에이전트가 그대로 구현으로 이어가는 것이라(dobby-order C9 — `SendMessage`로 계약 전달)
+분석 에이전트가 그대로 구현으로 이어가는 것이라(order-rules.md C9 — `SendMessage`로 계약 전달)
 Agent 도구 호출이 없고, 훅이 발화할 기회 자체가 없다.
 
 **사례 FE1-1732**: `agent-logs.json`에 `image-pipeline`이 1회만 기록(스폰 1회). 13:35 스폰
@@ -285,7 +285,7 @@ G16은 워크트리 생성 시점에만 필요해 그 헬퍼 안이 정확한 �
 라운드 값이 누적 카운터라 폴더 수와 일치할 근거가 없고, 엄격(슬러그명 findings 파일 필요)은
 6건 중 3건이 오탐이었다.
 
-원인은 규약과 현실의 불일치다. dobby-order P5는 findings 파일명을 "지적이 향하는 담당 에이전트
+원인은 규약과 현실의 불일치다. order-rules.md P5는 findings 파일명을 "지적이 향하는 담당 에이전트
 슬러그"로 규정하는데, **실제로는 리뷰어 이름(`review-agent.md`)이나 영역명(`global.md`)으로
 저장하는 관행이 현행에서 살아 있다**(FE1-1814는 2026-09-07 오더인데 그 형태다). 파일명 규약을
 먼저 정리해야 이 검사가 성립한다. 그때까지는 G14가 "계약 누락"이라는 인접 신호로 대신 잡는다.

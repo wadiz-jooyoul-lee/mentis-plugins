@@ -23,12 +23,12 @@ Jira 조회·쓰기는 MCP 대신 `twg` 명령으로 한다. 명령은 `${CLAUDE
 ---
 
 ## snapshot — 이슈 원문 가져오기(재활용본이 없을 때)  · [단순 조회: Haiku 가능]
-- `dobby-order`가 저장한 `jira-issue.md`가 **없을 때만** 쓰는 폴백. `dobby_jira_desc {키} $ORCHESTRATION_META/{키}/jira-issue.md` 로 **이슈 설명을 원문 그대로** 저장한다(요약·정리 없이 원문만).
+- 오더(`/do` 설계 세션)가 저장한 `jira-issue.md`가 **없을 때만** 쓰는 폴백. `dobby_jira_desc {키} $ORCHESTRATION_META/{키}/jira-issue.md` 로 **이슈 설명을 원문 그대로** 저장한다(요약·정리 없이 원문만).
 - 설명이 비어 있으면 저장하지 않고 그 사실만 알린다. 코멘트는 여기서 다루지 않는다(`comments`가 별도).
 - 이미 `jira-issue.md`가 있으면 덮어쓰지 않는다(재활용 우선).
 
 ## clean — 저장된 이슈 원문을 읽기 쉽게 정리  · [분석: Opus]
-- 입력: `$ORCHESTRATION_META/{키}/jira-issue.md`(dobby-order가 조회 시 저장한 **원문**). 없으면 아무 것도 안 하고 종료.
+- 입력: `$ORCHESTRATION_META/{키}/jira-issue.md`(오더가 이슈 조회 시 저장한 **원문**). 없으면 아무 것도 안 하고 종료.
 - 원문을 **핵심 위주로 읽기 쉽게** 재구성한다(요구·배경·수용조건 등 이슈가 담고 있는 내용). 원문에 없는 내용은 넣지 않는다.
 - 산출: `$ORCHESTRATION_META/{키}/jira-issue-clean.md`. (원문은 그대로 두어 대시보드가 "원문 접기"로 함께 보여준다.)
 
@@ -82,4 +82,4 @@ Jira 조회·쓰기는 MCP 대신 `twg` 명령으로 한다. 명령은 `${CLAUDE
 - 각 서브커맨드는 **필요한 파일·twg 명령만** 읽어 잡을 가볍게 유지한다.
 
 ## 실행 주체
-- 전부 **대시보드 버튼**이 백그라운드 잡으로 호출한다(사용자 트리거). 오케스트레이터(`dobby-order`)는 이 스킬을 호출하지 않는다 — `dobby-order`는 이슈 원문을 `jira-issue.md`로 저장만 한다(재활용).
+- 전부 **대시보드 버튼**이 백그라운드 잡으로 호출한다(사용자 트리거). 오케스트레이터(`/do`)는 이 스킬을 호출하지 않는다 — 설계 세션은 이슈 원문을 `jira-issue.md`로 저장만 한다(재활용).
