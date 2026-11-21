@@ -13,7 +13,7 @@
       "name": "go-dobby",
       "source": "./plugins/go-dobby",
       "description": "단계마다 새 세션으로 진행하는 오케스트레이션 — 모든 이슈/작업을 /do 로 시작해 설계·구현·리뷰·통합·배포·검증까지 진행 (work-dobby 재설계)",
-      "version": "0.2.169",
+      "version": "0.2.170",
       "author": { "name": "이주열" },
       "category": "workflow",
       "tags": ["issue", "multi-agent", "orchestration", "go-dobby", "jira"]
